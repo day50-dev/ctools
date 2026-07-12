@@ -1,0 +1,192 @@
+.TH CGREP 1 "2024-01-15" "Gab n' Go" "User Commands"
+.SH NAME
+cgrep \- search through LLM context window sessions
+.SH SYNOPSIS
+.B cgrep
+.RB [ \-l ]
+.RB [ \-L ]
+.RB [ \-c ]
+.RB [ \-v ]
+.RB [ \-i ]
+.RB [ \-B
+.IR N ]
+.RB [ \-A
+.IR N ]
+.RB [ \-C
+.IR N ]
+.RB [ \-f
+.IR format ]
+.I pattern
+.IR paths ...
+.SH DESCRIPTION
+.B cgrep
+(context grep) searches through conversation content stored in
+LLM agent session files using PCRE regular expressions.
+.PP
+The tool reads actual session data from each agent's storage
+format and applies pattern matching to find matches within
+conversation messages.
+.SH OPTIONS
+.TP
+.BR \-l ", " \-\-files\-with\-matches
+List only session IDs that contain matches, not the matches themselves.
+.TP
+.BR \-L ", " \-\-files\-without\-match
+List only session IDs that do NOT contain matches.
+.TP
+.BR \-c ", " \-\-count
+Print only a count of matching lines per session.
+.TP
+.BR \-v ", " \-\-invert\-match
+Select non-matching lines.
+.TP
+.BR \-i ", " \-\-ignore\-case
+Ignore case distinctions in patterns and input.
+.TP
+.BR \-B ", " \-\-before
+.I N
+Print
+.I N
+lines of context before each match.
+.TP
+.BR \-A ", " \-\-after
+.I N
+Print
+.I N
+lines of context after each match.
+.TP
+.BR \-C ", " \-\-context
+.I N
+Print
+.I N
+lines of context before and after each match.
+.TP
+.BR \-f ", " \-\-format
+.I format
+Set output format. Available formats:
+.RS
+.TP
+.B default
+Human-readable with line numbers.
+.TP
+.B json
+JSON array of match objects.
+.TP
+.B xml
+XML document with session and match elements.
+.TP
+.B md
+Markdown with match highlights.
+.RE
+.SH ARGUMENTS
+.TP
+.I pattern
+PCRE regular expression pattern to search for.
+.TP
+.I paths
+One or more agent/session paths in the format:
+.RS
+.TP
+.BI agent /
+Search all sessions for agent.
+.TP
+.BI agent/session_id
+Search a specific session.
+.RE
+.PP
+Multiple paths can be specified separated by spaces.
+.SH EXAMPLES
+Search for "error" in all opencode sessions:
+.PP
+.RS
+.nf
+$ cgrep "error" "opencode/*"
+3: user: I'm getting an error in my code
+7: assistant: The error is caused by...
+.fi
+.RE
+.PP
+Search case-insensitively and show context:
+.PP
+.RS
+.nf
+$ cgrep -i -C 2 "error" "opencode/*"
+  user: I'm getting an error in my code
+  assistant: Let me help you debug this
+3: user: I'm getting an ERROR in my code
+  assistant: I see the issue now
+  assistant: You need to fix the...
+.fi
+.RE
+.PP
+List sessions containing "TODO":
+.PP
+.RS
+.nf
+$ cgrep -l "TODO" "opencode/*" "claude-code/*"
+opencode/ses_abc123
+claude-code/ses_xyz789
+.fi
+.RE
+.PP
+Count matches per session:
+.PP
+.RS
+.nf
+$ cgrep -c "import" "opencode/*"
+opencode/ses_abc123:5
+opencode/ses_def456:2
+.fi
+.RE
+.PP
+Invert match (find lines WITHOUT "test"):
+.PP
+.RS
+.nf
+$ cgrep -v "test" "opencode/ses_abc123"
+1: user: Hello world
+4: assistant: Here is some code
+.fi
+.RE
+.PP
+Output as JSON:
+.PP
+.RS
+.nf
+$ cgrep --format json "error" "opencode/*"
+[
+  {
+    "session": "opencode/ses_abc123",
+    "line_num": 3,
+    "line": "user: I'm getting an error"
+  }
+]
+.fi
+.RE
+.PP
+Output as XML:
+.PP
+.RS
+.nf
+$ cgrep --format xml "error" "opencode/*"
+<?xml version="1.0" ?>
+<matches>
+  <session id="ses_abc123" agent="opencode">
+    <match line="3">
+      <message>user: I'm getting an error</message>
+    </match>
+  </session>
+</matches>
+.fi
+.RE
+.SH EXIT STATUS
+.TP
+.B 0
+One or more matches found.
+.TP
+.B 1
+No matches found or invalid pattern.
+.SH SEE ALSO
+.BR cdir (1)
+.SH AUTHORS
+Gab n' Go project.

@@ -1,0 +1,153 @@
+.TH CDIR 1 "2024-01-15" "Gab n' Go" "User Commands"
+.SH NAME
+cdir \- list agents and sessions from LLM context windows
+.SH SYNOPSIS
+.B cdir
+.RB [ \-a ]
+.RB [ \-t ]
+.RB [ \-s ]
+.RB [ \-r ]
+.RB [ \-R ]
+.RB [ \-f
+.IR format ]
+.RI [ path ]
+.SH DESCRIPTION
+.B cdir
+(context directory) lists agents and their conversation sessions,
+similar to DOS mtools but for LLM context windows.
+.PP
+The tool reads session metadata from agent storage directories
+and presents them in a human-readable or machine-parseable format.
+It can also export individual sessions as conversation JSON.
+.SH OPTIONS
+.TP
+.BR \-a ", " \-\-agents
+List all known agents and their storage paths.
+.TP
+.BR \-t ", " \-\-time
+Sort sessions by modification time (default).
+.TP
+.BR \-s ", " \-\-size
+Sort sessions by size.
+.TP
+.BR \-r ", " \-\-reverse
+Reverse the sort order.
+.TP
+.BR \-R ", " \-\-recursive
+Show agent name in session list. When used without a path,
+recurse all agents and show all sessions with agent prefix.
+.TP
+.BR \-f ", " \-\-format
+.I format
+Set output format. Available formats:
+.RS
+.TP
+.B default
+Human-readable aligned columns.
+.TP
+.B json
+JSON array of session objects.
+.TP
+.B xml
+XML document with session elements.
+.TP
+.B md
+Markdown table.
+.RE
+.SH ARGUMENTS
+.TP
+.I path
+Agent name or agent/session_id path.
+Without argument, shows usage.
+With agent name (e.g., \fBopencode/\fR), lists sessions.
+With agent/session_id (e.g., \fBopencode/ses_abc123\fR), exports session.
+.SH EXAMPLES
+List all known agents:
+.PP
+.RS
+.nf
+$ cdir --agents
+  + claude       Claude Desktop         ~/Library/Application Support/Claude-3p  [json]
+  + opencode     opencode CLI           ~/.local/share/opencode                  [sqlite]
+.fi
+.RE
+.PP
+List sessions for opencode:
+.PP
+.RS
+.nf
+$ cdir opencode/
+  ses_abc123  Python Help     2024-01-15 10:30  2.4 KB   12
+  ses_def456  Code Review     2024-01-16 09:00  1.2 KB    8
+
+  2 session(s)
+.fi
+.RE
+.PP
+List all sessions across all agents:
+.PP
+.RS
+.nf
+$ cdir -R
+  opencode/ses_abc123   Python Help   2024-01-15 10:30   2.4 KB   12
+  claude-code/ses_xyz   Bug Fix       2024-01-15 11:00   3.1 KB   20
+
+  2 session(s)
+.fi
+.RE
+.PP
+Export a session as JSON:
+.PP
+.RS
+.nf
+$ cdir opencode/ses_abc123
+[
+  {"role": "user", "content": "Hello"},
+  {"role": "assistant", "content": "Hi there!"}
+]
+.fi
+.RE
+.PP
+Export a session as XML:
+.PP
+.RS
+.nf
+$ cdir --format xml opencode/ses_abc123
+<?xml version="1.0" ?>
+<session id="ses_abc123" agent="opencode">
+  <message role="user">Hello</message>
+  <message role="assistant">Hi there!</message>
+</session>
+.fi
+.RE
+.PP
+Export a session as Markdown:
+.PP
+.RS
+.nf
+$ cdir --format md opencode/ses_abc123
+# Session — opencode/ses_abc123
+
+## You
+
+Hello
+
+## Assistant
+
+Hi there!
+.fi
+.RE
+.SH FILES
+.TP
+.I ~/.local/share/opencode/opencode.db
+OpenCode SQLite database.
+.TP
+.I ~/.claude/projects/**/*.jsonl
+Claude Code session files.
+.TP
+.I ~/Library/Application Support/Claude-3p/
+Claude Desktop session directory.
+.SH SEE ALSO
+.BR cgrep (1)
+.SH AUTHORS
+Gab n' Go project.
