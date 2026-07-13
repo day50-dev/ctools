@@ -2,7 +2,36 @@
 
 CLI tools for browsing and searching LLM agent conversations. Extracted from [Gab n' Go](https://github.com/day50-dev/gabngo).
 
+## Why ctools?
+
+Your conversations with LLMs contain valuable constraints, preferences, and goals you've established over time. ctools lets you **extract those concepts** from any session and **reuse them** across agents and sessions. For example:
+
+1. You've been working with opencode for weeks, refining your coding style preferences
+2. Run `ccopy @opencode/ses_abc123 my_preferences.json` to extract those preferences
+3. Start a new Claude Code session and inject them: `ccopy my_preferences.json @claude-code/ses_xyz`
+4. Or copy directly between sessions: `ccopy @opencode/ses_abc123 @claude-code/ses_xyz`
+
+The concepts (constraints, goals, preferences, observations, references) are embedded in your conversations as "Use the following" system messages. ctools reads and writes these, so your hard-won context travels with you.
+
 ## Tools
+
+### ccopy — copy concepts between sessions
+
+Extract, inject, and copy concepts between agent sessions and concept files. Uses `@` prefix for session references.
+
+```sh
+# Extract concepts from a session to a file
+ccopy @opencode/ses_abc123 constraints.json
+
+# Inject concepts from files into a session
+ccopy constraints.json preferences.json @opencode/ses_abc123
+
+# Copy concepts between sessions
+ccopy @opencode/ses_abc123 @claude-code/ses_xyz
+
+# Shell expansion works
+ccopy {constraints,preferences}.json @opencode/ses_abc123
+```
 
 ### cdir — ls for LLM context windows
 
@@ -74,4 +103,5 @@ Importable as a Python library:
 from ctools.lib import AGENTS, get_formatter
 from ctools.cdir import get_opencode_sessions
 from ctools.cgrep import grep_session
+from ctools.ccopy import extract_concepts_from_messages, inject_concepts_to_session
 ```
