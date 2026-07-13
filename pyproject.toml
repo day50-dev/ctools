@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ctools"
+version = "0.1.0"
+description = "CLI tools for LLM conversations"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "tiktoken>=0.5.0",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.2.0"]
+dev = ["pytest>=7.0.0"]
+
+[project.scripts]
+cdir = "ctools.cdir:app"
+cgrep = "ctools.cgrep:app"
+ccopy = "ctools.ccopy:app"
+cdu = "ctools.cdu:app"
+ctools-mcp = "ctools.ctools_mcp:main"
+
+[tool.setuptools.packages.find]
+include = ["ctools"]
