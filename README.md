@@ -1,6 +1,6 @@
 # ctools
 
-CLI tools for browsing and searching LLM agent conversations. Extracted from [Gab n' Go](https://github.com/day50-dev/gabngo).
+CLI tools for browsing and searching LLM agent conversations. Extracted from [Gab n' Go](https://github.com/day50-dev/gabngo). Inspired by [GNU mtools](https://www.gnu.org/software/mtools/) — same idea, but for LLM context windows instead of DOS floppies.
 
 ## Why ctools?
 
@@ -12,6 +12,13 @@ Your conversations with LLMs contain valuable constraints, preferences, and goal
 4. Or copy directly between sessions: `ccopy @opencode/ses_abc123 @claude-code/ses_xyz`
 
 The concepts (constraints, goals, preferences, observations, references) are embedded in your conversations as "Use the following" system messages. ctools reads and writes these, so your hard-won context travels with you.
+
+| GNU mtools | ctools | What it does |
+|------------|--------|--------------|
+| `mdir` | `cdir` | List directory/sessions |
+| `mcopy` | `ccopy` | Copy files/concepts |
+| `mdu` | `cdu` | Disk usage/token count |
+| `mtype` | `cgrep` | View/search content |
 
 ## Tools
 
@@ -80,6 +87,20 @@ Flags:
 - `-C N` — show N lines before and after
 - `-f json|xml|md` — output format
 
+### cdu — context disk usage
+
+Shows token length of conversations. Uses tiktoken for accurate counts (cl100k_base encoding), with automatic fallback to character-based estimation.
+
+```sh
+cdu                             # Total token usage across all agents
+cdu opencode/                   # Sessions sorted by token count
+cdu opencode/ses_abc123         # Token breakdown (input/output)
+cdu claude-code/                # Sessions with estimated tokens
+cdu --json opencode/            # JSON output
+```
+
+For opencode sessions, cdu reads actual `tokens_input` and `tokens_output` from the database. For other agents, it counts tokens using tiktoken from the conversation content, broken down by role (user/assistant/system).
+
 ## Supported Agents
 
 | Agent | Description | Format | Storage |
@@ -142,4 +163,5 @@ from ctools.lib import AGENTS, get_formatter
 from ctools.cdir import get_opencode_sessions
 from ctools.cgrep import grep_session
 from ctools.ccopy import extract_concepts_from_messages, inject_concepts_to_session
+from ctools.cdu import count_tokens, get_session_tokens
 ```
