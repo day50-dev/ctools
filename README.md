@@ -89,6 +89,44 @@ Flags:
 | opencode | opencode CLI | SQLite | `~/.local/share/opencode/` |
 | codex | OpenAI Codex CLI | JSONL | `~/.codex/` |
 
+## MCP Server
+
+ctools includes an MCP server for searching and managing conversations from any MCP-compatible client (Claude, opencode, Cursor, etc.).
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_agents` | List all supported agents and installation status |
+| `list_sessions` | List sessions for an agent (sort by time or size) |
+| `search_sessions` | Search conversation content with regex across all agents |
+| `export_session` | Export messages from a session |
+| `extract_concepts` | Extract concepts from a session |
+| `copy_concepts` | Copy concepts between sessions or concept files |
+| `get_session_concepts` | Get concepts with optional type filtering |
+
+### Setup
+
+Add to your MCP client config (e.g. `~/.config/opencode/config.json` or Claude Desktop config):
+
+```json
+{
+  "mcpServers": {
+    "ctools": {
+      "command": "python",
+      "args": ["/ABSOLUTE/PATH/TO/ctools/ctools_mcp.py"]
+    }
+  }
+}
+```
+
+### Usage from CLI
+
+```sh
+# Test the server directly
+echo '{"jsonrpc":"2.0","method":"tools/list","id":1}' | python ctools_mcp.py
+```
+
 ## Installation
 
 ```sh
