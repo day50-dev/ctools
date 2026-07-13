@@ -1,6 +1,6 @@
 # ctools
 
-CLI tools for browsing and searching LLM agent conversations. Extracted from [Gab n' Go](https://github.com/day50-dev/gabngo). Inspired by [GNU mtools](https://www.gnu.org/software/mtools/) — same idea, but for LLM context windows instead of DOS floppies.
+CLI tools for browsing and searching LLM agent conversations. Extracted from [Gab n' Go](https://github.com/day50-dev/gabngo). Inspired by [GNU mtools](https://www.gnu.org/software/mtools/) - same idea, but for LLM context windows instead of DOS floppies.
 
 ## Why ctools?
 
@@ -22,7 +22,7 @@ The concepts (constraints, goals, preferences, observations, references) are emb
 
 ## Tools
 
-### ccopy — copy concepts between sessions
+### ccopy - copy concepts between sessions
 
 Extract, inject, and copy concepts between agent sessions and concept files. Uses `@` prefix for session references.
 
@@ -40,7 +40,7 @@ ccopy @opencode/ses_abc123 @claude-code/ses_xyz
 ccopy {constraints,preferences}.json @opencode/ses_abc123
 ```
 
-### cdir — ls for LLM context windows
+### cdir - ls for LLM context windows
 
 Lists agents and their conversation sessions, showing metadata like creation time, modification time, size, and message count. You can also export individual sessions as JSON in the llcat conversation format.
 
@@ -62,7 +62,7 @@ cdir opencode/ses_abc123       # Export a specific session as JSON
 
 Options: `-t` (sort by time), `-s` (sort by size), `-r` (reverse), `-R` (recursive), `-a` (list agents), `-f json|xml|md` (output format).
 
-### cgrep — grep for LLM context windows
+### cgrep - grep for LLM context windows
 
 Searches conversation content across agents. Reads the actual session data from each agent's storage format and applies PCRE regex patterns.
 
@@ -78,16 +78,16 @@ cgrep -B2 -A2 "FIXME" "opencode/ses_abc123" # Context around specific session ma
 ```
 
 Flags:
-- `-l` / `-L` — list files with/without matches
-- `-c` — count matches per file
-- `-v` — invert match
-- `-i` — case-insensitive
-- `-A N` — show N lines after match
-- `-B N` — show N lines before match
-- `-C N` — show N lines before and after
-- `-f json|xml|md` — output format
+- `-l` / `-L` - list files with/without matches
+- `-c` - count matches per file
+- `-v` - invert match
+- `-i` - case-insensitive
+- `-A N` - show N lines after match
+- `-B N` - show N lines before match
+- `-C N` - show N lines before and after
+- `-f json|xml|md` - output format
 
-### cdu — context disk usage
+### cdu - context disk usage
 
 Shows token length of conversations. Uses tiktoken for accurate counts (cl100k_base encoding), with automatic fallback to character-based estimation.
 
