@@ -32,13 +32,35 @@ The concepts are embedded in your conversations as "Use the following <type>: <t
 
 ### ccopy
 
-Extract, inject, and copy concepts between sessions and files. The `@` prefix means "this is a session reference." Plain paths are files.
+Extract, inject, and copy concepts between sessions and files. The `@` prefix means "this is a session reference." Plain paths are files. Directories get one file per concept.
 
 ```sh
-ccopy @opencode/ses_abc123 constraints.json     # session to file
-ccopy constraints.json @opencode/ses_abc123     # file to session
-ccopy @opencode/ses_abc123 @claude-code/ses_xyz # session to session
-ccopy {a,b}.json @opencode/ses_abc123           # shell expansion works
+ccopy @opencode/ses_abc123 concepts/              # extract to directory (one file per concept)
+ccopy @opencode/ses_abc123 constraints.json       # extract to single file
+ccopy concepts/ @opencode/ses_abc123               # inject all concepts from directory
+ccopy constraints.json @opencode/ses_abc123       # inject from file
+ccopy @opencode/ses_abc123 @claude-code/ses_xyz   # session to session
+ccopy --strategy my-strategy.json @opencode/ses_abc123 concepts/  # custom extraction
+```
+
+When you extract to a directory, each concept becomes its own file. This is the core abstraction: the directory *is* the concept set. rm a file to exclude it. cp files in to merge. Edit the json to modify. `git add .` to share.
+
+```sh
+ls concepts/
+constraint_0aa712d89fbb067a.json
+preference_a1b2c3d4e5f6g7h8.json
+observation_x9y8z7w6v5u4t3s2.json
+```
+
+Strategies let you define how concepts are extracted using an LLM. Ontology is contestable, so different strategies produce different chunkings:
+
+```json
+{
+  "host": "http://localhost:11434",
+  "model": "qwen2.5:3b",
+  "api_key": null,
+  "prompt": "Extract the key concepts from this conversation..."
+}
 ```
 
 ### cdir

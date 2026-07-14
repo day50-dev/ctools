@@ -5,25 +5,39 @@ ccopy \- copy concepts between sessions and concept files
 .B ccopy
 .RB [ \-f
 .IR format ]
+.RB [ \-s
+.IR strategy ]
 .I sources
 .I destinations
 .SH DESCRIPTION
 .B ccopy
-(context copy) copies concepts between agent sessions and concept JSON files.
+(context copy) copies concepts between agent sessions and concept files.
 Concepts are constraints, goals, preferences, observations, and references
-that can be extracted from agent sessions and stored in JSON files.
+that can be extracted from agent sessions and stored as individual JSON files.
 .PP
 The @ prefix denotes a session reference (agent/session_id).
 Plain paths are concept JSON files.
+Directories (ending with /) contain one concept file per concept.
 .PP
 Concepts are lines in the format:
 "Use the following <type>: <text>"
 where type is constraint, goal, preference, observation, or reference.
+.PP
+When the output target is a directory, each concept is written as a separate
+JSON file. This makes concepts independently manipulable: include or exclude
+by adding/removing files, merge by copying between directories, modify by
+editing the JSON, and share via git or any file transfer.
 .SH OPTIONS
 .TP
 .BR \-f ", " \-\-format
 .I format
 Set output format: json, xml, or md.
+.TP
+.BR \-s ", " \-\-strategy
+.I strategy.json
+Use a custom chunking strategy for concept extraction.
+A strategy defines the LLM host, model, API key, and extraction prompt.
+Without this flag, ccopy uses regex pattern matching on conversation messages.
 .SH ARGUMENTS
 .TP
 .I sources
@@ -35,6 +49,9 @@ Agent session to extract concepts from.
 .TP
 .I concept.json
 JSON file containing concepts to inject.
+.TP
+.I concepts/
+Directory of concept JSON files to inject.
 .RE
 .TP
 .I destinations
@@ -46,11 +63,23 @@ Agent session to inject concepts into.
 .TP
 .I concept.json
 JSON file to write extracted concepts to.
+.TP
+.I concepts/
+Directory to write one concept file per concept.
 .RE
 .SH MODES
 .TP
-.B Extract
-Extract concepts from a session to a concept file:
+.B Extract to directory
+Extract concepts from a session, one file per concept:
+.PP
+.RS
+.nf
+ccopy @opencode/ses_abc concepts/
+.fi
+.RE
+.TP
+.B Extract to file
+Extract concepts from a session to a single JSON file:
 .PP
 .RS
 .nf
@@ -64,6 +93,7 @@ Inject concepts from files into a session:
 .RS
 .nf
 ccopy constraints.json @opencode/ses_abc
+ccopy concepts/ @opencode/ses_abc
 ccopy a.json b.json @opencode/ses_abc
 .fi
 .RE
@@ -76,6 +106,32 @@ Copy concepts from one session to another:
 ccopy @opencode/ses_abc @claude/ses_xyz
 .fi
 .RE
+.TP
+.B Custom strategy
+Use an LLM-based extraction strategy:
+.PP
+.RS
+.nf
+ccopy --strategy my-strategy.json @opencode/ses_abc concepts/
+.fi
+.RE
+.SH STRATEGIES
+A strategy is a JSON file that defines how to extract concepts using an LLM:
+.PP
+.RS
+.nf
+{
+  "host": "http://localhost:11434",
+  "model": "qwen2.5:3b",
+  "api_key": null,
+  "prompt": "Extract the key concepts from this conversation..."
+}
+.fi
+.RE
+.PP
+Different strategies can produce different concept chunkings.
+Ontology is inherently contestable depending on framing, so strategies
+allow users to define their own extraction approach.
 .SH CONCEPT FORMAT
 Concepts are JSON objects with these fields:
 .PP
@@ -94,7 +150,22 @@ Concepts are JSON objects with these fields:
 The tool extracts concepts from messages matching the pattern:
 "Use the following <type>: <text>"
 .SH EXAMPLES
-Extract concepts from a session:
+Extract concepts to a directory (one file per concept):
+.PP
+.RS
+.nf
+$ ccopy @opencode/ses_abc123 concepts/
+Extracted 5 concepts to concepts/ (5 files)
+$ ls concepts/
+constraint_0aa712d89fbb067a.json
+preference_a1b2c3d4e5f6g7h8.json
+observation_x9y8z7w6v5u4t3s2.json
+goal_m1n2o3p4q5r6s7t8u9.json
+reference_v0w1x2y3z4a5b6c7d8.json
+.fi
+.RE
+.PP
+Extract concepts to a single file:
 .PP
 .RS
 .nf
@@ -107,8 +178,8 @@ Inject concepts into a session:
 .PP
 .RS
 .nf
-$ ccopy concepts.json @opencode/ses_abc123
-Injected 3 concepts into opencode/ses_abc123
+$ ccopy concepts/ @opencode/ses_abc123
+Injected 5 concepts into opencode/ses_abc123
 .fi
 .RE
 .PP
@@ -117,33 +188,24 @@ Copy concepts between sessions:
 .RS
 .nf
 $ ccopy @opencode/ses_abc123 @claude/ses_xyz789
-Copied 3 concepts to claude/ses_xyz789
+Copied 5 concepts to claude/ses_xyz789
 .fi
 .RE
 .PP
-Inject multiple concept files:
+Use a custom extraction strategy:
 .PP
 .RS
 .nf
-$ ccopy constraints.json preferences.json @opencode/ses_abc123
-Injected 5 concepts into opencode/ses_abc123
-.fi
-.RE
-.SH SHELL EXPANSION
-Bash brace expansion works:
-.PP
-.RS
-.nf
-ccopy {constraints,preferences}.json @opencode/ses_abc
+$ ccopy --strategy my-strategy.json @opencode/ses_abc123 concepts/
 .fi
 .RE
 .SH FILES
 .TP
 .I ~/.local/share/opencode/opencode.db
-OpenCode SQLite database (writes system messages).
+OpenCode SQLite database (reads/writes system messages).
 .TP
 .I ~/.claude/projects/**/*.jsonl
-Claude Code session files (writes system messages).
+Claude Code session files (reads/writes system messages).
 .SH EXIT STATUS
 .TP
 .B 0

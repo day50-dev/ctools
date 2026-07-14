@@ -6,12 +6,12 @@ Concepts are constraints, goals, preferences, observations, and references
 that can be extracted from agent sessions and stored in JSON files.
 
 Usage:
-    ccopy @opencode/ses_abc123 concepts.json     # extract concepts from session
-    ccopy @opencode/ses_abc123 concepts/         # extract as individual files
-    ccopy constraints.json @opencode/ses_abc123   # inject concepts into session
-    ccopy @opencode/ses_abc123 @claude/ses_xyz    # copy concepts between sessions
-    ccopy {a,b}.json @opencode/ses_abc123         # shell expansion works
-    ccopy --strategy my-strategy.json @opencode/ses_abc concepts.json  # use custom strategy
+    ccopy @opencode/ses_abc concepts/              # extract to directory (one file per concept)
+    ccopy @opencode/ses_abc concepts.json           # extract to single file
+    ccopy concepts/ @opencode/ses_abc               # inject all concepts from directory
+    ccopy constraints.json @opencode/ses_abc        # inject from file
+    ccopy @opencode/ses_abc @claude/ses_xyz         # copy concepts between sessions
+    ccopy --strategy my-strategy.json @opencode/ses_abc concepts/  # use custom extraction strategy
 """
 
 import json
