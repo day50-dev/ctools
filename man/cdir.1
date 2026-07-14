@@ -1,9 +1,8 @@
-.TH CDIR 1 "2024-01-15" "Gab n' Go" "User Commands"
+.TH CDIR 1 "2024-01-15" "ctools" "User Commands"
 .SH NAME
 cdir \- list agents and sessions from LLM context windows
 .SH SYNOPSIS
 .B cdir
-.RB [ \-a ]
 .RB [ \-t ]
 .RB [ \-s ]
 .RB [ \-r ]
@@ -19,10 +18,9 @@ similar to DOS mtools but for LLM context windows.
 The tool reads session metadata from agent storage directories
 and presents them in a human-readable or machine-parseable format.
 It can also export individual sessions as conversation JSON.
+.PP
+Without arguments, cdir lists all known agents and their storage paths.
 .SH OPTIONS
-.TP
-.BR \-a ", " \-\-agents
-List all known agents and their storage paths.
 .TP
 .BR \-t ", " \-\-time
 Sort sessions by modification time (default).
@@ -58,7 +56,7 @@ Markdown table.
 .TP
 .I path
 Agent name or agent/session_id path.
-Without argument, shows usage.
+Without argument, lists all known agents.
 With agent name (e.g., \fBopencode/\fR), lists sessions.
 With agent/session_id (e.g., \fBopencode/ses_abc123\fR), exports session.
 .SH EXAMPLES
@@ -66,9 +64,10 @@ List all known agents:
 .PP
 .RS
 .nf
-$ cdir --agents
-  + claude       Claude Desktop         ~/Library/Application Support/Claude-3p  [json]
-  + opencode     opencode CLI           ~/.local/share/opencode                  [sqlite]
+$ cdir
+Found:
+  Claude Desktop         [json]
+  opencode CLI           [sqlite]
 .fi
 .RE
 .PP
@@ -108,19 +107,6 @@ $ cdir opencode/ses_abc123
 .fi
 .RE
 .PP
-Export a session as XML:
-.PP
-.RS
-.nf
-$ cdir --format xml opencode/ses_abc123
-<?xml version="1.0" ?>
-<session id="ses_abc123" agent="opencode">
-  <message role="user">Hello</message>
-  <message role="assistant">Hi there!</message>
-</session>
-.fi
-.RE
-.PP
 Export a session as Markdown:
 .PP
 .RS
@@ -148,6 +134,8 @@ Claude Code session files.
 .I ~/Library/Application Support/Claude-3p/
 Claude Desktop session directory.
 .SH SEE ALSO
-.BR cgrep (1)
+.BR ccopy (1),
+.BR cgrep (1),
+.BR cdu (1)
 .SH AUTHORS
-Gab n' Go project.
+ctools project.

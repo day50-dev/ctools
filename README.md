@@ -68,11 +68,11 @@ Strategies let you define how concepts are extracted using an LLM. Ontology is c
 Lists sessions. Think `ls` for your conversation history.
 
 ```sh
-cdir --agents                  # what agents do we know about
-cdir opencode/                 # sessions for opencode
-cdir claude-code/              # sessions for claude code
-cdir -R                        # all agents, recursive
-cdir opencode/ses_abc123       # export a session as JSON
+cdir                        # list all known agents
+cdir opencode/              # sessions for opencode
+cdir claude-code/           # sessions for claude code
+cdir -R                     # all agents, recursive
+cdir opencode/ses_abc123    # export a session as JSON
 ```
 
 Sort by time (`-t`), size (`-s`), reverse (`-r`). Output as json, xml, or markdown with `-f`.
