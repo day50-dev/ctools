@@ -412,7 +412,6 @@ def _print_sessions(sessions, agent_name, by_time, by_size, reverse, formatter=N
 @app.command()
 def main(
     path: Optional[str] = typer.Argument(None, help="Agent or agent/session_id"),
-    agents: bool = typer.Option(False, "--agents", "-a", help="List supported agents"),
     by_time: bool = typer.Option(False, "--time", "-t", help="Sort by modification time"),
     by_size: bool = typer.Option(False, "--size", "-s", help="Sort by size"),
     reverse: bool = typer.Option(False, "--reverse", "-r", help="Reverse sort order"),
@@ -422,7 +421,7 @@ def main(
     """
     List agents and their conversation sessions.
     
-    With --agents, lists all known agents.
+    Without arguments, lists all known agents.
     With an agent name, lists sessions for that agent.
     With agent/session_id, exports that session.
     With -R, shows agent name and recurse all agents if no path given.
@@ -436,7 +435,7 @@ def main(
             console.print(f"[red]{e}[/red]")
             raise typer.Exit(1)
     
-    if agents or (path is None and not recursive):
+    if path is None and not recursive:
         # List all agents with aligned columns
         if formatter:
             # For agents list, use JSON format as base
