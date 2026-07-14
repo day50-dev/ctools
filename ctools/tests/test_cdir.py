@@ -275,23 +275,22 @@ def test_cli_list_agents():
     """Test listing all agents."""
     result = runner.invoke(app, ["--agents"])
     assert result.exit_code == 0
-    assert "claude" in result.stdout
-    assert "opencode" in result.stdout
-    assert "codex" in result.stdout
+    assert "Claude" in result.stdout
+    assert "Opencode" in result.stdout
+    assert "Codex" in result.stdout
 
 
-def test_cli_no_args_shows_usage():
-    """Test that no arguments shows usage."""
+def test_cli_no_args_shows_agents():
+    """Test that no arguments shows agents."""
     result = runner.invoke(app, [])
     assert result.exit_code == 0
-    assert "Usage" in result.stdout
+    assert "Opencode" in result.stdout
 
 
 def test_cli_list_agents_json():
     """Test listing agents in JSON format."""
-    result = runner.invoke(app, ["--agents"])
+    result = runner.invoke(app, ["--agents", "--format", "json"])
     assert result.exit_code == 0
-    # Should show agent names
     assert "opencode" in result.stdout
 
 

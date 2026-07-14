@@ -436,7 +436,7 @@ def main(
             console.print(f"[red]{e}[/red]")
             raise typer.Exit(1)
     
-    if agents:
+    if agents or (path is None and not recursive):
         # List all agents with aligned columns
         if formatter:
             # For agents list, use JSON format as base
@@ -451,17 +451,32 @@ def main(
                 })
             print(json.dumps(data, indent=2))
         else:
-            rows = []
+            found = []
+            missing = []
             for name, agent_info in AGENTS.items():
-                exists = "+" if agent_info.base_path.exists() else "-"
-                rows.append((exists, name, agent_info.description, str(agent_info.base_path), agent_info.storage_format))
-            
-            w_name = max(len(r[1]) for r in rows)
-            w_desc = max(len(r[2]) for r in rows)
-            w_path = max(len(r[3]) for r in rows)
-            
-            for exists, name, desc, path, fmt in rows:
-                print(f"  {exists} {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  [{fmt}]")
+                display = agent_info.display_name or name
+                entry = (display, agent_info.description, str(agent_info.base_path), agent_info.storage_format)
+                if agent_info.base_path.exists():
+                    found.append(entry)
+                else:
+                    missing.append(entry)
+
+            all_entries = found + missing
+            if all_entries:
+                w_name = max(len(r[0]) for r in all_entries)
+                w_desc = max(len(r[1]) for r in all_entries)
+
+            if found:
+                print("Found:")
+                for name, desc, path, fmt in found:
+                    print(f"  {name:<{w_name}}  {desc:<{w_desc}}  [{fmt}]")
+
+            if missing:
+                if found:
+                    print()
+                print("Not Found:")
+                for name, desc, path, fmt in missing:
+                    print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path}")
     elif path is not None:
         # Parse agent/session_id format
         parts = path.strip('/').split('/', 1)
@@ -555,9 +570,7 @@ def main(
                 
                 print(f"\n  {len(rows)} session(s)")
         else:
-            # No arguments provided, show help
-            console.print("[dim]Usage: cdir --agents | cdir <agent>/ | cdir <agent>/<session_id> | cdir -R[/dim]")
-            console.print("[dim]Run 'cdir --help' for more information[/dim]")
+            pass  # handled above
 
 
 if __name__ == "__main__":

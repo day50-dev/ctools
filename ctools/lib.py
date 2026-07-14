@@ -37,6 +37,7 @@ class Agent:
     description: str
     base_path: Path
     storage_format: str  # 'json', 'sqlite', 'jsonl'
+    display_name: Optional[str] = None
     session_pattern: Optional[str] = None  # glob pattern for session files
 
 
@@ -66,6 +67,7 @@ AGENTS: Dict[str, Agent] = {
         description='Claude Desktop (Anthropic)',
         base_path=Path.home() / 'Library/Application Support/Claude-3p',
         storage_format='json',
+        display_name='Claude',
         session_pattern='local-agent-mode-sessions/**/*.json'
     ),
     'claude-code': Agent(
@@ -73,19 +75,22 @@ AGENTS: Dict[str, Agent] = {
         description='Claude Code CLI',
         base_path=Path.home() / '.claude',
         storage_format='jsonl',
+        display_name='Claude Code',
         session_pattern='projects/**/*.jsonl'
     ),
     'opencode': Agent(
         name='opencode',
-        description='opencode CLI',
+        description='Opencode CLI',
         base_path=Path.home() / '.local/share/opencode',
-        storage_format='sqlite'
+        storage_format='sqlite',
+        display_name='Opencode',
     ),
     'codex': Agent(
         name='codex',
         description='OpenAI Codex CLI',
         base_path=Path.home() / '.codex',
         storage_format='jsonl',
+        display_name='Codex',
         session_pattern='sessions/**/*.jsonl'
     ),
 }
