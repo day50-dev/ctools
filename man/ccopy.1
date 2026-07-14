@@ -1,0 +1,159 @@
+.TH CCOPY 1 "2024-01-15" "ctools" "User Commands"
+.SH NAME
+ccopy \- copy concepts between sessions and concept files
+.SH SYNOPSIS
+.B ccopy
+.RB [ \-f
+.IR format ]
+.I sources
+.I destinations
+.SH DESCRIPTION
+.B ccopy
+(context copy) copies concepts between agent sessions and concept JSON files.
+Concepts are constraints, goals, preferences, observations, and references
+that can be extracted from agent sessions and stored in JSON files.
+.PP
+The @ prefix denotes a session reference (agent/session_id).
+Plain paths are concept JSON files.
+.PP
+Concepts are lines in the format:
+"Use the following <type>: <text>"
+where type is constraint, goal, preference, observation, or reference.
+.SH OPTIONS
+.TP
+.BR \-f ", " \-\-format
+.I format
+Set output format: json, xml, or md.
+.SH ARGUMENTS
+.TP
+.I sources
+One or more sources:
+.RS
+.TP
+.BI @ agent / session_id
+Agent session to extract concepts from.
+.TP
+.I concept.json
+JSON file containing concepts to inject.
+.RE
+.TP
+.I destinations
+One or more destinations:
+.RS
+.TP
+.BI @ agent / session_id
+Agent session to inject concepts into.
+.TP
+.I concept.json
+JSON file to write extracted concepts to.
+.RE
+.SH MODES
+.TP
+.B Extract
+Extract concepts from a session to a concept file:
+.PP
+.RS
+.nf
+ccopy @opencode/ses_abc concepts.json
+.fi
+.RE
+.TP
+.B Inject
+Inject concepts from files into a session:
+.PP
+.RS
+.nf
+ccopy constraints.json @opencode/ses_abc
+ccopy a.json b.json @opencode/ses_abc
+.fi
+.RE
+.TP
+.B Session-to-session
+Copy concepts from one session to another:
+.PP
+.RS
+.nf
+ccopy @opencode/ses_abc @claude/ses_xyz
+.fi
+.RE
+.SH CONCEPT FORMAT
+Concepts are JSON objects with these fields:
+.PP
+.RS
+.nf
+{
+  "type": "constraint",
+  "description": "programming language",
+  "short": "Use Python 3.11+",
+  "medium": "Use Python 3.11 or later with type hints",
+  "long": "Use Python 3.11 or later with full type hints..."
+}
+.fi
+.RE
+.PP
+The tool extracts concepts from messages matching the pattern:
+"Use the following <type>: <text>"
+.SH EXAMPLES
+Extract concepts from a session:
+.PP
+.RS
+.nf
+$ ccopy @opencode/ses_abc123 concepts.json
+Extracted 3 concepts to concepts.json
+.fi
+.RE
+.PP
+Inject concepts into a session:
+.PP
+.RS
+.nf
+$ ccopy concepts.json @opencode/ses_abc123
+Injected 3 concepts into opencode/ses_abc123
+.fi
+.RE
+.PP
+Copy concepts between sessions:
+.PP
+.RS
+.nf
+$ ccopy @opencode/ses_abc123 @claude/ses_xyz789
+Copied 3 concepts to claude/ses_xyz789
+.fi
+.RE
+.PP
+Inject multiple concept files:
+.PP
+.RS
+.nf
+$ ccopy constraints.json preferences.json @opencode/ses_abc123
+Injected 5 concepts into opencode/ses_abc123
+.fi
+.RE
+.SH SHELL EXPANSION
+Bash brace expansion works:
+.PP
+.RS
+.nf
+ccopy {constraints,preferences}.json @opencode/ses_abc
+.fi
+.RE
+.SH FILES
+.TP
+.I ~/.local/share/opencode/opencode.db
+OpenCode SQLite database (writes system messages).
+.TP
+.I ~/.claude/projects/**/*.jsonl
+Claude Code session files (writes system messages).
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Unknown agent, session not found, or invalid arguments.
+.SH SEE ALSO
+.BR cdir (1),
+.BR cgrep (1),
+.BR cdu (1)
+.SH AUTHORS
+ctools project.

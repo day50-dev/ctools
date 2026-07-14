@@ -1,0 +1,112 @@
+.TH CDU 1 "2024-01-15" "ctools" "User Commands"
+.SH NAME
+cdu \- context disk usage for LLM conversations
+.SH SYNOPSIS
+.B cdu
+.RB [ \-j ]
+.RI [ path ]
+.SH DESCRIPTION
+.B cdu
+(context disk usage) shows token length of conversations,
+similar to DOS mdu but for LLM context windows.
+Uses tiktoken for accurate counts, falls back to ~4 chars/token estimation.
+.PP
+With no arguments, shows total usage across all agents.
+With an agent name, shows sessions sorted by token usage.
+With agent/session_id, shows token breakdown for that session.
+.SH OPTIONS
+.TP
+.BR \-j ", " \-\-json
+Output in JSON format instead of table.
+.SH ARGUMENTS
+.TP
+.I path
+Agent or agent/session_id path.
+Without argument, shows all agents.
+With agent name (e.g., \fBopencode/\fR), lists sessions.
+With agent/session_id (e.g., \fBopencode/ses_abc123\fR), shows breakdown.
+.SH EXAMPLES
+Show all agents with total token usage:
+.PP
+.RS
+.nf
+$ cdu
+╭─────────────┬──────────┬─────────╮
+│ Agent       │ Sessions │ Tokens  │
+├─────────────┼──────────┼─────────┤
+│ opencode    │       42 │ 128.5k  │
+│ claude-code │       15 │  45.2k  │
+├─────────────┼──────────┼─────────┤
+│ TOTAL       │          │ 173.7k  │
+╰─────────────┴──────────┴─────────╯
+.fi
+.RE
+.PP
+Show sessions for opencode sorted by token usage:
+.PP
+.RS
+.nf
+$ cdu opencode/
+╭──────────────────────┬───────────────────────┬─────────┬──────────╮
+│ Session              │ Name                  │ Tokens  │ Messages │
+├──────────────────────┼───────────────────────┼─────────┼──────────┤
+│ ses_abc123           │ Python Help           │  12.5k  │       24 │
+│ ses_def456           │ Code Review           │   8.2k  │       18 │
+├──────────────────────┼───────────────────────┼─────────┼──────────┤
+│ TOTAL                │                       │  20.7k  │ 2 sessions│
+╰──────────────────────┴───────────────────────┴─────────┴──────────╯
+.fi
+.RE
+.PP
+Show token breakdown for a specific session:
+.PP
+.RS
+.nf
+$ cdu opencode/ses_abc123
+╭─────────┬─────────╮
+│ Metric  │ Tokens  │
+├─────────┼─────────┤
+│ Total   │  12.5k  │
+│ Input   │   8.3k  │
+│ Output  │   4.2k  │
+├─────────┼─────────┤
+│ Source  │ (actual)│
+╰─────────┴─────────╯
+.fi
+.RE
+.PP
+Output as JSON:
+.PP
+.RS
+.nf
+$ cdu --json opencode/
+[
+  {
+    "id": "ses_abc123",
+    "name": "Python Help",
+    "tokens": 12500,
+    "messages": 24
+  }
+]
+.fi
+.RE
+.SH TOKEN COUNTING
+.TP
+.B opencode
+Actual token counts from SQLite database (tokens_input + tokens_output).
+.TP
+.B Other agents
+Estimated using tiktoken (cl100k_base encoding), or fallback to ~4 chars/token.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Unknown agent or session not found.
+.SH SEE ALSO
+.BR cdir (1),
+.BR cgrep (1),
+.BR ccopy (1)
+.SH AUTHORS
+ctools project.
