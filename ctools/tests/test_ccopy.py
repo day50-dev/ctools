@@ -7,6 +7,8 @@ from typer.testing import CliRunner
 from ctools.ccopy import (
     app, parse_args, extract_concepts_from_messages,
     concepts_to_messages, read_concepts_from_file, write_concepts_to_file,
+    concept_id, write_concept_individual, read_concepts_from_dir,
+    write_concepts_individual,
 )
 from ctools.lib import Message, AGENTS
 
@@ -208,3 +210,112 @@ def test_cli_extract_and_inject(tmp_path):
         assert concepts[1]["type"] == "preference"
     finally:
         AGENTS["opencode"].base_path = original
+
+
+# --- Individual concept file tests ---
+
+def test_concept_id():
+    c1 = {"type": "constraint", "description": "test", "short": "hello"}
+    c2 = {"type": "constraint", "description": "test", "short": "hello"}
+    c3 = {"type": "constraint", "description": "test", "short": "different"}
+    assert concept_id(c1) == concept_id(c2)
+    assert concept_id(c1) != concept_id(c3)
+
+
+def test_write_concept_individual(tmp_path):
+    concept = {
+        "type": "constraint",
+        "description": "test concept",
+        "short": "use C17",
+        "medium": "Use C17 standard for all code",
+    }
+    filepath = write_concept_individual(concept, str(tmp_path))
+    assert filepath.exists()
+    assert filepath.suffix == ".json"
+    assert "constraint" in filepath.name
+    
+    with open(filepath) as f:
+        loaded = json.load(f)
+    assert loaded["type"] == "constraint"
+    assert loaded["short"] == "use C17"
+
+
+def test_write_concepts_individual(tmp_path):
+    concepts = [
+        {"type": "constraint", "description": "c1", "short": "use C17"},
+        {"type": "preference", "description": "p1", "short": "prefer snake_case"},
+    ]
+    write_concepts_individual(concepts, str(tmp_path))
+    
+    files = list(tmp_path.glob("*.json"))
+    assert len(files) == 2
+    
+    types = set()
+    for f in files:
+        with open(f) as fh:
+            data = json.load(fh)
+            types.add(data["type"])
+    assert types == {"constraint", "preference"}
+
+
+def test_read_concepts_from_dir(tmp_path):
+    concepts = [
+        {"type": "constraint", "description": "c1", "short": "use C17"},
+        {"type": "preference", "description": "p1", "short": "prefer snake_case"},
+    ]
+    write_concepts_individual(concepts, str(tmp_path))
+    
+    loaded = read_concepts_from_dir(str(tmp_path))
+    assert len(loaded) == 2
+
+
+def test_read_concepts_from_dir_empty(tmp_path):
+    loaded = read_concepts_from_dir(str(tmp_path))
+    assert loaded == []
+
+
+def test_read_concepts_from_dir_not_found():
+    with pytest.raises(typer.Exit):
+        read_concepts_from_dir("/nonexistent/path")
+
+
+def test_write_concept_individual_creates_dir(tmp_path):
+    subdir = tmp_path / "concepts"
+    concept = {"type": "constraint", "description": "test", "short": "hello"}
+    filepath = write_concept_individual(concept, str(subdir))
+    assert filepath.exists()
+    assert subdir.exists()
+
+
+# --- Strategy tests ---
+
+def test_strategy_save_load(tmp_path):
+    from ctools.strategy import Strategy
+    
+    s = Strategy(host="http://localhost:8080", model="test-model", api_key="test-key")
+    path = str(tmp_path / "strategy.json")
+    s.save(path)
+    
+    loaded = Strategy.load(path)
+    assert loaded.host == "http://localhost:8080"
+    assert loaded.model == "test-model"
+    assert loaded.api_key == "test-key"
+
+
+def test_strategy_default_prompt():
+    from ctools.strategy import Strategy, DEFAULT_PROMPT
+    
+    s = Strategy(host="http://localhost", model="test")
+    assert s.prompt == DEFAULT_PROMPT
+
+
+def test_strategy_custom_prompt(tmp_path):
+    from ctools.strategy import Strategy
+    
+    custom = "Extract only constraints from this conversation."
+    s = Strategy(host="http://localhost", model="test", prompt=custom)
+    path = str(tmp_path / "strategy.json")
+    s.save(path)
+    
+    loaded = Strategy.load(path)
+    assert loaded.prompt == custom

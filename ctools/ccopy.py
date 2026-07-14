@@ -7,20 +7,24 @@ that can be extracted from agent sessions and stored in JSON files.
 
 Usage:
     ccopy @opencode/ses_abc123 concepts.json     # extract concepts from session
+    ccopy @opencode/ses_abc123 concepts/         # extract as individual files
     ccopy constraints.json @opencode/ses_abc123   # inject concepts into session
     ccopy @opencode/ses_abc123 @claude/ses_xyz    # copy concepts between sessions
     ccopy {a,b}.json @opencode/ses_abc123         # shell expansion works
+    ccopy --strategy my-strategy.json @opencode/ses_abc concepts.json  # use custom strategy
 """
 
 import json
 import sys
 import re
 import typer
+import hashlib
 from pathlib import Path
 from typing import List, Optional, Tuple
 from rich.console import Console
 
 from ctools.lib import AGENTS, Message, get_formatter
+from ctools.strategy import Strategy, DEFAULT_STRATEGY
 
 app = typer.Typer()
 console = Console()
@@ -118,6 +122,63 @@ def write_concepts_to_file(concepts: list, path: str):
     with open(path, "w") as f:
         json.dump(concepts, f, indent=2)
         f.write("\n")
+
+
+def concept_id(concept: dict) -> str:
+    """Generate a stable ID for a concept based on its content."""
+    key = f"{concept.get('type', '')}:{concept.get('description', '')}:{concept.get('short', '')}"
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
+def write_concept_individual(concept: dict, dir_path: str):
+    """Write a single concept to its own JSON file in a directory."""
+    p = Path(dir_path)
+    p.mkdir(parents=True, exist_ok=True)
+    
+    cid = concept_id(concept)
+    filename = f"{concept.get('type', 'unknown')}_{cid}.json"
+    filepath = p / filename
+    
+    with open(filepath, "w") as f:
+        json.dump(concept, f, indent=2)
+        f.write("\n")
+    
+    return filepath
+
+
+def read_concepts_from_dir(dir_path: str) -> list:
+    """Read all concept JSON files from a directory."""
+    p = Path(dir_path)
+    if not p.exists():
+        console.print(f"[red]Directory not found: {dir_path}[/red]")
+        raise typer.Exit(1)
+    
+    concepts = []
+    for f in sorted(p.glob("*.json")):
+        try:
+            with open(f) as fh:
+                data = json.load(fh)
+                if isinstance(data, dict):
+                    concepts.append(data)
+                elif isinstance(data, list):
+                    concepts.extend(data)
+        except json.JSONDecodeError:
+            console.print(f"[yellow]Skipping invalid JSON: {f}[/yellow]")
+    
+    return concepts
+
+
+def write_concepts_individual(concepts: list, dir_path: str):
+    """Write each concept as an individual JSON file in a directory."""
+    for concept in concepts:
+        write_concept_individual(concept, dir_path)
+
+
+def load_strategy(strategy_path: Optional[str] = None) -> Strategy:
+    """Load a strategy, or return the default."""
+    if strategy_path:
+        return Strategy.load(strategy_path)
+    return DEFAULT_STRATEGY
 
 
 def get_session_messages(agent: str, session_id: str) -> List[Message]:
@@ -397,17 +458,21 @@ def _inject_json(agent_info, session_id: str, concepts: list):
 def main(
     args: List[str] = typer.Argument(..., help="Sources and destinations (@ for sessions)"),
     fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md"),
+    strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for LLM-based extraction"),
 ):
     """
     Copy concepts between sessions and concept files.
 
     @ prefix denotes a session (agent/session_id).
     Plain paths are concept JSON files.
+    Directories (ending with /) get one file per concept.
 
     Examples:
         ccopy @opencode/ses_abc concepts.json
+        ccopy @opencode/ses_abc concepts/          # one file per concept
         ccopy constraints.json preferences.json @opencode/ses_abc
         ccopy @opencode/ses_abc @claude/ses_xyz
+        ccopy --strategy my-strategy.json @opencode/ses_abc concepts.json
     """
     sessions, files = parse_args(args)
 
@@ -439,7 +504,10 @@ def main(
 
             all_concepts = []
             for f in files:
-                all_concepts.extend(read_concepts_from_file(f))
+                if f.endswith("/") or (Path(f).exists() and Path(f).is_dir()):
+                    all_concepts.extend(read_concepts_from_dir(f))
+                else:
+                    all_concepts.extend(read_concepts_from_file(f))
 
             if not all_concepts:
                 console.print("[yellow]No concepts found in files[/yellow]")
@@ -452,34 +520,60 @@ def main(
             # Extract: session -> concept files
             agent, sid = resolve_session(sessions[0])
             messages = get_session_messages(agent, sid)
-            concepts = extract_concepts_from_messages(messages)
+            
+            # Use strategy for extraction if provided
+            if strategy:
+                strat = load_strategy(strategy)
+                concepts = strat.extract([{"role": m.role, "content": m.content} for m in messages])
+            else:
+                concepts = extract_concepts_from_messages(messages)
 
             if not concepts:
                 console.print("[yellow]No concepts found in session[/yellow]")
                 return
 
-            # Write to each file (or create one if single file given)
-            if len(files) == 1:
-                write_concepts_to_file(concepts, files[0])
-                console.print(f"[green]Extracted {len(concepts)} concepts to {files[0]}[/green]")
+            # Determine output: directory or file
+            target = files[0]
+            is_dir = target.endswith("/") or (Path(target).exists() and Path(target).is_dir())
+            
+            if is_dir:
+                # Write each concept as a separate file
+                out_dir = target.rstrip("/")
+                write_concepts_individual(concepts, out_dir)
+                console.print(f"[green]Extracted {len(concepts)} concepts to {out_dir}/ ({len(concepts)} files)[/green]")
             else:
-                # Multiple files: write all to each? Or split?
-                # Default: write all concepts to the first file
-                write_concepts_to_file(concepts, files[0])
-                console.print(f"[green]Extracted {len(concepts)} concepts to {files[0]}[/green]")
+                # Write all concepts to a single file
+                write_concepts_to_file(concepts, target)
+                console.print(f"[green]Extracted {len(concepts)} concepts to {target}[/green]")
 
         elif first_is_session and not last_is_session:
             # Session-to-concept extraction
             agent, sid = resolve_session(sessions[0])
             messages = get_session_messages(agent, sid)
-            concepts = extract_concepts_from_messages(messages)
+            
+            # Use strategy for extraction if provided
+            if strategy:
+                strat = load_strategy(strategy)
+                concepts = strat.extract([{"role": m.role, "content": m.content} for m in messages])
+            else:
+                concepts = extract_concepts_from_messages(messages)
 
             if not concepts:
                 console.print("[yellow]No concepts found in session[/yellow]")
                 return
 
-            write_concepts_to_file(concepts, files[0])
-            console.print(f"[green]Extracted {len(concepts)} concepts to {files[0]}[/green]")
+            # Determine output: directory or file
+            target = files[0]
+            is_dir = target.endswith("/") or (Path(target).exists() and Path(target).is_dir())
+            
+            if is_dir:
+                # Write each concept as a separate file
+                out_dir = target.rstrip("/")
+                write_concepts_individual(concepts, out_dir)
+                console.print(f"[green]Extracted {len(concepts)} concepts to {out_dir}/ ({len(concepts)} files)[/green]")
+            else:
+                write_concepts_to_file(concepts, target)
+                console.print(f"[green]Extracted {len(concepts)} concepts to {target}[/green]")
 
         else:
             console.print("[red]Ambiguous: mix of sessions and files[/red]")
@@ -491,7 +585,13 @@ def main(
         src_session = sessions[0]
         src_agent, src_sid = resolve_session(src_session)
         messages = get_session_messages(src_agent, src_sid)
-        concepts = extract_concepts_from_messages(messages)
+        
+        # Use strategy for extraction if provided
+        if strategy:
+            strat = load_strategy(strategy)
+            concepts = strat.extract([{"role": m.role, "content": m.content} for m in messages])
+        else:
+            concepts = extract_concepts_from_messages(messages)
 
         if not concepts:
             console.print(f"[yellow]No concepts found in {src_session}[/yellow]")
