@@ -1,0 +1,282 @@
+"""
+cconnect - Connect context windows via live concept pipelines.
+
+Exposes concepts from one session as a toolcall in another session's context.
+Enables real-time pipelines between agents.
+"""
+
+import json
+import sys
+import time
+from pathlib import Path
+from typing import List, Optional
+
+import typer
+from rich.console import Console
+
+from ctools.lib import AGENTS, Session, Agent, Message
+from ctools.ccopy import (
+    extract_concepts_from_messages,
+    get_session_messages,
+    resolve_session,
+    load_strategy,
+    read_concepts_from_dir,
+)
+
+app = typer.Typer()
+console = Console()
+
+__all__ = ['app']
+
+
+def _filter_concepts(concepts: list, filter_config: dict) -> list:
+    """Filter concepts based on filter configuration."""
+    if not filter_config:
+        return concepts
+
+    prompt = filter_config.get("prompt", "")
+    types = filter_config.get("types", [])
+    exclude_types = filter_config.get("exclude_types", [])
+
+    filtered = []
+    for c in concepts:
+        ctype = c.get("type", "")
+
+        # Filter by types if specified
+        if types and ctype not in types:
+            continue
+
+        # Filter by exclude_types if specified
+        if exclude_types and ctype in exclude_types:
+            continue
+
+        # Apply prompt-based filtering if specified
+        if prompt:
+            description = c.get("description", "").lower()
+            short = c.get("short", "").lower()
+            if prompt.lower() not in description and prompt.lower() not in short:
+                continue
+
+        filtered.append(c)
+
+    return filtered
+
+
+def _inject_toolcall_sqlite(agent_info, session_id: str, source_agent: str,
+                            source_session_id: str, concepts: list,
+                            tool_name: str = "context_from_source"):
+    """Inject a toolcall into a SQLite-backed session."""
+    import sqlite3
+
+    db_path = agent_info.base_path / "opencode.db"
+    if not db_path.exists():
+        console.print(f"[red]Database not found: {db_path}[/red]")
+        raise typer.Exit(1)
+
+    # Format concepts as tool result
+    concept_lines = []
+    for c in concepts:
+        ctype = c.get("type", "preference")
+        text = c.get("short") or c.get("medium") or c.get("description", "")
+        concept_lines.append(f"- {ctype}: {text}")
+
+    tool_content = f"Concepts from {source_agent}/{source_session_id}:\n" + "\n".join(concept_lines)
+
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+
+    # Find existing cconnect tool result and replace, or insert new one
+    cursor.execute(
+        "SELECT id FROM message WHERE session_id = ? AND data LIKE ?",
+        (session_id, f'%"name": "{tool_name}"%'),
+    )
+    row = cursor.fetchone()
+
+    now_ms = int(time.time() * 1000)
+
+    if row:
+        # Update existing tool result
+        msg_id = row[0]
+        data = json.dumps({
+            "role": "tool",
+            "name": tool_name,
+            "content": tool_content
+        })
+        cursor.execute(
+            "UPDATE message SET data = ?, time_updated = ? WHERE id = ?",
+            (data, now_ms, msg_id),
+        )
+        # Update parts
+        cursor.execute(
+            "UPDATE part SET data = ? WHERE message_id = ?",
+            (json.dumps({"type": "text", "text": tool_content}), msg_id),
+        )
+    else:
+        # Insert new tool result at end of session
+        msg_id = f"cconnect_{now_ms}"
+        data = json.dumps({
+            "role": "tool",
+            "name": tool_name,
+            "content": tool_content
+        })
+        cursor.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+            (msg_id, session_id, now_ms, now_ms, data),
+        )
+        cursor.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)",
+            (f"part_{msg_id}", msg_id, session_id, now_ms, now_ms,
+             json.dumps({"type": "text", "text": tool_content})),
+        )
+
+    conn.commit()
+    conn.close()
+
+
+def _inject_toolcall_jsonl(agent_info, session_id: str, source_agent: str,
+                           source_session_id: str, concepts: list,
+                           tool_name: str = "context_from_source"):
+    """Inject a toolcall into a JSONL-backed session."""
+    # Format concepts as tool result
+    concept_lines = []
+    for c in concepts:
+        ctype = c.get("type", "preference")
+        text = c.get("short") or c.get("medium") or c.get("description", "")
+        concept_lines.append(f"- {ctype}: {text}")
+
+    tool_content = f"Concepts from {source_agent}/{source_session_id}:\n" + "\n".join(concept_lines)
+
+    # Find the session file
+    for session_file in agent_info.base_path.glob(agent_info.session_pattern):
+        if session_file.stem == session_id:
+            # Check if there's already a tool result
+            lines = session_file.read_text().splitlines()
+            replaced = False
+            new_lines = []
+            for line in lines:
+                try:
+                    data = json.loads(line)
+                    if data.get("name") == tool_name:
+                        # Replace existing tool result
+                        data["content"] = tool_content
+                        new_lines.append(json.dumps(data))
+                        replaced = True
+                    else:
+                        new_lines.append(line)
+                except json.JSONDecodeError:
+                    new_lines.append(line)
+
+            if not replaced:
+                # Add new tool result
+                new_lines.append(json.dumps({
+                    "role": "tool",
+                    "name": tool_name,
+                    "content": tool_content
+                }))
+
+            session_file.write_text("\n".join(new_lines) + "\n")
+            return
+
+    console.print(f"[yellow]Session file not found for {session_id}[/yellow]")
+
+
+@app.command()
+def main(
+    source: str = typer.Argument(..., help="Source session (@agent/session_id or @agent/session_id/directory/)"),
+    destination: str = typer.Argument(..., help="Destination session (@agent/session_id)"),
+    strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for extraction"),
+    filter_config: Optional[str] = typer.Option(None, "--filter", "-f", help="Filter JSON file"),
+    tool_name: str = typer.Option("context_from_source", "--tool-name", "-t", help="Name for the toolcall"),
+):
+    """
+    Connect context windows via live concept pipelines.
+
+    Exposes concepts from source session as a toolcall in destination session's context.
+    Enables real-time pipelines between agents.
+
+    Examples:
+        cconnect @opencode/ses_abc @claude-code/ses_xyz
+        cconnect @opencode/ses_abc/concepts/ @claude-code/ses_xyz
+        cconnect --strategy my-strategy.json @opencode/ses_abc @claude-code/ses_xyz
+        cconnect --filter my-filter.json @opencode/ses_abc @claude-code/ses_xyz
+    """
+    # Parse source - can be @agent/session or @agent/session/directory/
+    source_clean = source.lstrip("@")
+    source_parts = source_clean.split("/", 2)
+    source_agent = source_parts[0]
+    source_session_id = source_parts[1] if len(source_parts) > 1 else None
+    source_directory = source_parts[2] if len(source_parts) > 2 else None
+
+    if not source_session_id:
+        console.print("[red]Source must include session_id: @agent/session_id[/red]")
+        raise typer.Exit(1)
+
+    # Parse destination
+    dest_clean = destination.lstrip("@")
+    dest_parts = dest_clean.split("/")
+    dest_agent = dest_parts[0]
+    dest_session_id = dest_parts[1] if len(dest_parts) > 1 else None
+
+    if not dest_session_id:
+        console.print("[red]Destination must include session_id: @agent/session_id[/red]")
+        raise typer.Exit(1)
+
+    # Get concepts from source
+    if source_directory:
+        # Extract from directory
+        source_path = Path(source_directory)
+        if not source_path.exists():
+            console.print(f"[red]Source directory not found: {source_path}[/red]")
+            raise typer.Exit(1)
+        concepts = read_concepts_from_dir(str(source_path))
+    else:
+        # Extract from session
+        messages = get_session_messages(source_agent, source_session_id)
+
+        # Use strategy for extraction if provided
+        if strategy:
+            strat = load_strategy(strategy)
+            concepts = strat.extract([{"role": m.role, "content": m.content} for m in messages])
+        else:
+            concepts = extract_concepts_from_messages(messages)
+
+    if not concepts:
+        console.print("[yellow]No concepts found in source[/yellow]")
+        return
+
+    # Apply filter if provided
+    if filter_config:
+        filter_path = Path(filter_config)
+        if filter_path.exists():
+            with open(filter_path, 'r') as f:
+                filter_data = json.load(f)
+            concepts = _filter_concepts(concepts, filter_data)
+
+    if not concepts:
+        console.print("[yellow]No concepts after filtering[/yellow]")
+        return
+
+    # Inject toolcall into destination
+    dest_agent_info = AGENTS.get(dest_agent)
+    if not dest_agent_info or not dest_agent_info.base_path.exists():
+        console.print(f"[red]Destination agent {dest_agent} not found[/red]")
+        raise typer.Exit(1)
+
+    if dest_agent_info.storage_format == "sqlite":
+        _inject_toolcall_sqlite(dest_agent_info, dest_session_id,
+                                source_agent, source_session_id,
+                                concepts, tool_name)
+    elif dest_agent_info.storage_format == "jsonl":
+        _inject_toolcall_jsonl(dest_agent_info, dest_session_id,
+                               source_agent, source_session_id,
+                               concepts, tool_name)
+    else:
+        console.print(f"[red]Unsupported format: {dest_agent_info.storage_format}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[green]Connected {source_agent}/{source_session_id} -> {dest_agent}/{dest_session_id}[/green]")
+    console.print(f"[green]Injected {len(concepts)} concepts as toolcall '{tool_name}'[/green]")
+
+
+if __name__ == "__main__":
+    app()

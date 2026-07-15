@@ -29,6 +29,39 @@ from ctools.strategy import Strategy, DEFAULT_STRATEGY
 app = typer.Typer()
 console = Console()
 
+
+def _filter_concepts(concepts: list, filter_config: dict) -> list:
+    """Filter concepts based on filter configuration."""
+    if not filter_config:
+        return concepts
+
+    prompt = filter_config.get("prompt", "")
+    types = filter_config.get("types", [])
+    exclude_types = filter_config.get("exclude_types", [])
+
+    filtered = []
+    for c in concepts:
+        ctype = c.get("type", "")
+
+        # Filter by types if specified
+        if types and ctype not in types:
+            continue
+
+        # Filter by exclude_types if specified
+        if exclude_types and ctype in exclude_types:
+            continue
+
+        # Apply prompt-based filtering if specified
+        if prompt:
+            description = c.get("description", "").lower()
+            short = c.get("short", "").lower()
+            if prompt.lower() not in description and prompt.lower() not in short:
+                continue
+
+        filtered.append(c)
+
+    return filtered
+
 CONCEPT_TYPES = ("constraint", "goal", "preference", "observation", "reference")
 
 CONCEPT_PATTERN = re.compile(
@@ -459,20 +492,20 @@ def main(
     args: List[str] = typer.Argument(..., help="Sources and destinations (@ for sessions)"),
     fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md"),
     strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for LLM-based extraction"),
+    filter_config: Optional[str] = typer.Option(None, "--filter", help="Filter JSON file"),
 ):
     """
-    Copy concepts between sessions and concept files.
+    Copy concepts between sessions and concept directories.
 
     @ prefix denotes a session (agent/session_id).
-    Plain paths are concept JSON files.
-    Directories (ending with /) get one file per concept.
+    Plain paths are concept directories. Each concept becomes its own file.
 
     Examples:
-        ccopy @opencode/ses_abc concepts.json
-        ccopy @opencode/ses_abc concepts/          # one file per concept
-        ccopy constraints.json preferences.json @opencode/ses_abc
+        ccopy @opencode/ses_abc concepts/
+        ccopy concepts/ @opencode/ses_abc
         ccopy @opencode/ses_abc @claude/ses_xyz
-        ccopy --strategy my-strategy.json @opencode/ses_abc concepts.json
+        ccopy --strategy my-strategy.json @opencode/ses_abc concepts/
+        ccopy --filter my-filter.json @opencode/ses_abc concepts/
     """
     sessions, files = parse_args(args)
 
@@ -528,6 +561,14 @@ def main(
             else:
                 concepts = extract_concepts_from_messages(messages)
 
+            # Apply filter if provided
+            if filter_config:
+                filter_path = Path(filter_config)
+                if filter_path.exists():
+                    with open(filter_path, 'r') as f:
+                        filter_data = json.load(f)
+                    concepts = _filter_concepts(concepts, filter_data)
+
             if not concepts:
                 console.print("[yellow]No concepts found in session[/yellow]")
                 return
@@ -557,6 +598,14 @@ def main(
                 concepts = strat.extract([{"role": m.role, "content": m.content} for m in messages])
             else:
                 concepts = extract_concepts_from_messages(messages)
+
+            # Apply filter if provided
+            if filter_config:
+                filter_path = Path(filter_config)
+                if filter_path.exists():
+                    with open(filter_path, 'r') as f:
+                        filter_data = json.load(f)
+                    concepts = _filter_concepts(concepts, filter_data)
 
             if not concepts:
                 console.print("[yellow]No concepts found in session[/yellow]")
