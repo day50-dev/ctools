@@ -68,7 +68,7 @@ Strategies let you define how concepts are extracted using an LLM. Ontology is c
 
 ### cdir
 
-Lists sessions. Think `ls` for your conversation history.
+Lists sessions. Think `ls` for your conversation history. Subagents appear indented under their parent with tree connectors.
 
 ```sh
 cdir                        # list all known agents
@@ -78,16 +78,16 @@ cdir -R                     # all agents, recursive
 cdir opencode/ses_abc123    # export a session as JSON
 ```
 
-Output shows Found/Not Found with actual files when available:
+Output shows Found/Not Found with actual paths:
 
 ```
 Found:
-  Claude Code  Claude Code CLI             ~/.claude                [jsonl]
-  Opencode     Opencode CLI                ~/.local/share/opencode  account.json, auth.json, opencode.db
+  Claude Code  Claude Code CLI             ~/.claude/projects/
+  Opencode     Opencode CLI                ~/.local/share/opencode/opencode.db
 
 Not Found:
-  Claude       Claude Desktop (Anthropic)  ~/.config/Claude         [json]
-  Codex        OpenAI Codex CLI            ~/.codex                 [jsonl]
+  Claude       Claude Desktop (Anthropic)  ~/.config/Claude/conversations/
+  Codex        OpenAI Codex CLI            ~/.codex/sessions/
 ```
 
 Sort by time (`-t`), size (`-s`), reverse (`-r`). Output as json, xml, or markdown with `-f`.
@@ -121,12 +121,14 @@ For opencode, it reads actual input/output tokens from the database. For other a
 
 ## Supported Agents
 
-| Agent | Format | Storage |
-|-------|--------|---------|
-| claude | JSON | `~/Library/Application Support/Claude-3p/` |
-| claude-code | JSONL | `~/.claude/` |
-| opencode | SQLite | `~/.local/share/opencode/` |
-| codex | JSONL | `~/.codex/` |
+| Agent | Storage |
+|-------|---------|
+| claude | JSON |
+| claude-code | JSONL |
+| opencode | SQLite |
+| codex | JSONL |
+
+Run `cdir` to see which agents are found on your system and where they store data.
 
 ## MCP Server
 
@@ -150,7 +152,13 @@ Add to your MCP config:
 ## Installation
 
 ```sh
-pip install -r requirements.txt
+pip install ctxttools
+```
+
+For MCP server support:
+
+```sh
+pip install ctxttools[mcp]
 ```
 
 ## Library
