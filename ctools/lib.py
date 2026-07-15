@@ -41,6 +41,7 @@ class Agent:
     storage_format: str  # 'json', 'sqlite', 'jsonl'
     display_name: Optional[str] = None
     session_pattern: Optional[str] = None  # glob pattern for session files
+    files_read: Optional[str] = None  # what we actually read from this agent
 
 
 @dataclass
@@ -79,7 +80,8 @@ AGENTS: Dict[str, Agent] = {
         base_path=_claude_desktop_path(),
         storage_format='json',
         display_name='Claude',
-        session_pattern='local-agent-mode-sessions/**/*.json'
+        session_pattern='local-agent-mode-sessions/**/*.json',
+        files_read='conversations/',
     ),
     'claude-code': Agent(
         name='claude-code',
@@ -87,7 +89,8 @@ AGENTS: Dict[str, Agent] = {
         base_path=Path.home() / '.claude',
         storage_format='jsonl',
         display_name='Claude Code',
-        session_pattern='projects/**/*.jsonl'
+        session_pattern='projects/**/*.jsonl',
+        files_read='projects/',
     ),
     'opencode': Agent(
         name='opencode',
@@ -95,6 +98,7 @@ AGENTS: Dict[str, Agent] = {
         base_path=Path.home() / '.local/share/opencode',
         storage_format='sqlite',
         display_name='Opencode',
+        files_read='opencode.db',
     ),
     'codex': Agent(
         name='codex',
@@ -102,7 +106,8 @@ AGENTS: Dict[str, Agent] = {
         base_path=Path.home() / '.codex',
         storage_format='jsonl',
         display_name='Codex',
-        session_pattern='sessions/**/*.jsonl'
+        session_pattern='sessions/**/*.jsonl',
+        files_read='sessions/',
     ),
 }
 

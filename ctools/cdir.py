@@ -445,7 +445,7 @@ def main(
                     'name': name,
                     'description': agent_info.description,
                     'path': str(agent_info.base_path),
-                    'format': agent_info.storage_format,
+                    'files_read': agent_info.files_read,
                     'exists': agent_info.base_path.exists(),
                 })
             print(json.dumps(data, indent=2))
@@ -457,23 +457,8 @@ def main(
                 path = agent_info.base_path
                 exists = path.exists()
                 
-                # Find actual files if path exists
-                if exists:
-                    if path.is_file():
-                        files = [path.name]
-                        display_path = str(path)
-                    else:
-                        # List files in the directory (exclude hidden)
-                        try:
-                            files = sorted([f.name for f in path.iterdir() if f.is_file() and not f.name.startswith('.')])
-                        except PermissionError:
-                            files = []
-                        display_path = str(path)
-                else:
-                    files = []
-                    display_path = str(path)
-                
-                entry = (display, agent_info.description, display_path, agent_info.storage_format, exists, files)
+                display_path = str(path)
+                entry = (display, agent_info.description, display_path, agent_info.files_read or agent_info.storage_format, exists)
                 if exists:
                     found.append(entry)
                 else:
@@ -487,21 +472,15 @@ def main(
 
             if found:
                 print("Found:")
-                for name, desc, path, fmt, exists, files in found:
-                    if files:
-                        file_str = ", ".join(files[:5])
-                        if len(files) > 5:
-                            file_str += f" (+{len(files)-5} more)"
-                        print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  {file_str}")
-                    else:
-                        print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  [{fmt}]")
+                for name, desc, path, files_read, exists in found:
+                    print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  {files_read}")
 
             if missing:
                 if found:
                     print()
                 print("Not Found:")
-                for name, desc, path, fmt, exists, files in missing:
-                    print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  [{fmt}]")
+                for name, desc, path, files_read, exists in missing:
+                    print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  {files_read}")
     elif path is not None:
         # Parse agent/session_id format
         parts = path.strip('/').split('/', 1)
