@@ -454,8 +454,27 @@ def main(
             missing = []
             for name, agent_info in AGENTS.items():
                 display = agent_info.display_name or name
-                entry = (display, agent_info.description, str(agent_info.base_path), agent_info.storage_format)
-                if agent_info.base_path.exists():
+                path = agent_info.base_path
+                exists = path.exists()
+                
+                # Find actual files if path exists
+                if exists:
+                    if path.is_file():
+                        files = [path.name]
+                        display_path = str(path)
+                    else:
+                        # List files in the directory (exclude hidden)
+                        try:
+                            files = sorted([f.name for f in path.iterdir() if f.is_file() and not f.name.startswith('.')])
+                        except PermissionError:
+                            files = []
+                        display_path = str(path)
+                else:
+                    files = []
+                    display_path = str(path)
+                
+                entry = (display, agent_info.description, display_path, agent_info.storage_format, exists, files)
+                if exists:
                     found.append(entry)
                 else:
                     missing.append(entry)
@@ -466,9 +485,16 @@ def main(
                 w_desc = max(len(r[1]) for r in all_entries)
                 w_path = max(len(r[2]) for r in all_entries)
 
-            for name, desc, path, fmt in all_entries:
-                status = "+" if Path(path).exists() else "-"
-                print(f"  {status} {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  [{fmt}]")
+            for name, desc, path, fmt, exists, files in all_entries:
+                status = "+" if exists else "-"
+                if files and exists:
+                    # Show files if we found any
+                    file_str = ", ".join(files[:5])
+                    if len(files) > 5:
+                        file_str += f" (+{len(files)-5} more)"
+                    print(f"  {status} {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  {file_str}")
+                else:
+                    print(f"  {status} {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  [{fmt}]")
     elif path is not None:
         # Parse agent/session_id format
         parts = path.strip('/').split('/', 1)
