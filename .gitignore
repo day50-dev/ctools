@@ -18,3 +18,4 @@ env/
 *.log
 .DS_Store
 .direnv
+.envrc
