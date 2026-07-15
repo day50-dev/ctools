@@ -273,7 +273,7 @@ def test_get_opencode_sessions_no_title(tmp_path):
 
 def test_cli_list_agents():
     """Test listing all agents."""
-    result = runner.invoke(app, ["--agents"])
+    result = runner.invoke(app, [])
     assert result.exit_code == 0
     assert "Claude" in result.stdout
     assert "Opencode" in result.stdout
@@ -289,7 +289,7 @@ def test_cli_no_args_shows_agents():
 
 def test_cli_list_agents_json():
     """Test listing agents in JSON format."""
-    result = runner.invoke(app, ["--agents", "--format", "json"])
+    result = runner.invoke(app, ["--format", "json"])
     assert result.exit_code == 0
     assert "opencode" in result.stdout
 

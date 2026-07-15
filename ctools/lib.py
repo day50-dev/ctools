@@ -7,6 +7,8 @@ Provides dataclasses, agent registry, and output formatters
 """
 
 import json
+import os
+import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
@@ -61,11 +63,20 @@ class Message:
 
 # --- Agent Registry ---
 
+def _claude_desktop_path() -> Path:
+    """Return Claude Desktop storage path based on OS."""
+    if sys.platform == 'darwin':
+        return Path.home() / 'Library/Application Support/Claude'
+    elif sys.platform == 'win32':
+        return Path(os.environ.get('APPDATA', '')) / 'Claude'
+    else:
+        return Path.home() / '.config/Claude'
+
 AGENTS: Dict[str, Agent] = {
     'claude': Agent(
         name='claude',
         description='Claude Desktop (Anthropic)',
-        base_path=Path.home() / 'Library/Application Support/Claude-3p',
+        base_path=_claude_desktop_path(),
         storage_format='json',
         display_name='Claude',
         session_pattern='local-agent-mode-sessions/**/*.json'

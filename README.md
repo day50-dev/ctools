@@ -75,6 +75,13 @@ cdir -R                     # all agents, recursive
 cdir opencode/ses_abc123    # export a session as JSON
 ```
 
+Output shows `+` for found agents, `-` for missing, with paths always visible:
+
+```
+  + Opencode     Opencode CLI                ~/.local/share/opencode                  [sqlite]
+  - Claude       Claude Desktop (Anthropic)  ~/Library/Application Support/Claude-3p  [json]
+```
+
 Sort by time (`-t`), size (`-s`), reverse (`-r`). Output as json, xml, or markdown with `-f`.
 
 ### cgrep

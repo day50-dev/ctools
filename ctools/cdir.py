@@ -464,18 +464,11 @@ def main(
             if all_entries:
                 w_name = max(len(r[0]) for r in all_entries)
                 w_desc = max(len(r[1]) for r in all_entries)
+                w_path = max(len(r[2]) for r in all_entries)
 
-            if found:
-                print("Found:")
-                for name, desc, path, fmt in found:
-                    print(f"  {name:<{w_name}}  {desc:<{w_desc}}  [{fmt}]")
-
-            if missing:
-                if found:
-                    print()
-                print("Not Found:")
-                for name, desc, path, fmt in missing:
-                    print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path}")
+            for name, desc, path, fmt in all_entries:
+                status = "+" if Path(path).exists() else "-"
+                print(f"  {status} {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  [{fmt}]")
     elif path is not None:
         # Parse agent/session_id format
         parts = path.strip('/').split('/', 1)
