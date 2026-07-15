@@ -492,7 +492,7 @@ def main(
     args: List[str] = typer.Argument(..., help="Sources and destinations (@ for sessions)"),
     fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md"),
     strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for LLM-based extraction"),
-    filter_config: Optional[str] = typer.Option(None, "--filter", help="Filter JSON file"),
+    filter_config: Optional[str] = typer.Option(None, "--filter", "-f", help="Filter JSON file"),
 ):
     """
     Copy concepts between sessions and concept directories.

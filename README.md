@@ -81,7 +81,8 @@ Move packets between endpoints. The `@` prefix marks a session (endpoint). Plain
 ccopy @opencode/ses_abc123 concepts/              # extract packets to bus
 ccopy concepts/ @opencode/ses_abc123               # inject packets from bus
 ccopy @opencode/ses_abc123 @claude-code/ses_xyz   # endpoint to endpoint
-ccopy --strategy my-strategy.json @opencode/ses_abc123 concepts/  # custom filter
+ccopy -s my-strategy.json @opencode/ses_abc123 concepts/  # custom extraction
+ccopy -f my-filter.json @opencode/ses_abc123 concepts/    # filter concepts
 ```
 
 Each concept file is a packet with filterable headers:
@@ -96,7 +97,7 @@ Each concept file is a packet with filterable headers:
 }
 ```
 
-Strategies define the filter - how conversations are parsed into packets. Ontology is contestable, so different strategies produce different chunkings:
+Strategies define how conversations are parsed into packets. Ontology is contestable, so different strategies produce different chunkings:
 
 ```json
 {
@@ -104,6 +105,16 @@ Strategies define the filter - how conversations are parsed into packets. Ontolo
   "model": "qwen2.5:3b",
   "api_key": null,
   "prompt": "Extract the key concepts from this conversation..."
+}
+```
+
+Filters select which packets move through the bus:
+
+```json
+{
+  "types": ["constraint", "preference"],
+  "exclude_types": ["observation"],
+  "prompt": "coding"
 }
 ```
 
@@ -140,8 +151,8 @@ Connect context windows via live concept pipelines. Exposes concepts from one se
 ```sh
 cconnect @opencode/ses_abc @claude-code/ses_xyz           # connect endpoints
 cconnect @opencode/ses_abc/concepts/ @claude-code/ses_xyz # from concept directory
-cconnect --strategy my-strategy.json @opencode/ses_abc @claude-code/ses_xyz  # custom extraction
-cconnect --filter my-filter.json @opencode/ses_abc @claude-code/ses_xyz      # filter concepts
+cconnect -s my-strategy.json @opencode/ses_abc @claude-code/ses_xyz  # custom extraction
+cconnect -f my-filter.json @opencode/ses_abc @claude-code/ses_xyz    # filter concepts
 ```
 
 Use case: Agent A is doing a long task (find most relevant document, 10 hours). Agent B needs that output. cconnect creates a live pipeline so Agent B gets concepts from Agent A as they're produced.
