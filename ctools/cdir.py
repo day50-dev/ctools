@@ -133,13 +133,13 @@ def get_opencode_sessions(agent: Agent) -> List[Session]:
         #          tokens_input, tokens_output, model, directory
         cursor.execute('''
             SELECT id, title, time_created, time_updated, 
-                   tokens_input, tokens_output, model, directory
+                   tokens_input, tokens_output, model, directory, parent_id
             FROM session 
             ORDER BY time_updated DESC
         ''')
         
         for row in cursor.fetchall():
-            session_id, title, time_created, time_updated, tokens_input, tokens_output, model, directory = row
+            session_id, title, time_created, time_updated, tokens_input, tokens_output, model, directory, parent_id = row
             
             # Parse timestamps (milliseconds since epoch)
             ctime = None
@@ -174,7 +174,8 @@ def get_opencode_sessions(agent: Agent) -> List[Session]:
                 size=size,
                 path=str(db_path),
                 model=model,
-                message_count=msg_count
+                message_count=msg_count,
+                parent_id=parent_id
             ))
         
         conn.close()
@@ -377,24 +378,48 @@ def _print_sessions(sessions, agent_name, by_time, by_size, reverse, formatter=N
         console.print(f"[yellow]No sessions found[/yellow]")
         return
     
-    if by_time:
-        sessions.sort(key=lambda s: s.mtime or s.ctime or datetime.min, reverse=not reverse)
-    elif by_size:
-        sessions.sort(key=lambda s: s.size, reverse=not reverse)
-    else:
-        sessions.sort(key=lambda s: s.mtime or s.ctime or datetime.min, reverse=not reverse)
+    # Build parent-child mapping
+    children_map = {}
+    top_level = []
+    for s in sessions:
+        if s.parent_id:
+            children_map.setdefault(s.parent_id, []).append(s)
+        else:
+            top_level.append(s)
+    
+    # Sort function
+    def sort_key(s):
+        if by_time:
+            return s.mtime or s.ctime or datetime.min
+        elif by_size:
+            return s.size
+        else:
+            return s.mtime or s.ctime or datetime.min
+    
+    top_level.sort(key=sort_key, reverse=not reverse)
+    for parent_id in children_map:
+        children_map[parent_id].sort(key=sort_key, reverse=not reverse)
     
     if formatter:
         print(formatter.format_sessions(sessions, agent_name))
         return
     
+    # Build rows with nesting info
     rows = []
-    for s in sessions:
+    for s in top_level:
         ctime = format_datetime(s.ctime)
         mtime = format_datetime(s.mtime)
         size = format_size(s.size)
         msgs = str(s.message_count) if s.message_count else "-"
-        rows.append((s.id, s.name, ctime, mtime, size, msgs))
+        rows.append((s.id, s.name, ctime, mtime, size, msgs, 0))
+        
+        # Add children indented
+        for child in children_map.get(s.id, []):
+            ctime = format_datetime(child.ctime)
+            mtime = format_datetime(child.mtime)
+            size = format_size(child.size)
+            msgs = str(child.message_count) if child.message_count else "-"
+            rows.append((child.id, child.name, ctime, mtime, size, msgs, 1))
     
     w_id = max(len(r[0]) for r in rows)
     w_name = max(len(r[1]) for r in rows)
@@ -403,10 +428,11 @@ def _print_sessions(sessions, agent_name, by_time, by_size, reverse, formatter=N
     w_size = max(len(r[4]) for r in rows)
     w_msgs = max(len(r[5]) for r in rows)
     
-    for id, name, ctime, mtime, size, msgs in rows:
-        print(f"  {id:<{w_id}}  {name:<{w_name}}  {ctime:<{w_ctime}}  {mtime:<{w_mtime}}  {size:>{w_size}}  {msgs:>{w_msgs}}")
+    for id, name, ctime, mtime, size, msgs, depth in rows:
+        indent = "    " * depth
+        print(f"  {indent}{id:<{w_id}}  {name:<{w_name}}  {ctime:<{w_ctime}}  {mtime:<{w_mtime}}  {size:>{w_size}}  {msgs:>{w_msgs}}")
     
-    print(f"\n  {len(rows)} session(s)")
+    print(f"\n  {len(top_level)} session(s), {len(sessions) - len(top_level)} subagent(s)")
 
 
 @app.command()
@@ -473,14 +499,12 @@ def main(
             if found:
                 print("Found:")
                 for name, desc, path, files_read, exists in found:
-                    print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  {files_read}")
+                    print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path}/{files_read}")
 
             if missing:
-                if found:
-                    print()
                 print("Not Found:")
                 for name, desc, path, files_read, exists in missing:
-                    print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  {files_read}")
+                    print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path}/{files_read}")
     elif path is not None:
         # Parse agent/session_id format
         parts = path.strip('/').split('/', 1)
@@ -529,7 +553,7 @@ def main(
                 console.print(f"[yellow]No sessions found for {agent_name}[/yellow]")
                 return
             
-            if sessions and sessions[0].path:
+            if sessions and sessions[0].path and not formatter:
                 print(f"  Source: {sessions[0].path}")
                 print()
             

@@ -30,6 +30,7 @@ class Session:
     path: Optional[str] = None
     model: Optional[str] = None
     message_count: Optional[int] = None
+    parent_id: Optional[str] = None
 
 
 @dataclass
