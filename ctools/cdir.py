@@ -485,16 +485,23 @@ def main(
                 w_desc = max(len(r[1]) for r in all_entries)
                 w_path = max(len(r[2]) for r in all_entries)
 
-            for name, desc, path, fmt, exists, files in all_entries:
-                status = "+" if exists else "-"
-                if files and exists:
-                    # Show files if we found any
-                    file_str = ", ".join(files[:5])
-                    if len(files) > 5:
-                        file_str += f" (+{len(files)-5} more)"
-                    print(f"  {status} {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  {file_str}")
-                else:
-                    print(f"  {status} {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  [{fmt}]")
+            if found:
+                print("Found:")
+                for name, desc, path, fmt, exists, files in found:
+                    if files:
+                        file_str = ", ".join(files[:5])
+                        if len(files) > 5:
+                            file_str += f" (+{len(files)-5} more)"
+                        print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  {file_str}")
+                    else:
+                        print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  [{fmt}]")
+
+            if missing:
+                if found:
+                    print()
+                print("Not Found:")
+                for name, desc, path, fmt, exists, files in missing:
+                    print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path:<{w_path}}  [{fmt}]")
     elif path is not None:
         # Parse agent/session_id format
         parts = path.strip('/').split('/', 1)
@@ -542,6 +549,10 @@ def main(
             if not sessions:
                 console.print(f"[yellow]No sessions found for {agent_name}[/yellow]")
                 return
+            
+            if sessions and sessions[0].path:
+                print(f"  Source: {sessions[0].path}")
+                print()
             
             _print_sessions(sessions, agent_name if recursive else None, by_time, by_size, reverse, formatter)
     else:

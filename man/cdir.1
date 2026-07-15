@@ -65,15 +65,17 @@ List all known agents:
 .RS
 .nf
 $ cdir
-  + Claude Code  Claude Code CLI             ~/.claude                                [jsonl]
-  + Opencode     Opencode CLI                ~/.local/share/opencode                  [sqlite]
-  - Claude       Claude Desktop (Anthropic)  ~/Library/Application Support/Claude-3p  [json]
-  - Codex        OpenAI Codex CLI            ~/.codex                                 [jsonl]
+Found:
+  Claude Code  Claude Code CLI             ~/.claude                [jsonl]
+  Opencode     Opencode CLI                ~/.local/share/opencode  account.json, auth.json, opencode.db
+
+Not Found:
+  Claude       Claude Desktop (Anthropic)  ~/.config/Claude         [json]
+  Codex        OpenAI Codex CLI            ~/.codex                 [jsonl]
 .fi
 .RE
 .PP
-The + prefix indicates the agent storage was found, - indicates missing.
-Paths are always shown for diagnostic purposes.
+Found agents show their actual files. Not Found agents show the expected path.
 .PP
 List sessions for opencode:
 .PP
