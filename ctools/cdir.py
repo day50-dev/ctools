@@ -404,22 +404,29 @@ def _print_sessions(sessions, agent_name, by_time, by_size, reverse, formatter=N
         print(formatter.format_sessions(sessions, agent_name))
         return
     
-    # Build rows with nesting info
+    # ANSI bold codes
+    BOLD = "\033[1m"
+    RESET = "\033[0m"
+    
+    # Build rows with nesting info and tree prefix
     rows = []
     for s in top_level:
         ctime = format_datetime(s.ctime)
         mtime = format_datetime(s.mtime)
         size = format_size(s.size)
         msgs = str(s.message_count) if s.message_count else "-"
-        rows.append((s.id, s.name, ctime, mtime, size, msgs, 0))
+        rows.append((s.id, s.name, ctime, mtime, size, msgs, "", True))
         
-        # Add children indented
-        for child in children_map.get(s.id, []):
+        # Add children with tree prefix
+        children = children_map.get(s.id, [])
+        for i, child in enumerate(children):
+            is_last = (i == len(children) - 1)
+            prefix = "┗━ " if is_last else "┣━ "
             ctime = format_datetime(child.ctime)
             mtime = format_datetime(child.mtime)
             size = format_size(child.size)
             msgs = str(child.message_count) if child.message_count else "-"
-            rows.append((child.id, child.name, ctime, mtime, size, msgs, 1))
+            rows.append((child.id, child.name, ctime, mtime, size, msgs, prefix, False))
     
     w_id = max(len(r[0]) for r in rows)
     w_name = max(len(r[1]) for r in rows)
@@ -428,9 +435,11 @@ def _print_sessions(sessions, agent_name, by_time, by_size, reverse, formatter=N
     w_size = max(len(r[4]) for r in rows)
     w_msgs = max(len(r[5]) for r in rows)
     
-    for id, name, ctime, mtime, size, msgs, depth in rows:
-        indent = "    " * depth
-        print(f"  {indent}{id:<{w_id}}  {name:<{w_name}}  {ctime:<{w_ctime}}  {mtime:<{w_mtime}}  {size:>{w_size}}  {msgs:>{w_msgs}}")
+    for id, name, ctime, mtime, size, msgs, prefix, is_parent in rows:
+        if is_parent:
+            print(f"  {prefix}{BOLD}{id:<{w_id}}  {name:<{w_name}}{RESET}  {ctime:<{w_ctime}}  {mtime:<{w_mtime}}  {size:>{w_size}}  {msgs:>{w_msgs}}")
+        else:
+            print(f"  {prefix}{id:<{w_id}}  {name:<{w_name}}  {ctime:<{w_ctime}}  {mtime:<{w_mtime}}  {size:>{w_size}}  {msgs:>{w_msgs}}")
     
     print(f"\n  {len(top_level)} session(s), {len(sessions) - len(top_level)} subagent(s)")
 
