@@ -24,6 +24,7 @@ cgrep = "ctools.cgrep:app"
 ccopy = "ctools.ccopy:app"
 cdu = "ctools.cdu:app"
 cconnect = "ctools.cconnect:app"
+crm = "ctools.crm:app"
 ctools-mcp = "ctools.ctools_mcp:main"
 
 [tool.setuptools.packages.find]
