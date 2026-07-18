@@ -152,7 +152,8 @@ Lists sessions (endpoints). Think `ls` for your conversation history. Subagents 
 
 ```sh
 cdir                        # list all known agents
-cdir opencode/              # sessions for opencode
+cdir opencode/              # sessions for opencode (name only)
+cdir -l opencode/           # sessions with dates, size, message count
 cdir claude-code/           # sessions for claude code
 cdir -R                     # all agents, recursive
 cdir opencode/ses_abc123    # export a session as JSON
