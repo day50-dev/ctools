@@ -5,6 +5,49 @@
 
 Memory tools for LLM conversations. Extracted from [Gab n' Go](https://github.com/day50-dev/gabngo). Named after [GNU mtools](https://www.gnu.org/software/mtools/), which does the same thing for DOS floppies because your context window is about the size of a DOS-floppy. Maybe we can use that for inspiration.
 
+Even without that complication `cdir` is a game-changer alone. Because of that we document it up-front.
+
+```shell
+$ cdir opencode
+  Source: /home/chris/.local/share/opencode/opencode.db
+
+  ses_08b4ab356ffeQvmBXnu1oj4Gqe  Add -l option to cdir for date and size display
+  ┗━ ses_08b4a7d32ffeEyXT42LTDsIg7s  Explore cdir implementation (@explore subagent)
+  ses_08b74487fffeTmQzA810dE9WRV  Add -f option to override SSL errors
+```
+
+Now I can easily resume those sessions. 
+
+### cdir
+
+Lists sessions (endpoints). Think `ls` for your conversation history. Subagents appear indented under their parent with tree connectors.
+
+```sh
+cdir                        # list all known agents
+cdir opencode/              # sessions for opencode (name only)
+cdir -l opencode/           # sessions with dates, size, message count
+cdir claude-code/           # sessions for claude code
+cdir -R                     # all agents, recursive
+cdir opencode/ses_abc123    # export a session as JSON
+```
+
+Output shows Found/Not Found with actual paths:
+
+```
+Found:
+  Claude Code  Claude Code CLI             ~/.claude/projects/
+  Opencode     Opencode CLI                ~/.local/share/opencode/opencode.db
+
+Not Found:
+  Claude       Claude Desktop (Anthropic)  ~/.config/Claude/conversations/
+  Codex        OpenAI Codex CLI            ~/.codex/sessions/
+```
+
+That's the pedestrian use and that alone should be convincing.
+
+However, this is much more than that! Continue on!
+
+
 ## The Architecture
 
 ctools is a substrate for moving memory between context windows. Cross-platform, agent-agnostic, designed like a bus.
@@ -146,32 +189,6 @@ Current directory has precedence. Project-specific strategies can live alongside
 }
 ```
 
-### cdir
-
-Lists sessions (endpoints). Think `ls` for your conversation history. Subagents appear indented under their parent with tree connectors.
-
-```sh
-cdir                        # list all known agents
-cdir opencode/              # sessions for opencode (name only)
-cdir -l opencode/           # sessions with dates, size, message count
-cdir claude-code/           # sessions for claude code
-cdir -R                     # all agents, recursive
-cdir opencode/ses_abc123    # export a session as JSON
-```
-
-Output shows Found/Not Found with actual paths:
-
-```
-Found:
-  Claude Code  Claude Code CLI             ~/.claude/projects/
-  Opencode     Opencode CLI                ~/.local/share/opencode/opencode.db
-
-Not Found:
-  Claude       Claude Desktop (Anthropic)  ~/.config/Claude/conversations/
-  Codex        OpenAI Codex CLI            ~/.codex/sessions/
-```
-
-Sort by time (`-t`), size (`-s`), reverse (`-r`). Output as json, xml, or markdown with `-f`.
 
 ### cconnect
 
