@@ -208,9 +208,15 @@ def write_concepts_individual(concepts: list, dir_path: str):
 
 
 def load_strategy(strategy_path: Optional[str] = None) -> Strategy:
-    """Load a strategy, or return the default."""
+    """Load a strategy, or return the default.
+
+    Strategy lookup order:
+    1. If path contains / or starts with ., use as-is
+    2. Check current directory for name.json
+    3. Check ~/.config/ctools/strategies/name.json
+    """
     if strategy_path:
-        return Strategy.load(strategy_path)
+        return Strategy.resolve(strategy_path)
     return DEFAULT_STRATEGY
 
 

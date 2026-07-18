@@ -7,6 +7,11 @@ Since concept extraction is subjective (ontology is contestable),
 different strategies can produce different chunkings.
 
 A strategy is: {host, model, api_key, prompt}
+
+Strategy lookup order:
+1. If path is absolute or contains /, use as-is
+2. Check current directory for name.json
+3. Check ~/.config/ctools/strategies/name.json
 """
 
 import json
@@ -16,6 +21,8 @@ from typing import Optional, List
 from rich.console import Console
 
 console = Console()
+
+STRATEGIES_DIR = Path.home() / ".config" / "ctools" / "strategies"
 
 DEFAULT_PROMPT = """Extract the key concepts from this conversation.
 For each concept, output a JSON object with these fields:
@@ -52,6 +59,34 @@ class Strategy:
         with open(p) as f:
             data = json.load(f)
         return cls(**data)
+
+    @classmethod
+    def resolve(cls, name: str) -> "Strategy":
+        """Resolve a strategy name to a Strategy object.
+
+        Lookup order:
+        1. If name is a path with / or starts with ., use as-is
+        2. Check current directory for name.json
+        3. Check ~/.config/ctools/strategies/name.json
+        """
+        # If it looks like a path, use as-is
+        if "/" in name or name.startswith("."):
+            return cls.load(name)
+
+        # Check current directory
+        local_path = Path.cwd() / f"{name}.json"
+        if local_path.exists():
+            return cls.load(str(local_path))
+
+        # Check strategies directory
+        global_path = STRATEGIES_DIR / f"{name}.json"
+        if global_path.exists():
+            return cls.load(str(global_path))
+
+        # Not found anywhere
+        console.print(f"[red]Strategy not found: {name}[/red]")
+        console.print(f"[dim]Searched: ./{local_path.name}, {global_path}[/dim]")
+        raise SystemExit(1)
 
     def extract(self, messages: list) -> list:
         """Use this strategy to extract concepts from messages.
@@ -123,16 +158,14 @@ DEFAULT_STRATEGY = Strategy(
 )
 
 
-def list_strategies() -> List[Strategy]:
-    """List all strategies in the default location."""
-    strategies_dir = Path.home() / ".config" / "ctools" / "strategies"
-    if not strategies_dir.exists():
+def list_strategies() -> List[str]:
+    """List all strategy names in the default location."""
+    if not STRATEGIES_DIR.exists():
         return []
-    
-    strategies = []
-    for p in strategies_dir.glob("*.json"):
-        try:
-            strategies.append(Strategy.load(str(p)))
-        except:
-            pass
-    return strategies
+
+    return [p.stem for p in STRATEGIES_DIR.glob("*.json")]
+
+
+def ensure_strategies_dir():
+    """Create the strategies directory if it doesn't exist."""
+    STRATEGIES_DIR.mkdir(parents=True, exist_ok=True)

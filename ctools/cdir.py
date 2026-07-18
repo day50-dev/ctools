@@ -372,7 +372,7 @@ EXPORTERS = {
 }
 
 
-def _print_sessions(sessions, agent_name, by_time, by_size, reverse, formatter=None):
+def _print_sessions(sessions, agent_name, by_time, by_size, reverse, formatter=None, long_format=False):
     """Print sessions in aligned columns. agent_name shown if provided."""
     if not sessions:
         console.print(f"[yellow]No sessions found[/yellow]")
@@ -411,35 +411,49 @@ def _print_sessions(sessions, agent_name, by_time, by_size, reverse, formatter=N
     # Build rows with nesting info and tree prefix
     rows = []
     for s in top_level:
-        ctime = format_datetime(s.ctime)
-        mtime = format_datetime(s.mtime)
-        size = format_size(s.size)
-        msgs = str(s.message_count) if s.message_count else "-"
-        rows.append((s.id, s.name, ctime, mtime, size, msgs, "", True))
+        if long_format:
+            ctime = format_datetime(s.ctime)
+            mtime = format_datetime(s.mtime)
+            size = format_size(s.size)
+            msgs = str(s.message_count) if s.message_count else "-"
+            rows.append((s.id, s.name, ctime, mtime, size, msgs, "", True))
+        else:
+            rows.append((s.id, s.name, "", "", "", "", "", True))
         
         # Add children with tree prefix
         children = children_map.get(s.id, [])
         for i, child in enumerate(children):
             is_last = (i == len(children) - 1)
             prefix = "┗━ " if is_last else "┣━ "
-            ctime = format_datetime(child.ctime)
-            mtime = format_datetime(child.mtime)
-            size = format_size(child.size)
-            msgs = str(child.message_count) if child.message_count else "-"
-            rows.append((child.id, child.name, ctime, mtime, size, msgs, prefix, False))
+            if long_format:
+                ctime = format_datetime(child.ctime)
+                mtime = format_datetime(child.mtime)
+                size = format_size(child.size)
+                msgs = str(child.message_count) if child.message_count else "-"
+                rows.append((child.id, child.name, ctime, mtime, size, msgs, prefix, False))
+            else:
+                rows.append((child.id, child.name, "", "", "", "", prefix, False))
     
     w_id = max(len(r[0]) for r in rows)
     w_name = max(len(r[1]) for r in rows)
-    w_ctime = max(len(r[2]) for r in rows)
-    w_mtime = max(len(r[3]) for r in rows)
-    w_size = max(len(r[4]) for r in rows)
-    w_msgs = max(len(r[5]) for r in rows)
     
-    for id, name, ctime, mtime, size, msgs, prefix, is_parent in rows:
-        if is_parent:
-            print(f"  {prefix}{BOLD}{id:<{w_id}}  {name:<{w_name}}{RESET}  {ctime:<{w_ctime}}  {mtime:<{w_mtime}}  {size:>{w_size}}  {msgs:>{w_msgs}}")
-        else:
-            print(f"  {prefix}{id:<{w_id}}  {name:<{w_name}}  {ctime:<{w_ctime}}  {mtime:<{w_mtime}}  {size:>{w_size}}  {msgs:>{w_msgs}}")
+    if long_format:
+        w_ctime = max(len(r[2]) for r in rows)
+        w_mtime = max(len(r[3]) for r in rows)
+        w_size = max(len(r[4]) for r in rows)
+        w_msgs = max(len(r[5]) for r in rows)
+        
+        for id, name, ctime, mtime, size, msgs, prefix, is_parent in rows:
+            if is_parent:
+                print(f"  {prefix}{BOLD}{id:<{w_id}}  {name:<{w_name}}{RESET}  {ctime:<{w_ctime}}  {mtime:<{w_mtime}}  {size:>{w_size}}  {msgs:>{w_msgs}}")
+            else:
+                print(f"  {prefix}{id:<{w_id}}  {name:<{w_name}}  {ctime:<{w_ctime}}  {mtime:<{w_mtime}}  {size:>{w_size}}  {msgs:>{w_msgs}}")
+    else:
+        for id, name, _, _, _, _, prefix, is_parent in rows:
+            if is_parent:
+                print(f"  {prefix}{BOLD}{id:<{w_id}}  {name}{RESET}")
+            else:
+                print(f"  {prefix}{id:<{w_id}}  {name}")
     
     print(f"\n  {len(top_level)} session(s), {len(sessions) - len(top_level)} subagent(s)")
 
@@ -451,6 +465,7 @@ def main(
     by_size: bool = typer.Option(False, "--size", "-s", help="Sort by size"),
     reverse: bool = typer.Option(False, "--reverse", "-r", help="Reverse sort order"),
     recursive: bool = typer.Option(False, "--recursive", "-R", help="Show agent name, recurse all agents if no path given"),
+    long_format: bool = typer.Option(False, "--long", "-l", help="Show details: dates, size, message count"),
     fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md, or default")
 ):
     """
@@ -460,6 +475,7 @@ def main(
     With an agent name, lists sessions for that agent.
     With agent/session_id, exports that session.
     With -R, shows agent name and recurse all agents if no path given.
+    With -l, shows full details (dates, size, message count).
     """
     # Get formatter if specified
     formatter = None
@@ -566,7 +582,7 @@ def main(
                 print(f"  Source: {sessions[0].path}")
                 print()
             
-            _print_sessions(sessions, agent_name if recursive else None, by_time, by_size, reverse, formatter)
+            _print_sessions(sessions, agent_name if recursive else None, by_time, by_size, reverse, formatter, long_format)
     else:
         if recursive:
             # List all agents' sessions with agent name prefix

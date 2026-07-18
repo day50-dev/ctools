@@ -119,6 +119,33 @@ Filters select which packets move through the bus:
 }
 ```
 
+### Strategies
+
+Strategies are named configurations stored in `~/.config/ctools/strategies/`. Each file is a strategy:
+
+```sh
+~/.config/ctools/strategies/
+├── default.json
+├── gemma4.json
+└── project-xyz.json
+```
+
+Lookup order when you pass `-s name`:
+1. If name contains `/` or starts with `.`, use as file path
+2. Check current directory for `name.json`
+3. Check `~/.config/ctools/strategies/name.json`
+
+Current directory has precedence. Project-specific strategies can live alongside your code.
+
+```json
+{
+  "host": "http://localhost:11434",
+  "model": "qwen2.5:3b",
+  "api_key": null,
+  "prompt": "Extract the key concepts from this conversation..."
+}
+```
+
 ### cdir
 
 Lists sessions (endpoints). Think `ls` for your conversation history. Subagents appear indented under their parent with tree connectors.
