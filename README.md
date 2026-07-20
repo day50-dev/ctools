@@ -211,13 +211,25 @@ cconnect -s my-strategy.json @opencode/ses_abc @claude-code/ses_xyz  # custom ex
 cconnect -f my-filter.json @opencode/ses_abc @claude-code/ses_xyz    # filter for destination
 ```
 
-One source, many filtered destinations:
+One-to-many pipeline:
+
+```json
+{
+  "source": "@opencode/ses_abc",
+  "strategy": "strategy.json",
+  "tool_name": "context_from_source",
+  "count": 0,
+  "poll_interval": 5,
+  "destinations": [
+    { "session": "@claude-code/ses_xyz", "filter": "coding.json" },
+    { "session": "@opencode/ses_123", "filter": "security.json" },
+    { "session": "@codex/ses_456", "filter": "goals.json" }
+  ]
+}
+```
 
 ```sh
-# Extract once, filter differently per destination
-cconnect -s strategy.json -f coding.json @opencode/ses_abc @claude-code/ses_xyz
-cconnect -s strategy.json -f security.json @opencode/ses_abc @opencode/ses_123
-cconnect -s strategy.json -f goals.json @opencode/ses_abc @codex/ses_456
+cconnect --pipeline pipeline.json
 ```
 
 Flags: `-c/--count` number of cycles (0=infinity, default), `-p/--poll-interval` seconds between cycles (default 5.0).
