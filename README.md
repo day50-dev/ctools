@@ -152,15 +152,7 @@ Strategies define how conversations are parsed into packets. Ontology is contest
 }
 ```
 
-Filters select which packets move through the bus:
-
-```json
-{
-  "types": ["constraint", "preference"],
-  "exclude_types": ["observation"],
-  "prompt": "coding"
-}
-```
+Filters select which packets move through the bus. Filters are JSON-RPC 2.0 subprocesses - you write a script, ctools calls it. See [filterlib](#filterlib).
 
 ### Strategies
 
@@ -213,13 +205,17 @@ cconnect @opencode/ses_long_task @claude-code/ses_next_step
 
 Filter configuration:
 
+Filters are JSON-RPC 2.0 subprocesses. The filter script reads a request on stdin and writes a response on stdout.
+
 ```json
 {
-  "types": ["constraint", "preference"],
-  "exclude_types": ["observation"],
-  "prompt": "coding"
+  "command": "./my-filter.py",
+  "method": "classify",
+  "timeout": 30
 }
 ```
+
+See [filterlib](#filterlib) below.
 
 ### cgrep
 
