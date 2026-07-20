@@ -184,24 +184,18 @@ Current directory has precedence. Project-specific strategies can live alongside
 
 ### cconnect
 
-Connect context windows via live concept pipelines. Exposes concepts from one session as a toolcall in another session's context. Real-time agent composition.
+Connect context windows via live concept pipelines. Exposes concepts from one session as a toolcall in another session's context. Polls the source and re-injects concepts on each cycle.
 
 ```sh
-cconnect @opencode/ses_abc @claude-code/ses_xyz           # connect endpoints
-cconnect @opencode/ses_abc/concepts/ @claude-code/ses_xyz # from concept directory
+cconnect @opencode/ses_abc @claude-code/ses_xyz           # live pipeline (5s default)
+cconnect -p 2 @opencode/ses_abc @claude-code/ses_xyz     # poll every 2s
+cconnect -c 1 @opencode/ses_abc @claude-code/ses_xyz     # one-shot
+cconnect -c 10 -p 1 @opencode/ses_abc @claude-code/ses_xyz  # 10 cycles, 1s apart
 cconnect -s my-strategy.json @opencode/ses_abc @claude-code/ses_xyz  # custom extraction
 cconnect -f my-filter.json @opencode/ses_abc @claude-code/ses_xyz    # filter concepts
 ```
 
-Use case: Agent A is doing a long task (find most relevant document, 10 hours). Agent B needs that output. cconnect creates a live pipeline so Agent B gets concepts from Agent A as they're produced.
-
-```sh
-# Agent A starts a long task
-# Meanwhile, connect Agent A's output to Agent B's context
-cconnect @opencode/ses_long_task @claude-code/ses_next_step
-
-# Agent B now has access to Agent A's concepts as a toolcall
-```
+Flags: `-c/--count` number of cycles (0=infinity, default), `-p/--poll-interval` seconds between cycles (default 5.0).
 
 Filter configuration:
 
@@ -267,6 +261,56 @@ Detection: Without `--strategy`, uses simple string matching. With `--strategy`,
 
 Flags: `-i` interactive (confirm each removal), `-v` verbose (show what's being removed).
 
+### filterlib
+
+Binary classifier for filtering concepts. `filter(in_str) -> True` passes through, `False` filters out. Default on error is `True`.
+
+Filters are JSON-RPC 2.0 subprocesses. You write a script in any language, ctools calls it over stdio.
+
+**Protocol:**
+
+```
+stdin:  {"jsonrpc":"2.0","id":1,"method":"classify","params":{"content":"..."}}
+stdout: {"jsonrpc":"2.0","id":1,"result":true}
+```
+
+`result: true` = pass through. `result: false` = filter out.
+
+**Example filter script (Python):**
+
+```python
+#!/usr/bin/env python3
+import json, sys
+
+req = json.loads(sys.stdin.readline())
+content = req["params"]["content"].lower()
+
+# Filter out anything that looks like a password
+has_secret = any(w in content for w in ["password", "secret", "token", "api_key"])
+print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": not has_secret}))
+```
+
+**Config file:**
+
+```json
+{"command": "./my-filter.py", "method": "classify", "timeout": 30}
+```
+
+**Python API:**
+
+```python
+from ctools.filterlib import JSONRPCFilter, load_filter
+
+f = JSONRPCFilter("./my-filter.py")
+f.filter("password: secret123")  # False
+f.filter("hello world")          # True
+
+# Load from config file
+f = load_filter("filter.json")
+```
+
+The filter script can be anything that speaks JSON-RPC on stdio - a regex script, an LLM classifier, a network call, whatever. The subprocess is the abstraction.
+
 ## Supported Endpoints
 
 | Agent | Storage |
@@ -319,4 +363,5 @@ from ctools.cdir import get_opencode_sessions
 from ctools.cgrep import grep_session
 from ctools.ccopy import extract_concepts_from_messages, inject_concepts_to_session
 from ctools.cdu import count_tokens, get_session_tokens
+from ctools.filterlib import JSONRPCFilter, load_filter
 ```

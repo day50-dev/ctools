@@ -2,7 +2,8 @@
 cconnect - Connect context windows via live concept pipelines.
 
 Exposes concepts from one session as a toolcall in another session's context.
-Enables real-time pipelines between agents.
+Polls the source session and re-injects concepts on each cycle.
+Use --count 1 for a one-shot operation.
 """
 
 import json
@@ -180,26 +181,9 @@ def _inject_toolcall_jsonl(agent_info, session_id: str, source_agent: str,
     console.print(f"[yellow]Session file not found for {session_id}[/yellow]")
 
 
-@app.command()
-def main(
-    source: str = typer.Argument(..., help="Source session (@agent/session_id or @agent/session_id/directory/)"),
-    destination: str = typer.Argument(..., help="Destination session (@agent/session_id)"),
-    strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for extraction"),
-    filter_config: Optional[str] = typer.Option(None, "--filter", "-f", help="Filter JSON file"),
-    tool_name: str = typer.Option("context_from_source", "--tool-name", "-t", help="Name for the toolcall"),
-):
-    """
-    Connect context windows via live concept pipelines.
-
-    Exposes concepts from source session as a toolcall in destination session's context.
-    Enables real-time pipelines between agents.
-
-    Examples:
-        cconnect @opencode/ses_abc @claude-code/ses_xyz
-        cconnect @opencode/ses_abc/concepts/ @claude-code/ses_xyz
-        cconnect --strategy my-strategy.json @opencode/ses_abc @claude-code/ses_xyz
-        cconnect --filter my-filter.json @opencode/ses_abc @claude-code/ses_xyz
-    """
+def _run_cycle(source: str, destination: str, strategy: Optional[str],
+               filter_config: Optional[str], tool_name: str) -> bool:
+    """Run one extract-filter-inject cycle. Returns True on success."""
     # Parse source - can be @agent/session or @agent/session/directory/
     source_clean = source.lstrip("@")
     source_parts = source_clean.split("/", 2)
@@ -209,7 +193,7 @@ def main(
 
     if not source_session_id:
         console.print("[red]Source must include session_id: @agent/session_id[/red]")
-        raise typer.Exit(1)
+        return False
 
     # Parse destination
     dest_clean = destination.lstrip("@")
@@ -219,21 +203,17 @@ def main(
 
     if not dest_session_id:
         console.print("[red]Destination must include session_id: @agent/session_id[/red]")
-        raise typer.Exit(1)
+        return False
 
     # Get concepts from source
     if source_directory:
-        # Extract from directory
         source_path = Path(source_directory)
         if not source_path.exists():
             console.print(f"[red]Source directory not found: {source_path}[/red]")
-            raise typer.Exit(1)
+            return False
         concepts = read_concepts_from_dir(str(source_path))
     else:
-        # Extract from session
         messages = get_session_messages(source_agent, source_session_id)
-
-        # Use strategy for extraction if provided
         if strategy:
             strat = load_strategy(strategy)
             concepts = strat.extract([{"role": m.role, "content": m.content} for m in messages])
@@ -242,7 +222,7 @@ def main(
 
     if not concepts:
         console.print("[yellow]No concepts found in source[/yellow]")
-        return
+        return False
 
     # Apply filter if provided
     if filter_config:
@@ -254,13 +234,13 @@ def main(
 
     if not concepts:
         console.print("[yellow]No concepts after filtering[/yellow]")
-        return
+        return False
 
     # Inject toolcall into destination
     dest_agent_info = AGENTS.get(dest_agent)
     if not dest_agent_info or not dest_agent_info.base_path.exists():
         console.print(f"[red]Destination agent {dest_agent} not found[/red]")
-        raise typer.Exit(1)
+        return False
 
     if dest_agent_info.storage_format == "sqlite":
         _inject_toolcall_sqlite(dest_agent_info, dest_session_id,
@@ -272,10 +252,46 @@ def main(
                                concepts, tool_name)
     else:
         console.print(f"[red]Unsupported format: {dest_agent_info.storage_format}[/red]")
-        raise typer.Exit(1)
+        return False
 
-    console.print(f"[green]Connected {source_agent}/{source_session_id} -> {dest_agent}/{dest_session_id}[/green]")
     console.print(f"[green]Injected {len(concepts)} concepts as toolcall '{tool_name}'[/green]")
+    return True
+
+
+@app.command()
+def main(
+    source: str = typer.Argument(..., help="Source session (@agent/session_id or @agent/session_id/directory/)"),
+    destination: str = typer.Argument(..., help="Destination session (@agent/session_id)"),
+    strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for extraction"),
+    filter_config: Optional[str] = typer.Option(None, "--filter", "-f", help="Filter JSON file"),
+    tool_name: str = typer.Option("context_from_source", "--tool-name", "-t", help="Name for the toolcall"),
+    count: int = typer.Option(0, "--count", "-c", help="Number of cycles (0=infinity)"),
+    poll_interval: float = typer.Option(5.0, "--poll-interval", "-p", help="Poll interval in seconds"),
+):
+    """
+    Connect context windows via live concept pipelines.
+
+    Exposes concepts from source session as a toolcall in destination session's context.
+    Polls the source and re-injects concepts on each cycle.
+
+    Examples:
+        cconnect @opencode/ses_abc @claude-code/ses_xyz
+        cconnect --count 1 @opencode/ses_abc @claude-code/ses_xyz
+        cconnect -p 2 @opencode/ses_abc @claude-code/ses_xyz
+        cconnect --count 10 -p 1 @opencode/ses_abc @claude-code/ses_xyz
+    """
+    cycle = 0
+    try:
+        while True:
+            cycle += 1
+            _run_cycle(source, destination, strategy, filter_config, tool_name)
+
+            if count != 0 and cycle >= count:
+                break
+
+            time.sleep(poll_interval)
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
