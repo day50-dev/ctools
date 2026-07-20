@@ -52,11 +52,25 @@ However, this is much more than that! Continue on!
 
 ctools is a substrate for moving memory between context windows. Cross-platform, agent-agnostic, designed like a bus.
 
-A context is a collection of concepts extracted from a conversation under a given strategy. Constraints, preferences, goals, observations - these are the packets. Each packet has filterable headers: type, description, and content at multiple granularities (short, medium, long). The concept directory is the bus - each concept file is a packet that can be filtered, merged, edited, versioned, and transferred between any two endpoints.
+Two stages: **extraction** and **filtering**.
 
-Strategies are filters. They define how conversations are parsed into packets. Different strategies produce different ontologies because context is contestable. The bus doesn't care. Packets move regardless.
+A **strategy** extracts concepts from a conversation. It defines what counts as a concept and how to find it - regex patterns, LLM extraction, whatever. Different strategies produce different ontologies from the same conversation because context is contestable.
 
-Context windows are endpoints. opencode, Claude Code, Codex - they all speak different protocols but they all consume the same packets. That's the point.
+A **filter** selects which extracted concepts reach a destination. It's a binary classifier - pass through or filter out. One concept list can fan out to many destinations, each with its own filter. A coding agent gets coding preferences, a security agent gets security constraints, a PM agent gets goals - all from the same source.
+
+```mermaid
+graph LR
+    SRC["source session"] --> STRAT["strategy<br/>(extraction)"]
+    STRAT --> CONCEPTS["concept list"]
+    CONCEPTS --> FA["filter A"]
+    CONCEPTS --> FB["filter B"]
+    CONCEPTS --> FC["filter C"]
+    FA --> DEST_A["destination A"]
+    FB --> DEST_B["destination B"]
+    FC --> DEST_C["destination C"]
+```
+
+Context windows are endpoints. opencode, Claude Code, Codex - they all speak different protocols but they all consume the same packets.
 
 ```mermaid
 graph TB
@@ -186,13 +200,24 @@ Current directory has precedence. Project-specific strategies can live alongside
 
 Connect context windows via live concept pipelines. Exposes concepts from one session as a toolcall in another session's context. Polls the source and re-injects concepts on each cycle.
 
+Strategy extracts, filter selects per destination:
+
 ```sh
 cconnect @opencode/ses_abc @claude-code/ses_xyz           # live pipeline (5s default)
 cconnect -p 2 @opencode/ses_abc @claude-code/ses_xyz     # poll every 2s
 cconnect -c 1 @opencode/ses_abc @claude-code/ses_xyz     # one-shot
 cconnect -c 10 -p 1 @opencode/ses_abc @claude-code/ses_xyz  # 10 cycles, 1s apart
 cconnect -s my-strategy.json @opencode/ses_abc @claude-code/ses_xyz  # custom extraction
-cconnect -f my-filter.json @opencode/ses_abc @claude-code/ses_xyz    # filter concepts
+cconnect -f my-filter.json @opencode/ses_abc @claude-code/ses_xyz    # filter for destination
+```
+
+One source, many filtered destinations:
+
+```sh
+# Extract once, filter differently per destination
+cconnect -s strategy.json -f coding.json @opencode/ses_abc @claude-code/ses_xyz
+cconnect -s strategy.json -f security.json @opencode/ses_abc @opencode/ses_123
+cconnect -s strategy.json -f goals.json @opencode/ses_abc @codex/ses_456
 ```
 
 Flags: `-c/--count` number of cycles (0=infinity, default), `-p/--poll-interval` seconds between cycles (default 5.0).
