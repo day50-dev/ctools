@@ -136,11 +136,12 @@ Your memory travels with you.
 Move packets between endpoints. The `@` prefix marks a session (endpoint). Plain paths are concept directories (the bus).
 
 ```sh
-ccopy @opencode/ses_abc123 concepts/              # extract packets to bus
-ccopy concepts/ @opencode/ses_abc123               # inject packets from bus
-ccopy @opencode/ses_abc123 @claude-code/ses_xyz   # endpoint to endpoint
-ccopy -s my-strategy.json @opencode/ses_abc123 concepts/  # custom extraction
-ccopy -f my-filter.json @opencode/ses_abc123 concepts/    # filter concepts
+ccopy @opencode/ses_abc concepts/              # extract packets to bus
+ccopy concepts/ @opencode/ses_abc               # inject packets from bus
+ccopy @opencode/ses_abc @claude-code/ses_xyz   # endpoint to endpoint
+ccopy -s my-strategy.json @opencode/ses_abc concepts/  # custom extraction
+ccopy -F my-filter.json @opencode/ses_abc concepts/    # filter concepts
+ccopy -v @opencode/ses_abc concepts/            # verbose logging
 ```
 
 Each concept file is a packet with filterable headers:
@@ -232,7 +233,7 @@ One-to-many pipeline:
 cconnect --pipeline pipeline.json
 ```
 
-Flags: `-c/--count` number of cycles (0=infinity, default), `-p/--poll-interval` seconds between cycles (default 5.0).
+Flags: `-c/--count` number of cycles (0=infinity, default), `-p/--poll-interval` seconds between cycles (default 5.0), `-v/--verbose` structured logging.
 
 Filter configuration:
 
@@ -247,6 +248,34 @@ Filters are JSON-RPC 2.0 subprocesses. The filter script reads a request on stdi
 ```
 
 See [filterlib](#filterlib) below.
+
+### Observability
+
+Every tool supports `--verbose` / `-v` for structured logging via [structlog](https://github.com/hynek/structlog). Logs go to stderr as JSON lines — pipe to `jq` for debugging.
+
+```sh
+cconnect -v @opencode/ses_abc @claude-code/ses_xyz
+LOGLEVEL=DEBUG cconnect @opencode/ses_abc @claude-code/ses_xyz
+ccopy -v @opencode/ses_abc concepts/
+```
+
+Verbose output shows every pipeline stage:
+
+```
+{"event": "concepts_extracted", "source": "@opencode/ses_abc", "count": 12, "types": {"preference": 5, "constraint": 3, "goal": 4}, "elapsed_ms": 42}
+{"event": "concept_filtered", "reason": "type_excluded", "type": "observation", "short": " noticed the build is slow"}
+{"event": "filter_applied", "config": "coding.json", "input_count": 12, "output_count": 8, "dropped": 4}
+{"event": "inject_complete", "destination": "@claude-code/ses_xyz", "count": 8, "elapsed_ms": 15}
+{"event": "cycle_complete", "source": "@opencode/ses_abc", "destination": "@claude-code/ses_xyz", "injected": 8}
+```
+
+Without `-v`, tools are quiet — only errors and final results print to the terminal. The `LOGLEVEL` env var overrides: `DEBUG`, `INFO`, `WARNING`, `ERROR`.
+
+For filter debugging, filterlib logs every subprocess call and result:
+
+```sh
+LOGLEVEL=DEBUG cconnect -f my-filter.json @opencode/ses_abc @claude-code/ses_xyz 2>&1 | jq '.event == "filter_timeout"'
+```
 
 ### cgrep
 
@@ -401,4 +430,5 @@ from ctools.cgrep import grep_session
 from ctools.ccopy import extract_concepts_from_messages, inject_concepts_to_session
 from ctools.cdu import count_tokens, get_session_tokens
 from ctools.filterlib import JSONRPCFilter, load_filter
+from ctools.log import configure_logging, get_logger
 ```
