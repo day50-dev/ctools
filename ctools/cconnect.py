@@ -27,9 +27,11 @@ from ctools.ccopy import (
     read_concepts_from_dir,
 )
 from ctools.filterlib import load_filter
+from ctools.log import configure_logging, get_logger
 
 app = typer.Typer()
 console = Console()
+log = get_logger()
 
 __all__ = ['app']
 
@@ -48,15 +50,19 @@ def _filter_concepts(concepts: list, filter_config: dict) -> list:
         ctype = c.get("type", "")
 
         if types and ctype not in types:
+            log.debug("concept_filtered", reason="type_not_included", type=ctype, short=c.get("short", "")[:60])
             continue
         if exclude_types and ctype in exclude_types:
+            log.debug("concept_filtered", reason="type_excluded", type=ctype, short=c.get("short", "")[:60])
             continue
         if prompt:
             description = c.get("description", "").lower()
             short = c.get("short", "").lower()
             if prompt.lower() not in description and prompt.lower() not in short:
+                log.debug("concept_filtered", reason="prompt_no_match", prompt=prompt, short=c.get("short", "")[:60])
                 continue
 
+        log.debug("concept_passed", type=ctype, short=c.get("short", "")[:60])
         filtered.append(c)
 
     return filtered
@@ -70,7 +76,7 @@ def _inject_toolcall_sqlite(agent_info, session_id: str, source_agent: str,
 
     db_path = agent_info.base_path / "opencode.db"
     if not db_path.exists():
-        console.print(f"[red]Database not found: {db_path}[/red]")
+        log.error("database_not_found", path=str(db_path))
         raise typer.Exit(1)
 
     concept_lines = []
@@ -97,11 +103,13 @@ def _inject_toolcall_sqlite(agent_info, session_id: str, source_agent: str,
         data = json.dumps({"role": "tool", "name": tool_name, "content": tool_content})
         cursor.execute("UPDATE message SET data = ?, time_updated = ? WHERE id = ?", (data, now_ms, msg_id))
         cursor.execute("UPDATE part SET data = ? WHERE message_id = ?", (json.dumps({"type": "text", "text": tool_content}), msg_id))
+        log.debug("toolcall_updated", session=session_id, msg_id=msg_id)
     else:
         msg_id = f"cconnect_{now_ms}"
         data = json.dumps({"role": "tool", "name": tool_name, "content": tool_content})
         cursor.execute("INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)", (msg_id, session_id, now_ms, now_ms, data))
         cursor.execute("INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)", (f"part_{msg_id}", msg_id, session_id, now_ms, now_ms, json.dumps({"type": "text", "text": tool_content})))
+        log.debug("toolcall_inserted", session=session_id, msg_id=msg_id)
 
     conn.commit()
     conn.close()
@@ -140,9 +148,10 @@ def _inject_toolcall_jsonl(agent_info, session_id: str, source_agent: str,
                 new_lines.append(json.dumps({"role": "tool", "name": tool_name, "content": tool_content}))
 
             session_file.write_text("\n".join(new_lines) + "\n")
+            log.debug("toolcall_written", session=session_id, file=str(session_file))
             return
 
-    console.print(f"[yellow]Session file not found for {session_id}[/yellow]")
+    log.warning("session_file_not_found", session=session_id)
 
 
 def _extract_concepts(source: str, strategy: Optional[str]) -> Optional[list]:
@@ -154,13 +163,15 @@ def _extract_concepts(source: str, strategy: Optional[str]) -> Optional[list]:
     source_directory = source_parts[2] if len(source_parts) > 2 else None
 
     if not source_session_id:
-        console.print("[red]Source must include session_id: @agent/session_id[/red]")
+        log.error("invalid_source", source=source, reason="missing session_id")
         return None
+
+    t0 = time.monotonic()
 
     if source_directory:
         source_path = Path(source_directory)
         if not source_path.exists():
-            console.print(f"[red]Source directory not found: {source_path}[/red]")
+            log.error("source_not_found", path=str(source_path))
             return None
         concepts = read_concepts_from_dir(str(source_path))
     else:
@@ -171,6 +182,13 @@ def _extract_concepts(source: str, strategy: Optional[str]) -> Optional[list]:
         else:
             concepts = extract_concepts_from_messages(messages)
 
+    elapsed = time.monotonic() - t0
+    types = {}
+    for c in concepts:
+        t = c.get("type", "unknown")
+        types[t] = types.get(t, 0) + 1
+
+    log.info("concepts_extracted", source=source, count=len(concepts), types=types, elapsed_ms=round(elapsed * 1000))
     return concepts
 
 
@@ -183,7 +201,7 @@ def _inject_to_dest(destination: str, concepts: list, source: str,
     dest_session_id = dest_parts[1] if len(dest_parts) > 1 else None
 
     if not dest_session_id:
-        console.print(f"[red]Destination must include session_id: {destination}[/red]")
+        log.error("invalid_destination", destination=destination, reason="missing session_id")
         return False
 
     source_clean = source.lstrip("@")
@@ -193,8 +211,10 @@ def _inject_to_dest(destination: str, concepts: list, source: str,
 
     dest_agent_info = AGENTS.get(dest_agent)
     if not dest_agent_info or not dest_agent_info.base_path.exists():
-        console.print(f"[red]Destination agent {dest_agent} not found[/red]")
+        log.error("destination_agent_not_found", agent=dest_agent)
         return False
+
+    t0 = time.monotonic()
 
     if dest_agent_info.storage_format == "sqlite":
         _inject_toolcall_sqlite(dest_agent_info, dest_session_id,
@@ -205,9 +225,11 @@ def _inject_to_dest(destination: str, concepts: list, source: str,
                                source_agent, source_session_id,
                                concepts, tool_name)
     else:
-        console.print(f"[red]Unsupported format: {dest_agent_info.storage_format}[/red]")
+        log.error("unsupported_format", agent=dest_agent, format=dest_agent_info.storage_format)
         return False
 
+    elapsed = time.monotonic() - t0
+    log.info("inject_complete", destination=destination, count=len(concepts), elapsed_ms=round(elapsed * 1000))
     return True
 
 
@@ -219,7 +241,7 @@ def _run_cycle(source: str, destination: str, strategy: Optional[str],
         return False
 
     if not concepts:
-        console.print("[yellow]No concepts found in source[/yellow]")
+        log.warning("no_concepts", source=source)
         return False
 
     if filter_config:
@@ -227,14 +249,16 @@ def _run_cycle(source: str, destination: str, strategy: Optional[str],
         if filter_path.exists():
             with open(filter_path, 'r') as f:
                 filter_data = json.load(f)
+            before = len(concepts)
             concepts = _filter_concepts(concepts, filter_data)
+            log.info("filter_applied", config=filter_config, input_count=before, output_count=len(concepts), dropped=before - len(concepts))
 
     if not concepts:
-        console.print("[yellow]No concepts after filtering[/yellow]")
+        log.warning("all_concepts_filtered", source=source, destination=destination)
         return False
 
     if _inject_to_dest(destination, concepts, source, tool_name):
-        console.print(f"[green]Injected {len(concepts)} concepts as toolcall '{tool_name}'[/green]")
+        log.info("cycle_complete", source=source, destination=destination, injected=len(concepts))
         return True
     return False
 
@@ -251,7 +275,7 @@ def _run_pipeline_cycle(pipeline: dict) -> bool:
         return False
 
     if not concepts:
-        console.print("[yellow]No concepts found in source[/yellow]")
+        log.warning("no_concepts", source=source)
         return False
 
     injected = 0
@@ -265,17 +289,19 @@ def _run_pipeline_cycle(pipeline: dict) -> bool:
             if filter_path.exists():
                 with open(filter_path, 'r') as f:
                     filter_data = json.load(f)
+                before = len(dest_concepts)
                 dest_concepts = _filter_concepts(dest_concepts, filter_data)
+                log.info("filter_applied", destination=session, config=dest_filter, input_count=before, output_count=len(dest_concepts), dropped=before - len(dest_concepts))
 
         dest_tool_name = dest.get("tool_name", tool_name)
 
         if dest_concepts:
             if _inject_to_dest(session, dest_concepts, source, dest_tool_name):
-                console.print(f"  [green]{session}: {len(dest_concepts)} concepts[/green]")
                 injected += 1
         else:
-            console.print(f"  [yellow]{session}: no concepts after filtering[/yellow]")
+            log.warning("all_concepts_filtered", destination=session)
 
+    log.info("pipeline_cycle_complete", source=source, destinations=len(destinations), injected=injected)
     return injected > 0
 
 
@@ -289,6 +315,7 @@ def main(
     count: int = typer.Option(0, "--count", "-c", help="Number of cycles (0=infinity)"),
     poll_interval: float = typer.Option(5.0, "--poll-interval", "-p", help="Poll interval in seconds"),
     pipeline: Optional[str] = typer.Option(None, "--pipeline", "-P", help="Pipeline JSON config for one-to-many"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
     """
     Connect context windows via live concept pipelines.
@@ -303,10 +330,12 @@ def main(
     Pipeline (one-to-many):
         cconnect --pipeline pipeline.json
     """
+    configure_logging(verbose=verbose)
+
     if pipeline:
         pipeline_path = Path(pipeline)
         if not pipeline_path.exists():
-            console.print(f"[red]Pipeline config not found: {pipeline}[/red]")
+            log.error("pipeline_not_found", path=pipeline)
             raise typer.Exit(1)
         with open(pipeline_path) as f:
             config = json.load(f)
@@ -314,10 +343,13 @@ def main(
         count = config.get("count", count)
         poll_interval = config.get("poll_interval", poll_interval)
 
+        log.info("pipeline_started", source=config["source"], destinations=len(config.get("destinations", [])), count=count, poll_interval=poll_interval)
+
         cycle = 0
         try:
             while True:
                 cycle += 1
+                log.debug("cycle_start", cycle=cycle)
                 _run_pipeline_cycle(config)
 
                 if count != 0 and cycle >= count:
@@ -325,16 +357,19 @@ def main(
 
                 time.sleep(poll_interval)
         except KeyboardInterrupt:
-            pass
+            log.info("interrupted", cycle=cycle)
     else:
         if not source or not destination:
             console.print("[red]Source and destination required (or use --pipeline)[/red]")
             raise typer.Exit(1)
 
+        log.info("connect_started", source=source, destination=destination, count=count, poll_interval=poll_interval)
+
         cycle = 0
         try:
             while True:
                 cycle += 1
+                log.debug("cycle_start", cycle=cycle)
                 _run_cycle(source, destination, strategy, filter_config, tool_name)
 
                 if count != 0 and cycle >= count:
@@ -342,7 +377,7 @@ def main(
 
                 time.sleep(poll_interval)
         except KeyboardInterrupt:
-            pass
+            log.info("interrupted", cycle=cycle)
 
 
 if __name__ == "__main__":

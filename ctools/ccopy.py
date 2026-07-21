@@ -25,9 +25,11 @@ from rich.console import Console
 
 from ctools.lib import AGENTS, Message, get_formatter
 from ctools.strategy import Strategy, DEFAULT_STRATEGY
+from ctools.log import configure_logging, get_logger
 
 app = typer.Typer()
 console = Console()
+log = get_logger()
 
 
 def _filter_concepts(concepts: list, filter_config: dict) -> list:
@@ -45,10 +47,12 @@ def _filter_concepts(concepts: list, filter_config: dict) -> list:
 
         # Filter by types if specified
         if types and ctype not in types:
+            log.debug("concept_filtered", reason="type_not_included", type=ctype, short=c.get("short", "")[:60])
             continue
 
         # Filter by exclude_types if specified
         if exclude_types and ctype in exclude_types:
+            log.debug("concept_filtered", reason="type_excluded", type=ctype, short=c.get("short", "")[:60])
             continue
 
         # Apply prompt-based filtering if specified
@@ -56,8 +60,10 @@ def _filter_concepts(concepts: list, filter_config: dict) -> list:
             description = c.get("description", "").lower()
             short = c.get("short", "").lower()
             if prompt.lower() not in description and prompt.lower() not in short:
+                log.debug("concept_filtered", reason="prompt_no_match", prompt=prompt, short=c.get("short", "")[:60])
                 continue
 
+        log.debug("concept_passed", type=ctype, short=c.get("short", "")[:60])
         filtered.append(c)
 
     return filtered
@@ -498,7 +504,8 @@ def main(
     args: List[str] = typer.Argument(..., help="Sources and destinations (@ for sessions)"),
     fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md"),
     strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for LLM-based extraction"),
-    filter_config: Optional[str] = typer.Option(None, "--filter", "-f", help="Filter JSON file"),
+    filter_config: Optional[str] = typer.Option(None, "--filter", "-F", help="Filter JSON file"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
     """
     Copy concepts between sessions and concept directories.
@@ -513,6 +520,7 @@ def main(
         ccopy --strategy my-strategy.json @opencode/ses_abc concepts/
         ccopy --filter my-filter.json @opencode/ses_abc concepts/
     """
+    configure_logging(verbose=verbose)
     sessions, files = parse_args(args)
 
     if not sessions:
@@ -552,6 +560,7 @@ def main(
                 console.print("[yellow]No concepts found in files[/yellow]")
                 return
 
+            log.info("concepts_loaded", count=len(all_concepts), destination=f"{agent}/{sid}")
             inject_concepts_to_session(agent, sid, all_concepts)
             console.print(f"[green]Injected {len(all_concepts)} concepts into {agent}/{sid}[/green]")
 
@@ -559,6 +568,7 @@ def main(
             # Extract: session -> concept files
             agent, sid = resolve_session(sessions[0])
             messages = get_session_messages(agent, sid)
+            log.debug("messages_loaded", agent=agent, session=sid, count=len(messages))
             
             # Use strategy for extraction if provided
             if strategy:
@@ -567,13 +577,17 @@ def main(
             else:
                 concepts = extract_concepts_from_messages(messages)
 
+            log.info("concepts_extracted", source=f"{agent}/{sid}", count=len(concepts))
+
             # Apply filter if provided
             if filter_config:
                 filter_path = Path(filter_config)
                 if filter_path.exists():
                     with open(filter_path, 'r') as f:
                         filter_data = json.load(f)
+                    before = len(concepts)
                     concepts = _filter_concepts(concepts, filter_data)
+                    log.info("filter_applied", config=filter_config, input_count=before, output_count=len(concepts), dropped=before - len(concepts))
 
             if not concepts:
                 console.print("[yellow]No concepts found in session[/yellow]")
@@ -597,6 +611,7 @@ def main(
             # Session-to-concept extraction
             agent, sid = resolve_session(sessions[0])
             messages = get_session_messages(agent, sid)
+            log.debug("messages_loaded", agent=agent, session=sid, count=len(messages))
             
             # Use strategy for extraction if provided
             if strategy:
@@ -605,13 +620,17 @@ def main(
             else:
                 concepts = extract_concepts_from_messages(messages)
 
+            log.info("concepts_extracted", source=f"{agent}/{sid}", count=len(concepts))
+
             # Apply filter if provided
             if filter_config:
                 filter_path = Path(filter_config)
                 if filter_path.exists():
                     with open(filter_path, 'r') as f:
                         filter_data = json.load(f)
+                    before = len(concepts)
                     concepts = _filter_concepts(concepts, filter_data)
+                    log.info("filter_applied", config=filter_config, input_count=before, output_count=len(concepts), dropped=before - len(concepts))
 
             if not concepts:
                 console.print("[yellow]No concepts found in session[/yellow]")
@@ -640,6 +659,7 @@ def main(
         src_session = sessions[0]
         src_agent, src_sid = resolve_session(src_session)
         messages = get_session_messages(src_agent, src_sid)
+        log.debug("messages_loaded", agent=src_agent, session=src_sid, count=len(messages))
         
         # Use strategy for extraction if provided
         if strategy:
@@ -647,6 +667,8 @@ def main(
             concepts = strat.extract([{"role": m.role, "content": m.content} for m in messages])
         else:
             concepts = extract_concepts_from_messages(messages)
+
+        log.info("concepts_extracted", source=f"{src_agent}/{src_sid}", count=len(concepts), destinations=len(sessions) - 1)
 
         if not concepts:
             console.print(f"[yellow]No concepts found in {src_session}[/yellow]")

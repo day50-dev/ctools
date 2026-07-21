@@ -22,6 +22,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
+from ctools.log import get_logger
+
 
 class Filter(ABC):
     """Base class for binary classifiers.
@@ -50,6 +52,7 @@ class JSONRPCFilter(Filter):
         self.timeout = timeout
 
     def filter(self, in_str: str) -> bool:
+        log = get_logger()
         request = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -58,6 +61,7 @@ class JSONRPCFilter(Filter):
         }
         try:
             cmd = self.command if isinstance(self.command, list) else [self.command]
+            log.debug("filter_call", command=cmd, method=self.method, input_len=len(in_str))
             proc = subprocess.run(
                 cmd,
                 input=json.dumps(request) + "\n",
@@ -67,12 +71,22 @@ class JSONRPCFilter(Filter):
             )
 
             if proc.returncode != 0:
+                log.warning("filter_nonzero_exit", command=cmd, returncode=proc.returncode, stderr=proc.stderr[:200] if proc.stderr else None)
                 return True
 
             response = json.loads(proc.stdout.strip())
-            return bool(response.get("result", True))
+            result = bool(response.get("result", True))
+            log.debug("filter_result", result=result, command=cmd)
+            return result
 
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
+        except subprocess.TimeoutExpired:
+            log.warning("filter_timeout", command=self.command, timeout=self.timeout)
+            return True
+        except json.JSONDecodeError as e:
+            log.warning("filter_bad_json", command=self.command, error=str(e))
+            return True
+        except OSError as e:
+            log.warning("filter_os_error", command=self.command, error=str(e))
             return True
 
     def __repr__(self) -> str:
@@ -98,4 +112,5 @@ def load_filter(config: Union[str, Path, Dict[str, Any]]) -> Filter:
     command = config.get("command", [])
     method = config.get("method", "classify")
     timeout = config.get("timeout", 30.0)
+    get_logger().debug("filter_loaded", command=command, method=method, timeout=timeout)
     return JSONRPCFilter(command, method=method, timeout=timeout)
