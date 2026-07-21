@@ -43,9 +43,7 @@ Not Found:
   Codex        OpenAI Codex CLI            ~/.codex/sessions/
 ```
 
-That's the pedestrian use and that alone should be convincing.
-
-However, this is much more than that! Continue on!
+That alone should be convincing. But there's more.
 
 
 ## The Architecture
@@ -54,9 +52,9 @@ ctools is a substrate for moving memory between context windows. Cross-platform,
 
 Two stages: **extraction** and **filtering**.
 
-A **strategy** extracts concepts from a conversation. It defines what counts as a concept and how to find it - regex patterns, LLM extraction, whatever. Different strategies produce different ontologies from the same conversation because context is contestable.
+A **strategy** extracts concepts from a conversation. It defines what counts as a concept and how to find it: regex patterns, LLM extraction, whatever. Different strategies produce different ontologies from the same conversation, because context is contestable.
 
-A **filter** selects which extracted concepts reach a destination. It's a binary classifier - pass through or filter out. One concept list can fan out to many destinations, each with its own filter. A coding agent gets coding preferences, a security agent gets security constraints, a PM agent gets goals - all from the same source.
+A **filter** selects which extracted concepts reach a destination. It's a binary classifier: pass through or filter out. One concept list can fan out to many destinations, each with its own filter. A coding agent gets coding preferences, a security agent gets security constraints, a PM agent gets goals, all from the same source.
 
 ```mermaid
 graph LR
@@ -70,7 +68,7 @@ graph LR
     FC --> DEST_C["destination C"]
 ```
 
-Context windows are endpoints. opencode, Claude Code, Codex - they all speak different protocols but they all consume the same packets.
+Context windows are endpoints: opencode, Claude Code, Codex. They all speak different protocols, but they all consume the same packets.
 
 ```mermaid
 graph TB
@@ -167,7 +165,7 @@ Strategies define how conversations are parsed into packets. Ontology is contest
 }
 ```
 
-Filters select which packets move through the bus. Filters are JSON-RPC 2.0 subprocesses - you write a script, ctools calls it. See [filterlib](#filterlib).
+Filters select which packets move through the bus. You write a script, ctools calls it. See [filterlib](#filterlib).
 
 ### Strategies
 
@@ -251,7 +249,7 @@ See [filterlib](#filterlib) below.
 
 ### Observability
 
-Every tool supports `--verbose` / `-v` for structured logging via [structlog](https://github.com/hynek/structlog). Logs go to stderr as JSON lines — pipe to `jq` for debugging.
+Every tool supports `--verbose` / `-v` for structured logging via [structlog](https://github.com/hynek/structlog). Logs go to stderr as JSON lines, pipe to `jq` for debugging.
 
 ```sh
 cconnect -v @opencode/ses_abc @claude-code/ses_xyz
@@ -269,7 +267,7 @@ Verbose output shows every pipeline stage:
 {"event": "cycle_complete", "source": "@opencode/ses_abc", "destination": "@claude-code/ses_xyz", "injected": 8}
 ```
 
-Without `-v`, tools are quiet — only errors and final results print to the terminal. The `LOGLEVEL` env var overrides: `DEBUG`, `INFO`, `WARNING`, `ERROR`.
+Without `-v`, tools are quiet. Only errors and final results print to the terminal. The `LOGLEVEL` env var overrides: `DEBUG`, `INFO`, `WARNING`, `ERROR`.
 
 For filter debugging, filterlib logs every subprocess call and result:
 
@@ -306,7 +304,7 @@ For opencode, it reads actual input/output tokens from the database. For other a
 
 ### crm
 
-Remove concepts from sessions. Surgically removes concept-containing sections from agent sessions. Concept JSON files are NOT deleted - only the relevant sections from the context.
+Remove concepts from sessions. Surgically removes concept-containing sections from agent sessions. Concept JSON files are NOT deleted, only the relevant sections from the context.
 
 ```sh
 crm @opencode/ses_abc concept.json                    # remove concept from session
@@ -316,7 +314,7 @@ crm -s my-strategy.json @opencode/ses_abc concept.json  # use strategy for detec
 crm -i -v @opencode/ses_abc concept.json              # interactive + verbose
 ```
 
-Use case: You used `ccopy` to "pop" concepts out of a session. Now you want to scalpel remove them from the original context because they're throwing off the session. The concept JSON stays intact - you may want to execute it with a different strategy or on a different session.
+Use case: You used `ccopy` to "pop" concepts out of a session. Now you want to scalpel remove them from the original context because they're throwing off the session. The concept JSON stays intact, so you can run it with a different strategy or on a different session later.
 
 Algorithms:
 
@@ -375,7 +373,7 @@ f.filter("hello world")          # True
 f = load_filter("filter.json")
 ```
 
-The filter script can be anything that speaks JSON-RPC on stdio - a regex script, an LLM classifier, a network call, whatever. The subprocess is the abstraction.
+The filter script can be anything that speaks JSON-RPC on stdio: a regex script, an LLM classifier, a network call, whatever. The subprocess is the abstraction.
 
 ## Supported Endpoints
 
