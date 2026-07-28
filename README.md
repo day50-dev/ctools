@@ -106,8 +106,9 @@ You talk to LLMs all day. Over weeks, you build up a set of constraints, prefere
 Say you have been working with opencode for a month. You have refined your coding style through dozens of sessions. Now you start a new Claude Code project and you want those same preferences. You could copy them by hand. Or you could use ctools.
 
 ```sh
-ccopy @opencode/ses_abc123 concepts/
-ccopy concepts/ @claude-code/ses_xyz
+ccopy @opencode/ses_abc123                     # dump concepts to stdout (for testing)
+ccopy @opencode/ses_abc123 concepts/           # extract concepts to bus
+ccopy concepts/ @claude-code/ses_xyz           # inject into new session
 ```
 
 Or skip the bus entirely:
@@ -134,6 +135,7 @@ Your memory travels with you.
 Move packets between endpoints. The `@` prefix marks a session (endpoint). Plain paths are concept directories (the bus).
 
 ```sh
+ccopy @opencode/ses_abc                        # dump to stdout (JSON)
 ccopy @opencode/ses_abc concepts/              # extract packets to bus
 ccopy concepts/ @opencode/ses_abc               # inject packets from bus
 ccopy @opencode/ses_abc @claude-code/ses_xyz   # endpoint to endpoint
