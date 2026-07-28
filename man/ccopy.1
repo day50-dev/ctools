@@ -7,8 +7,8 @@ ccopy \- copy concepts between sessions and concept files
 .IR format ]
 .RB [ \-s
 .IR strategy ]
-.I sources
-.I destinations
+.I source
+.RI [ destination ]
 .SH DESCRIPTION
 .B ccopy
 (context copy) copies concepts between agent sessions and concept files.
@@ -68,6 +68,15 @@ JSON file to write extracted concepts to.
 Directory to write one concept file per concept.
 .RE
 .SH MODES
+.TP
+.B Dump to stdout
+Extract concepts from a session and print to stdout as JSON (no destination):
+.PP
+.RS
+.nf
+ccopy @opencode/ses_abc
+.fi
+.RE
 .TP
 .B Extract to directory
 Extract concepts from a session, one file per concept:
@@ -150,6 +159,22 @@ Concepts are JSON objects with these fields:
 The tool extracts concepts from messages matching the pattern:
 "Use the following <type>: <text>"
 .SH EXAMPLES
+Dump concepts to stdout (for testing/inspection):
+.PP
+.RS
+.nf
+$ ccopy @opencode/ses_abc123
+[
+  {
+    "type": "constraint",
+    "description": "Use C17 standard",
+    "short": "Use C17 standard for all code",
+    ...
+  }
+]
+.fi
+.RE
+.PP
 Extract concepts to a directory (one file per concept):
 .PP
 .RS

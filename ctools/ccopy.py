@@ -6,11 +6,12 @@ Concepts are constraints, goals, preferences, observations, and references
 that can be extracted from agent sessions and stored in JSON files.
 
 Usage:
-    ccopy @opencode/ses_abc concepts/              # extract to directory (one file per concept)
-    ccopy @opencode/ses_abc concepts.json           # extract to single file
-    ccopy concepts/ @opencode/ses_abc               # inject all concepts from directory
-    ccopy constraints.json @opencode/ses_abc        # inject from file
-    ccopy @opencode/ses_abc @claude/ses_xyz         # copy concepts between sessions
+    ccopy @opencode/ses_abc                          # dump concepts to stdout (for testing)
+    ccopy @opencode/ses_abc concepts/                # extract to directory (one file per concept)
+    ccopy @opencode/ses_abc concepts.json            # extract to single file
+    ccopy concepts/ @opencode/ses_abc                # inject all concepts from directory
+    ccopy constraints.json @opencode/ses_abc         # inject from file
+    ccopy @opencode/ses_abc @claude/ses_xyz          # copy concepts between sessions
     ccopy --strategy my-strategy.json @opencode/ses_abc concepts/  # use custom extraction strategy
 """
 
@@ -513,7 +514,10 @@ def main(
     @ prefix denotes a session (agent/session_id).
     Plain paths are concept directories. Each concept becomes its own file.
 
+    With no destination, concepts are dumped to stdout as JSON.
+
     Examples:
+        ccopy @opencode/ses_abc
         ccopy @opencode/ses_abc concepts/
         ccopy concepts/ @opencode/ses_abc
         ccopy @opencode/ses_abc @claude/ses_xyz
@@ -530,6 +534,50 @@ def main(
     # Determine operation mode
     has_concept_files = len(files) > 0
     has_sessions = len(sessions) > 0
+
+    # Stdout dump mode: single session, no destination
+    # ccopy @opencode/ses_abc        -> dump concepts to stdout as JSON
+    if has_sessions and not has_concept_files and len(sessions) == 1:
+        agent, sid = resolve_session(sessions[0])
+        messages = get_session_messages(agent, sid)
+        log.debug("messages_loaded", agent=agent, session=sid, count=len(messages))
+
+        if strategy:
+            strat = load_strategy(strategy)
+            concepts = strat.extract([{"role": m.role, "content": m.content} for m in messages])
+        else:
+            concepts = extract_concepts_from_messages(messages)
+
+        log.info("concepts_extracted", source=f"{agent}/{sid}", count=len(concepts))
+
+        if filter_config:
+            filter_path = Path(filter_config)
+            if filter_path.exists():
+                with open(filter_path, 'r') as f:
+                    filter_data = json.load(f)
+                before = len(concepts)
+                concepts = _filter_concepts(concepts, filter_data)
+                log.info("filter_applied", config=filter_config, input_count=before, output_count=len(concepts), dropped=before - len(concepts))
+
+        if not concepts:
+            console.print("[yellow]No concepts found in session[/yellow]")
+            return
+
+        if fmt == "json" or fmt == "default":
+            json.dump(concepts, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+        elif fmt == "md":
+            for c in concepts:
+                ctype = c.get("type", "")
+                desc = c.get("description", "")
+                text = c.get("short") or c.get("medium") or c.get("long") or ""
+                console.print(f"**{ctype}**: {desc}")
+                console.print(f"> {text}\n")
+        else:
+            console.print(f"[red]Unknown format: {fmt}[/red]")
+            raise typer.Exit(1)
+
+        return
 
     # Extract mode: session -> concept file
     if has_sessions and has_concept_files:

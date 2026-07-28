@@ -289,6 +289,130 @@ def test_write_concept_individual_creates_dir(tmp_path):
 
 # --- Strategy tests ---
 
+def test_cli_stdout_dump(tmp_path):
+    # Create a test opencode DB with concept messages
+    db_path = tmp_path / "opencode.db"
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE session (
+            id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, slug TEXT,
+            directory TEXT, title TEXT, version TEXT, share_url TEXT,
+            summary_additions INTEGER, summary_deletions INTEGER,
+            summary_files INTEGER, summary_diffs TEXT, revert TEXT,
+            permission TEXT, time_created INTEGER, time_updated INTEGER,
+            time_compacting INTEGER, time_archived INTEGER, workspace_id TEXT,
+            path TEXT, agent TEXT, model TEXT, cost REAL,
+            tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER,
+            tokens_cache_read INTEGER, tokens_cache_write INTEGER, metadata TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE message (
+            id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER,
+            time_updated INTEGER, data TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE part (
+            id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,
+            time_created INTEGER, time_updated INTEGER, data TEXT
+        )
+    """)
+
+    cursor.execute(
+        "INSERT INTO session (id, title, time_created, time_updated, tokens_input, tokens_output, directory) VALUES (?, 'Test', 1700000000000, 1700000060000, 100, 200, '/tmp')",
+        ("ses_test456",),
+    )
+
+    concept_content = "Use the following constraint: Use C17\nUse the following preference: prefer snake_case"
+    msg_data = json.dumps({"role": "system"})
+    cursor.execute(
+        "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+        ("msg_sys2", "ses_test456", 1700000000000, 1700000000000, msg_data),
+    )
+    part_data = json.dumps({"type": "text", "text": concept_content})
+    cursor.execute(
+        "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)",
+        ("part_sys2", "msg_sys2", "ses_test456", 1700000000000, 1700000000000, part_data),
+    )
+
+    conn.commit()
+    conn.close()
+
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    try:
+        # Run with no destination - should dump to stdout
+        result = runner.invoke(app, ["@opencode/ses_test456"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert len(data) == 2
+        assert data[0]["type"] == "constraint"
+        assert data[1]["type"] == "preference"
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
+def test_cli_stdout_dump_no_concepts(tmp_path):
+    db_path = tmp_path / "opencode.db"
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE session (
+            id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, slug TEXT,
+            directory TEXT, title TEXT, version TEXT, share_url TEXT,
+            summary_additions INTEGER, summary_deletions INTEGER,
+            summary_files INTEGER, summary_diffs TEXT, revert TEXT,
+            permission TEXT, time_created INTEGER, time_updated INTEGER,
+            time_compacting INTEGER, time_archived INTEGER, workspace_id TEXT,
+            path TEXT, agent TEXT, model TEXT, cost REAL,
+            tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER,
+            tokens_cache_read INTEGER, tokens_cache_write INTEGER, metadata TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE message (
+            id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER,
+            time_updated INTEGER, data TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE part (
+            id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,
+            time_created INTEGER, time_updated INTEGER, data TEXT
+        )
+    """)
+
+    cursor.execute(
+        "INSERT INTO session (id, title, time_created, time_updated, tokens_input, tokens_output, directory) VALUES (?, 'Test', 1700000000000, 1700000060000, 100, 200, '/tmp')",
+        ("ses_empty",),
+    )
+
+    msg_data = json.dumps({"role": "user"})
+    cursor.execute(
+        "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+        ("msg_user", "ses_empty", 1700000000000, 1700000000000, msg_data),
+    )
+    part_data = json.dumps({"type": "text", "text": "Hello, no concepts here"})
+    cursor.execute(
+        "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)",
+        ("part_user", "msg_user", "ses_empty", 1700000000000, 1700000000000, part_data),
+    )
+
+    conn.commit()
+    conn.close()
+
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    try:
+        result = runner.invoke(app, ["@opencode/ses_empty"])
+        assert result.exit_code == 0
+        assert "No concepts" in result.stdout
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
 def test_strategy_save_load(tmp_path):
     from ctools.strategy import Strategy
     
