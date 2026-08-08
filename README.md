@@ -39,8 +39,10 @@ $ cdir -l opencode/
   Source: /home/chris/.local/share/opencode/opencode.db
 
   ID                                NAME                          MODIFIED              SIZE    MSGS  PATH
-  ses_08b4ab356ffeQvmBXnu1oj4Gqe    Add -l option to cdir ...     2026-08-08 16:33   53.7 KB     23  /home/chris/.local/share/opencode/opencode.db
+  ses_08b4ab356ffeQvmBXnu1oj4Gqe    Add -l option to cdir ...     2026-08-08 16:33   53.7 KB     23  /home/chris/day50/ctools
 ```
+
+`PATH` is the session's working directory (where the conversation's code lives), not the storage file.
 
 `-o` selects which columns to print, ps-style. Pass `cdir -o help` for the full field reference:
 
@@ -61,7 +63,7 @@ Available fields for `-o`:
 | `size` | `SIZE` | Size: token count for opencode, bytes for file-based agents |
 | `msgs` | `MSGS` | Number of messages in the session |
 | `model` | `MODEL` | Model used for the session |
-| `path` | `PATH` | Source path where the session is stored |
+| `path` | `PATH` | Session working directory (where the conversation's code lives) |
 | `parent` | `PARENT` | Parent session ID (present on subagent sessions) |
 
 Default fields are `id,name`; `-l` expands to `id,name,mtime,size,msgs,path`. Only the last-modified date is shown — the creation date is suppressed.

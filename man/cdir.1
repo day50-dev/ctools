@@ -73,7 +73,7 @@ Number of messages in the session.
 Model used for the session.
 .TP
 .B path
-Source path where the session is stored.
+Session working directory (where the conversation's code lives).
 .TP
 .B parent
 Parent session ID (present on subagent sessions).
@@ -149,13 +149,14 @@ $ cdir -l opencode/
   Source: /home/user/.local/share/opencode/opencode.db
 
   ID            NAME          MODIFIED            SIZE    MSGS  PATH
-  ses_abc123    Python Help   2024-01-15 10:30   2.4 KB     12  /home/user/.local/share/opencode/opencode.db
-  ses_def456    Code Review   2024-01-16 09:00   1.2 KB      8  /home/user/.local/share/opencode/opencode.db
+  ses_abc123    Python Help   2024-01-15 10:30   2.4 KB     12  /home/user/src/project
+  ses_def456    Code Review   2024-01-16 09:00   1.2 KB      8  /home/user/src/project
 
   2 session(s)
 .fi
 .RE
 .PP
+The PATH column is the session's working directory, not the storage file.
 Select specific columns with
 .BR \-o :
 .PP
@@ -165,7 +166,7 @@ $ cdir -o id,model,path opencode/
   Source: /home/user/.local/share/opencode/opencode.db
 
   ID            MODEL        PATH
-  ses_abc123    big-pickle   /home/user/.local/share/opencode/opencode.db
+  ses_abc123    big-pickle   /home/user/src/project
 .fi
 .RE
 .PP
@@ -175,7 +176,7 @@ List all sessions across all agents:
 .nf
 $ cdir -R
   ID                      NAME          MODIFIED            SIZE    MSGS  PATH
-  opencode/ses_abc123     Python Help   2024-01-15 10:30   2.4 KB     12  /home/user/.local/share/opencode/opencode.db
+  opencode/ses_abc123     Python Help   2024-01-15 10:30   2.4 KB     12  /home/user/src/project
   claude-code/ses_xyz     Bug Fix       2024-01-15 11:00   3.1 KB     20  /home/user/.claude/projects/my-project/ses_xyz.jsonl
 
   2 session(s)

@@ -128,8 +128,9 @@ def _resolve_fields(output: Optional[str]) -> Optional[List[str]]:
 def _render_table(body_rows: list, fields: List[str]) -> None:
     """Render an aligned table with a header row.
 
-    body_rows is a list of (prefix, is_parent, values) tuples where
-    values is a {field: display_value} dict.
+    body_rows is a list of (is_parent, values) tuples where values is a
+    {field: display_value} dict. Tree connectors are embedded in the
+    anchor field's value so later columns stay aligned.
     """
     BOLD = "\033[1m"
     RESET = "\033[0m"
@@ -137,7 +138,7 @@ def _render_table(body_rows: list, fields: List[str]) -> None:
         return
 
     widths = {f: len(FIELD_LABELS[f]) for f in fields}
-    for _, _, values in body_rows:
+    for _, values in body_rows:
         for f in fields:
             widths[f] = max(widths[f], len(values[f]))
 
@@ -147,14 +148,14 @@ def _render_table(body_rows: list, fields: List[str]) -> None:
         return f"{v:<{widths[f]}}"
 
     print("  " + "  ".join(fmt(f, FIELD_LABELS[f]) for f in fields))
-    for prefix, is_parent, values in body_rows:
+    for is_parent, values in body_rows:
         cells = []
         for f in fields:
             cell = fmt(f, values[f])
             if is_parent and f in ('id', 'name'):
                 cell = f"{BOLD}{cell}{RESET}"
             cells.append(cell)
-        print("  " + prefix + "  ".join(cells))
+        print("  " + "  ".join(cells))
 
 
 def get_file_metadata(path: Path) -> tuple:
@@ -294,7 +295,7 @@ def get_opencode_sessions(agent: Agent) -> List[Session]:
                 ctime=ctime,
                 mtime=mtime,
                 size=size,
-                path=str(db_path),
+                path=directory or str(db_path),
                 model=model,
                 message_count=msg_count,
                 parent_id=parent_id
@@ -349,7 +350,7 @@ def get_codex_sessions(agent: Agent) -> List[Session]:
                     ctime=ctime,
                     mtime=mtime,
                     size=0,  # Will be updated from rollout files
-                    path=str(sqlite_path),
+                    path=cwd or str(sqlite_path),
                     model=model
                 ))
             
@@ -529,14 +530,17 @@ def _print_sessions(sessions, agent_name, by_time, by_size, reverse, formatter=N
     # Build rows with nesting info and tree prefix
     body_rows = []
     for s in top_level:
-        body_rows.append(("", True, _session_values(s, fields)))
+        body_rows.append((True, _session_values(s, fields)))
 
-        # Add children with tree prefix
+        # Add children with tree prefix folded into the anchor field
         children = children_map.get(s.id, [])
         for i, child in enumerate(children):
             is_last = (i == len(children) - 1)
             prefix = "┗━ " if is_last else "┣━ "
-            body_rows.append((prefix, False, _session_values(child, fields)))
+            values = _session_values(child, fields)
+            anchor = 'id' if 'id' in fields else fields[0]
+            values[anchor] = prefix + values[anchor]
+            body_rows.append((False, values))
 
     _render_table(body_rows, fields)
     print(f"\n  {len(top_level)} session(s), {len(sessions) - len(top_level)} subagent(s)")
@@ -669,8 +673,9 @@ def main(
                 console.print(f"[yellow]No sessions found for {agent_name}[/yellow]")
                 return
             
-            if sessions and sessions[0].path and not formatter:
-                print(f"  Source: {sessions[0].path}")
+            if sessions and not formatter:
+                source = agent_info.base_path / agent_info.files_read if agent_info.files_read else agent_info.base_path
+                print(f"  Source: {source}")
                 print()
             
             _print_sessions(sessions, agent_name if recursive else None, by_time, by_size, reverse, formatter, long_format, fields)
@@ -703,7 +708,7 @@ def main(
                 for agent_name, s in all_sessions:
                     values = _session_values(s, rfields)
                     values['id'] = f"{agent_name}/{s.id}"
-                    body_rows.append(("", True, values))
+                    body_rows.append((True, values))
                 _render_table(body_rows, rfields)
                 print(f"\n  {len(body_rows)} session(s)")
         else:

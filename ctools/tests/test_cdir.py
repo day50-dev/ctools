@@ -203,6 +203,7 @@ def test_get_opencode_sessions_with_data(tmp_path):
     assert sessions[0].name == 'Code Review'
     assert sessions[0].message_count == 1
     assert sessions[0].size == 2000  # 800 + 1200 tokens
+    assert sessions[0].path == '/home/user/project'  # session working directory
     
     # Check second session
     assert sessions[1].id == 'ses_abc123'
@@ -571,10 +572,10 @@ def test_cli_long_format_header_and_path(tmp_path):
     assert "MSGS" in result.stdout
     assert "PATH" in result.stdout
     assert "CREATED" not in result.stdout
-    # Path at the very end of each data row
+    # Path (working directory) at the very end of each data row
     for line in result.stdout.splitlines():
         if 'ses_test123' in line:
-            assert line.rstrip().endswith('opencode.db')
+            assert line.rstrip().endswith('/tmp')
 
 
 def test_cli_output_field_selection(tmp_path):
@@ -587,7 +588,7 @@ def test_cli_output_field_selection(tmp_path):
     assert "SIZE" not in result.stdout
     for line in result.stdout.splitlines():
         if 'ses_test123' in line:
-            assert 'opencode.db' in line
+            assert '/tmp' in line
 
 
 def test_cli_output_field_suppresses_created(tmp_path):
