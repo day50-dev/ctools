@@ -487,3 +487,122 @@ def test_cli_format_invalid():
     result = runner.invoke(app, ["--format", "csv", "opencode/"])
     assert result.exit_code == 1
     assert "Unknown format" in result.stdout
+
+
+# --- -o field selection tests ---
+
+def _make_opencode_db(tmp_path, session_id='ses_test123', title='Test Session'):
+    """Create an opencode.db with one session and return the session path."""
+    db_path = tmp_path / 'opencode.db'
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE session (
+            id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, slug TEXT,
+            directory TEXT, title TEXT, version TEXT, share_url TEXT,
+            summary_additions INTEGER, summary_deletions INTEGER,
+            summary_files INTEGER, summary_diffs TEXT, revert TEXT,
+            permission TEXT, time_created INTEGER, time_updated INTEGER,
+            time_compacting INTEGER, time_archived INTEGER, workspace_id TEXT,
+            path TEXT, agent TEXT, model TEXT, cost REAL,
+            tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER,
+            tokens_cache_read INTEGER, tokens_cache_write INTEGER, metadata TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE message (
+            id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER,
+            time_updated INTEGER, data TEXT
+        )
+    ''')
+    cursor.execute('''
+        INSERT INTO session (id, title, time_created, time_updated, tokens_input, tokens_output, directory)
+        VALUES (?, ?, 1700000000000, 1700000060000, 100, 200, '/tmp')
+    ''', (session_id, title))
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def _run_opencode_cli(tmp_path, args):
+    """Run cdir CLI with opencode.base_path pointed at tmp_path."""
+    from ctools.cdir import AGENTS
+    original = AGENTS['opencode'].base_path
+    AGENTS['opencode'].base_path = tmp_path
+    try:
+        return runner.invoke(app, args)
+    finally:
+        AGENTS['opencode'].base_path = original
+
+
+def test_cli_output_help():
+    """Test -o help documents all available fields."""
+    result = runner.invoke(app, ["-o", "help"])
+    assert result.exit_code == 0
+    for field in ('id', 'name', 'ctime', 'mtime', 'size', 'msgs', 'model', 'path', 'parent'):
+        assert field in result.stdout
+
+
+def test_cli_output_invalid_field():
+    """Test -o with an unknown field fails."""
+    result = runner.invoke(app, ["-o", "bogus", "opencode/"])
+    assert result.exit_code == 1
+    assert "Unknown field: bogus" in result.stdout
+
+
+def test_cli_default_has_header(tmp_path):
+    """Test default output has a header row."""
+    _make_opencode_db(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["opencode/"])
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    header = [l for l in lines if 'ID' in l and 'NAME' in l]
+    assert header, f"no header row in output:\n{result.stdout}"
+    assert 'ses_test123' in result.stdout
+
+
+def test_cli_long_format_header_and_path(tmp_path):
+    """Test -l shows header, only modified date, and path at end."""
+    _make_opencode_db(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["-l", "opencode/"])
+    assert result.exit_code == 0
+    assert "MODIFIED" in result.stdout
+    assert "SIZE" in result.stdout
+    assert "MSGS" in result.stdout
+    assert "PATH" in result.stdout
+    assert "CREATED" not in result.stdout
+    # Path at the very end of each data row
+    for line in result.stdout.splitlines():
+        if 'ses_test123' in line:
+            assert line.rstrip().endswith('opencode.db')
+
+
+def test_cli_output_field_selection(tmp_path):
+    """Test -o selects and orders specific columns."""
+    _make_opencode_db(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["-o", "id,name,path", "opencode/"])
+    assert result.exit_code == 0
+    assert "PATH" in result.stdout
+    assert "MODIFIED" not in result.stdout
+    assert "SIZE" not in result.stdout
+    for line in result.stdout.splitlines():
+        if 'ses_test123' in line:
+            assert 'opencode.db' in line
+
+
+def test_cli_output_field_suppresses_created(tmp_path):
+    """Test -o with explicit fields never shows the created date."""
+    _make_opencode_db(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["-o", "id,name,mtime", "opencode/"])
+    assert result.exit_code == 0
+    assert "MODIFIED" in result.stdout
+    assert "CREATED" not in result.stdout
+
+
+def test_cli_recursive_has_header(tmp_path):
+    """Test -R output has a header row."""
+    _make_opencode_db(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["-R"])
+    assert result.exit_code == 0
+    assert "MODIFIED" in result.stdout
+    assert "opencode/ses_test123" in result.stdout

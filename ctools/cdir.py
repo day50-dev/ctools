@@ -34,6 +34,128 @@ __all__ = ['Session', 'Agent', 'AGENTS', 'app']
 app = typer.Typer()
 console = Console()
 
+# --- Output field registry (ps-style -o selection) ---
+
+FIELDS = {
+    'id': 'Session identifier',
+    'name': 'Session title (or ID prefix when no title is set)',
+    'ctime': 'Creation / start time',
+    'mtime': 'Last modification time',
+    'size': 'Size: token count for opencode, bytes for file-based agents',
+    'msgs': 'Number of messages in the session',
+    'model': 'Model used for the session',
+    'path': 'Source path where the session is stored',
+    'parent': 'Parent session ID (present on subagent sessions)',
+}
+
+FIELD_LABELS = {
+    'id': 'ID', 'name': 'NAME', 'ctime': 'CREATED', 'mtime': 'MODIFIED',
+    'size': 'SIZE', 'msgs': 'MSGS', 'model': 'MODEL', 'path': 'PATH',
+    'parent': 'PARENT',
+}
+
+RIGHT_ALIGNED = {'size', 'msgs'}
+DEFAULT_FIELDS = ['id', 'name']
+LONG_FIELDS = ['id', 'name', 'mtime', 'size', 'msgs', 'path']
+
+
+def _field_value(session: Session, field: str) -> str:
+    """Return the display value for a session field."""
+    if field == 'id':
+        return session.id
+    if field == 'name':
+        return session.name
+    if field == 'ctime':
+        return format_datetime(session.ctime)
+    if field == 'mtime':
+        return format_datetime(session.mtime)
+    if field == 'size':
+        return format_size(session.size)
+    if field == 'msgs':
+        return str(session.message_count) if session.message_count else "-"
+    if field == 'model':
+        if not session.model:
+            return "-"
+        try:
+            parsed = json.loads(session.model)
+            if isinstance(parsed, dict) and parsed.get('id'):
+                return parsed['id']
+        except (ValueError, TypeError):
+            pass
+        return session.model
+    if field == 'path':
+        return session.path or "-"
+    if field == 'parent':
+        return session.parent_id or "-"
+    raise ValueError(f"Unknown field: {field}")
+
+
+def _session_values(session: Session, fields: List[str]) -> dict:
+    """Build a {field: display_value} dict for a session."""
+    return {f: _field_value(session, f) for f in fields}
+
+
+def _print_field_help() -> None:
+    """Print documentation for all -o output fields."""
+    print("Output fields for -o/--output (comma-separated):")
+    print()
+    for name, desc in FIELDS.items():
+        print(f"  {name:<10} {desc}")
+    print()
+    print(f"Default fields: {', '.join(DEFAULT_FIELDS)}")
+    print(f"Long format (-l) fields: {', '.join(LONG_FIELDS)}")
+    print()
+    print("Example: cdir -o id,name,mtime,path opencode/")
+
+
+def _resolve_fields(output: Optional[str]) -> Optional[List[str]]:
+    """Resolve a -o value into a field list, handling 'help' and errors."""
+    if not output:
+        return None
+    if output.lower() == 'help':
+        _print_field_help()
+        raise typer.Exit(0)
+    fields = [f.strip() for f in output.split(',') if f.strip()]
+    for f in fields:
+        if f not in FIELDS:
+            console.print(f"[red]Unknown field: {f}[/red]")
+            console.print(f"[dim]Available fields: {', '.join(FIELDS.keys())}[/dim]")
+            console.print("[dim]Use 'cdir -o help' for field descriptions.[/dim]")
+            raise typer.Exit(1)
+    return fields
+
+
+def _render_table(body_rows: list, fields: List[str]) -> None:
+    """Render an aligned table with a header row.
+
+    body_rows is a list of (prefix, is_parent, values) tuples where
+    values is a {field: display_value} dict.
+    """
+    BOLD = "\033[1m"
+    RESET = "\033[0m"
+    if not body_rows:
+        return
+
+    widths = {f: len(FIELD_LABELS[f]) for f in fields}
+    for _, _, values in body_rows:
+        for f in fields:
+            widths[f] = max(widths[f], len(values[f]))
+
+    def fmt(f: str, v: str) -> str:
+        if f in RIGHT_ALIGNED:
+            return f"{v:>{widths[f]}}"
+        return f"{v:<{widths[f]}}"
+
+    print("  " + "  ".join(fmt(f, FIELD_LABELS[f]) for f in fields))
+    for prefix, is_parent, values in body_rows:
+        cells = []
+        for f in fields:
+            cell = fmt(f, values[f])
+            if is_parent and f in ('id', 'name'):
+                cell = f"{BOLD}{cell}{RESET}"
+            cells.append(cell)
+        print("  " + prefix + "  ".join(cells))
+
 
 def get_file_metadata(path: Path) -> tuple:
     """Get creation time, modification time, and size of a file."""
@@ -372,12 +494,19 @@ EXPORTERS = {
 }
 
 
-def _print_sessions(sessions, agent_name, by_time, by_size, reverse, formatter=None, long_format=False):
-    """Print sessions in aligned columns. agent_name shown if provided."""
+def _print_sessions(sessions, agent_name, by_time, by_size, reverse, formatter=None, long_format=False, fields=None):
+    """Print sessions in aligned columns with a header row. agent_name shown if provided."""
     if not sessions:
         console.print(f"[yellow]No sessions found[/yellow]")
         return
-    
+
+    if fields is None:
+        fields = LONG_FIELDS if long_format else DEFAULT_FIELDS
+
+    if formatter:
+        print(formatter.format_sessions(sessions, agent_name))
+        return
+
     # Build parent-child mapping
     children_map = {}
     top_level = []
@@ -386,75 +515,30 @@ def _print_sessions(sessions, agent_name, by_time, by_size, reverse, formatter=N
             children_map.setdefault(s.parent_id, []).append(s)
         else:
             top_level.append(s)
-    
+
     # Sort function
     def sort_key(s):
-        if by_time:
-            return s.mtime or s.ctime or datetime.min
-        elif by_size:
+        if by_size:
             return s.size
-        else:
-            return s.mtime or s.ctime or datetime.min
-    
+        return s.mtime or s.ctime or datetime.min
+
     top_level.sort(key=sort_key, reverse=not reverse)
     for parent_id in children_map:
         children_map[parent_id].sort(key=sort_key, reverse=not reverse)
-    
-    if formatter:
-        print(formatter.format_sessions(sessions, agent_name))
-        return
-    
-    # ANSI bold codes
-    BOLD = "\033[1m"
-    RESET = "\033[0m"
-    
+
     # Build rows with nesting info and tree prefix
-    rows = []
+    body_rows = []
     for s in top_level:
-        if long_format:
-            ctime = format_datetime(s.ctime)
-            mtime = format_datetime(s.mtime)
-            size = format_size(s.size)
-            msgs = str(s.message_count) if s.message_count else "-"
-            rows.append((s.id, s.name, ctime, mtime, size, msgs, "", True))
-        else:
-            rows.append((s.id, s.name, "", "", "", "", "", True))
-        
+        body_rows.append(("", True, _session_values(s, fields)))
+
         # Add children with tree prefix
         children = children_map.get(s.id, [])
         for i, child in enumerate(children):
             is_last = (i == len(children) - 1)
             prefix = "┗━ " if is_last else "┣━ "
-            if long_format:
-                ctime = format_datetime(child.ctime)
-                mtime = format_datetime(child.mtime)
-                size = format_size(child.size)
-                msgs = str(child.message_count) if child.message_count else "-"
-                rows.append((child.id, child.name, ctime, mtime, size, msgs, prefix, False))
-            else:
-                rows.append((child.id, child.name, "", "", "", "", prefix, False))
-    
-    w_id = max(len(r[0]) for r in rows)
-    w_name = max(len(r[1]) for r in rows)
-    
-    if long_format:
-        w_ctime = max(len(r[2]) for r in rows)
-        w_mtime = max(len(r[3]) for r in rows)
-        w_size = max(len(r[4]) for r in rows)
-        w_msgs = max(len(r[5]) for r in rows)
-        
-        for id, name, ctime, mtime, size, msgs, prefix, is_parent in rows:
-            if is_parent:
-                print(f"  {prefix}{BOLD}{id:<{w_id}}  {name:<{w_name}}{RESET}  {ctime:<{w_ctime}}  {mtime:<{w_mtime}}  {size:>{w_size}}  {msgs:>{w_msgs}}")
-            else:
-                print(f"  {prefix}{id:<{w_id}}  {name:<{w_name}}  {ctime:<{w_ctime}}  {mtime:<{w_mtime}}  {size:>{w_size}}  {msgs:>{w_msgs}}")
-    else:
-        for id, name, _, _, _, _, prefix, is_parent in rows:
-            if is_parent:
-                print(f"  {prefix}{BOLD}{id:<{w_id}}  {name}{RESET}")
-            else:
-                print(f"  {prefix}{id:<{w_id}}  {name}")
-    
+            body_rows.append((prefix, False, _session_values(child, fields)))
+
+    _render_table(body_rows, fields)
     print(f"\n  {len(top_level)} session(s), {len(sessions) - len(top_level)} subagent(s)")
 
 
@@ -465,8 +549,9 @@ def main(
     by_size: bool = typer.Option(False, "--size", "-s", help="Sort by size"),
     reverse: bool = typer.Option(False, "--reverse", "-r", help="Reverse sort order"),
     recursive: bool = typer.Option(False, "--recursive", "-R", help="Show agent name, recurse all agents if no path given"),
-    long_format: bool = typer.Option(False, "--long", "-l", help="Show details: dates, size, message count"),
-    fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md, or default")
+    long_format: bool = typer.Option(False, "--long", "-l", help="Show details: modified, size, messages, path"),
+    fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md, or default"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Select output fields (comma-separated). Use 'help' to list available fields."),
 ):
     """
     List agents and their conversation sessions.
@@ -475,8 +560,12 @@ def main(
     With an agent name, lists sessions for that agent.
     With agent/session_id, exports that session.
     With -R, shows agent name and recurse all agents if no path given.
-    With -l, shows full details (dates, size, message count).
+    With -l, shows full details (modified, size, message count, path).
+    With -o, selects the output fields shown (see 'cdir -o help').
     """
+    # Resolve -o field selection (handles 'help' and validation)
+    fields = _resolve_fields(output)
+
     # Get formatter if specified
     formatter = None
     if fmt != "default":
@@ -523,11 +612,13 @@ def main(
 
             if found:
                 print("Found:")
+                print(f"  {'AGENT':<{w_name}}  {'DESCRIPTION':<{w_desc}}  {'PATH':<{w_path}}")
                 for name, desc, path, files_read, exists in found:
                     print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path}/{files_read}")
 
             if missing:
                 print("Not Found:")
+                print(f"  {'AGENT':<{w_name}}  {'DESCRIPTION':<{w_desc}}  {'PATH':<{w_path}}")
                 for name, desc, path, files_read, exists in missing:
                     print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path}/{files_read}")
     elif path is not None:
@@ -582,7 +673,7 @@ def main(
                 print(f"  Source: {sessions[0].path}")
                 print()
             
-            _print_sessions(sessions, agent_name if recursive else None, by_time, by_size, reverse, formatter, long_format)
+            _print_sessions(sessions, agent_name if recursive else None, by_time, by_size, reverse, formatter, long_format, fields)
     else:
         if recursive:
             # List all agents' sessions with agent name prefix
@@ -607,25 +698,14 @@ def main(
                 sessions = [s for _, s in all_sessions]
                 print(formatter.format_sessions(sessions))
             else:
-                rows = []
+                rfields = fields if fields is not None else LONG_FIELDS
+                body_rows = []
                 for agent_name, s in all_sessions:
-                    ctime = format_datetime(s.ctime)
-                    mtime = format_datetime(s.mtime)
-                    size = format_size(s.size)
-                    msgs = str(s.message_count) if s.message_count else "-"
-                    rows.append((f"{agent_name}/{s.id}", s.name, ctime, mtime, size, msgs))
-                
-                w_id = max(len(r[0]) for r in rows)
-                w_name = max(len(r[1]) for r in rows)
-                w_ctime = max(len(r[2]) for r in rows)
-                w_mtime = max(len(r[3]) for r in rows)
-                w_size = max(len(r[4]) for r in rows)
-                w_msgs = max(len(r[5]) for r in rows)
-                
-                for id, name, ctime, mtime, size, msgs in rows:
-                    print(f"  {id:<{w_id}}  {name:<{w_name}}  {ctime:<{w_ctime}}  {mtime:<{w_mtime}}  {size:>{w_size}}  {msgs:>{w_msgs}}")
-                
-                print(f"\n  {len(rows)} session(s)")
+                    values = _session_values(s, rfields)
+                    values['id'] = f"{agent_name}/{s.id}"
+                    body_rows.append(("", True, values))
+                _render_table(body_rows, rfields)
+                print(f"\n  {len(body_rows)} session(s)")
         else:
             pass  # handled above
 

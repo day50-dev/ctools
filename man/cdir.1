@@ -7,6 +7,9 @@ cdir \- list agents and sessions from LLM context windows
 .RB [ \-s ]
 .RB [ \-r ]
 .RB [ \-R ]
+.RB [ \-l ]
+.RB [ \-o
+.IR fields ]
 .RB [ \-f
 .IR format ]
 .RI [ path ]
@@ -34,6 +37,51 @@ Reverse the sort order.
 .BR \-R ", " \-\-recursive
 Show agent name in session list. When used without a path,
 recurse all agents and show all sessions with agent prefix.
+.TP
+.BR \-l ", " \-\-long
+Show full details: last-modified date, size, message count, and
+source path. The creation date is suppressed. Equivalent to
+.BR "\-o id,name,mtime,size,msgs,path" .
+.TP
+.BR \-o ", " \-\-output
+.I fields
+Select output fields, ps-style. \fIfields\fP is a comma-separated
+list of field names. Pass
+.B help
+to list all fields with descriptions. Available fields:
+.RS
+.TP
+.B id
+Session identifier.
+.TP
+.B name
+Session title (or ID prefix when no title is set).
+.TP
+.B ctime
+Creation / start time.
+.TP
+.B mtime
+Last modification time.
+.TP
+.B size
+Size: token count for opencode, bytes for file-based agents.
+.TP
+.B msgs
+Number of messages in the session.
+.TP
+.B model
+Model used for the session.
+.TP
+.B path
+Source path where the session is stored.
+.TP
+.B parent
+Parent session ID (present on subagent sessions).
+.RE
+.PP
+Default fields are
+.BR id,name .
+The path, when selected, is placed at the end of each row.
 .TP
 .BR \-f ", " \-\-format
 .I format
@@ -66,12 +114,13 @@ List all known agents:
 .nf
 $ cdir
 Found:
-  Claude Code  Claude Code CLI             ~/.claude                [jsonl]
-  Opencode     Opencode CLI                ~/.local/share/opencode  account.json, auth.json, opencode.db
+  AGENT         DESCRIPTION                 PATH
+  Claude Code   Claude Code CLI             ~/.claude/projects/
+  Opencode      Opencode CLI                ~/.local/share/opencode/opencode.db
 
 Not Found:
-  Claude       Claude Desktop (Anthropic)  ~/.config/Claude         [json]
-  Codex        OpenAI Codex CLI            ~/.codex                 [jsonl]
+  Claude        Claude Desktop (Anthropic)  ~/.config/Claude/conversations/
+  Codex         OpenAI Codex CLI            ~/.codex/sessions/
 .fi
 .RE
 .PP
@@ -82,10 +131,41 @@ List sessions for opencode:
 .RS
 .nf
 $ cdir opencode/
-  ses_abc123  Python Help     2024-01-15 10:30  2.4 KB   12
-  ses_def456  Code Review     2024-01-16 09:00  1.2 KB    8
+  Source: /home/user/.local/share/opencode/opencode.db
+
+  ID            NAME
+  ses_abc123    Python Help
+  ses_def456    Code Review
 
   2 session(s)
+.fi
+.RE
+.PP
+List sessions with full details:
+.PP
+.RS
+.nf
+$ cdir -l opencode/
+  Source: /home/user/.local/share/opencode/opencode.db
+
+  ID            NAME          MODIFIED            SIZE    MSGS  PATH
+  ses_abc123    Python Help   2024-01-15 10:30   2.4 KB     12  /home/user/.local/share/opencode/opencode.db
+  ses_def456    Code Review   2024-01-16 09:00   1.2 KB      8  /home/user/.local/share/opencode/opencode.db
+
+  2 session(s)
+.fi
+.RE
+.PP
+Select specific columns with
+.BR \-o :
+.PP
+.RS
+.nf
+$ cdir -o id,model,path opencode/
+  Source: /home/user/.local/share/opencode/opencode.db
+
+  ID            MODEL        PATH
+  ses_abc123    big-pickle   /home/user/.local/share/opencode/opencode.db
 .fi
 .RE
 .PP
@@ -94,8 +174,9 @@ List all sessions across all agents:
 .RS
 .nf
 $ cdir -R
-  opencode/ses_abc123   Python Help   2024-01-15 10:30   2.4 KB   12
-  claude-code/ses_xyz   Bug Fix       2024-01-15 11:00   3.1 KB   20
+  ID                      NAME          MODIFIED            SIZE    MSGS  PATH
+  opencode/ses_abc123     Python Help   2024-01-15 10:30   2.4 KB     12  /home/user/.local/share/opencode/opencode.db
+  claude-code/ses_xyz     Bug Fix       2024-01-15 11:00   3.1 KB     20  /home/user/.claude/projects/my-project/ses_xyz.jsonl
 
   2 session(s)
 .fi
