@@ -110,6 +110,15 @@ AGENTS: Dict[str, Agent] = {
         session_pattern='sessions/**/*.jsonl',
         files_read='sessions/',
     ),
+    'pi': Agent(
+        name='pi',
+        description='Pi Coding Agent',
+        base_path=Path.home() / '.pi' / 'agent',
+        storage_format='jsonl',
+        display_name='Pi',
+        session_pattern='sessions/**/*.jsonl',
+        files_read='sessions/',
+    ),
 }
 
 

@@ -344,6 +344,10 @@ def main(
         console.print(f"[red]Agent {agent_name} not found[/red]")
         raise typer.Exit(1)
 
+    if agent_name == 'pi':
+        console.print("[yellow]Pi session message removal is not supported yet[/yellow]")
+        raise typer.Exit(1)
+
     if agent_info.storage_format == "sqlite":
         _remove_messages_sqlite(agent_info, session_id, sorted(all_indices_to_remove),
                                messages, verbose)

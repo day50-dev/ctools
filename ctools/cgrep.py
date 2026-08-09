@@ -132,10 +132,44 @@ def get_claude_session_content(agent_path: Path, session_id: str) -> List[Tuple[
     return []
 
 
+def get_pi_session_content(agent_path: Path, session_id: str) -> List[Tuple[int, str]]:
+    """Extract user/assistant message content from a pi session file."""
+    from ctools.cdir import _find_pi_session_file, _pi_message_text
+
+    session_file = _find_pi_session_file(agent_path, session_id)
+    if not session_file:
+        return []
+
+    lines = []
+    line_num = 1
+    try:
+        with open(session_file, 'r') as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get('type') != 'message':
+                    continue
+                msg = entry.get('message') or {}
+                role = msg.get('role')
+                if role not in ('user', 'assistant'):
+                    continue
+                content = _pi_message_text(msg)
+                for text_line in content.split('\n'):
+                    if text_line.strip():
+                        lines.append((line_num, f"{role}: {text_line}"))
+                        line_num += 1
+    except OSError:
+        return []
+    return lines
+
+
 CONTENT_EXTRACTORS = {
     'opencode': get_opencode_session_content,
     'claude-code': get_claude_code_session_content,
     'claude': get_claude_session_content,
+    'pi': get_pi_session_content,
 }
 
 

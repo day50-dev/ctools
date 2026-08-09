@@ -3,7 +3,9 @@ import sqlite3
 import pytest
 from pathlib import Path
 from typer.testing import CliRunner
-from ctools.cgrep import app, parse_path_pattern, get_sessions_for_pattern, grep_session, get_opencode_session_content
+from ctools.cgrep import (app, parse_path_pattern, get_sessions_for_pattern,
+                          grep_session, get_opencode_session_content,
+                          get_pi_session_content)
 from ctools.cdir import AGENTS
 
 runner = CliRunner()
@@ -394,3 +396,70 @@ def test_cli_format_invalid():
     result = runner.invoke(app, ["--format", "csv", "python", "opencode/*"])
     assert result.exit_code == 1
     assert "Unknown format" in result.stdout
+
+
+# --- Pi session tests ---
+
+def _make_pi_session(tmp_path, session_id='019fe37e-d6a2-7344-8a05-5b04d8d40161'):
+    """Create a pi session JSONL file with user/assistant messages."""
+    dir_path = tmp_path / 'sessions' / '--home-user-project--'
+    dir_path.mkdir(parents=True, exist_ok=True)
+    session_file = dir_path / f'2026-08-08T22-29-28-354Z_{session_id}.jsonl'
+    lines = [
+        {"type": "session", "version": 3, "id": session_id,
+         "timestamp": "2026-08-08T22:29:28.354Z", "cwd": "/home/user/project"},
+        {"type": "model_change", "provider": "openrouter",
+         "modelId": "moonshotai/kimi-k2.6", "timestamp": "2026-08-08T22:29:28.500Z"},
+        {"type": "message", "id": "m1", "parentId": None,
+         "timestamp": "2026-08-08T22:29:29Z",
+         "message": {"role": "user", "content": "what is this thing"}},
+        {"type": "message", "id": "m2", "parentId": "m1",
+         "timestamp": "2026-08-08T22:29:50Z",
+         "message": {"role": "assistant", "content": "Let me check the current directory."}},
+    ]
+    session_file.write_text('\n'.join(json.dumps(l) for l in lines) + '\n')
+    return session_file
+
+
+def test_get_pi_session_content(tmp_path):
+    _make_pi_session(tmp_path)
+    original = AGENTS['pi'].base_path
+    AGENTS['pi'].base_path = tmp_path
+    try:
+        lines = get_pi_session_content(tmp_path, '019fe37e-d6a2-7344-8a05-5b04d8d40161')
+        assert lines == [
+            (1, 'user: what is this thing'),
+            (2, 'assistant: Let me check the current directory.'),
+        ]
+    finally:
+        AGENTS['pi'].base_path = original
+
+
+def test_get_pi_session_content_not_found(tmp_path):
+    lines = get_pi_session_content(tmp_path, 'nope')
+    assert lines == []
+
+
+def test_grep_session_pi(tmp_path):
+    _make_pi_session(tmp_path)
+    original = AGENTS['pi'].base_path
+    AGENTS['pi'].base_path = tmp_path
+    try:
+        import re
+        matches = grep_session('pi', '019fe37e-d6a2-7344-8a05-5b04d8d40161', re.compile('directory'))
+        assert len(matches) == 1
+        assert 'directory' in matches[0].line
+    finally:
+        AGENTS['pi'].base_path = original
+
+
+def test_cli_search_pi(tmp_path):
+    _make_pi_session(tmp_path)
+    original = AGENTS['pi'].base_path
+    AGENTS['pi'].base_path = tmp_path
+    try:
+        result = runner.invoke(app, ["thing", "pi/*"])
+        assert result.exit_code == 0
+        assert 'user: what is this thing' in result.stdout
+    finally:
+        AGENTS['pi'].base_path = original

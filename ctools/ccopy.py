@@ -234,6 +234,9 @@ def get_session_messages(agent: str, session_id: str) -> List[Message]:
         console.print(f"[yellow]Agent {agent} not found at {agent_info.base_path}[/yellow]")
         raise typer.Exit(1)
 
+    if agent == 'pi':
+        return _read_pi_messages(agent_info, session_id)
+
     if agent_info.storage_format == "sqlite":
         return _read_sqlite_messages(agent_info, session_id)
     elif agent_info.storage_format == "jsonl":
@@ -242,6 +245,18 @@ def get_session_messages(agent: str, session_id: str) -> List[Message]:
         return _read_json_messages(agent_info, session_id)
 
     console.print(f"[red]Unsupported format: {agent_info.storage_format}[/red]")
+    raise typer.Exit(1)
+
+
+def _read_pi_messages(agent_info, session_id: str) -> List[Message]:
+    """Read messages from a pi JSONL session (active branch)."""
+    from ctools.cdir import export_pi_session
+
+    messages = export_pi_session(agent_info, session_id)
+    if messages:
+        return messages
+
+    console.print(f"[yellow]Session not found: {session_id}[/yellow]")
     raise typer.Exit(1)
 
 
@@ -341,6 +356,10 @@ def inject_concepts_to_session(agent: str, session_id: str, concepts: list):
     agent_info = AGENTS.get(agent)
     if not agent_info or not agent_info.base_path.exists():
         console.print(f"[yellow]Agent {agent} not found[/yellow]")
+        raise typer.Exit(1)
+
+    if agent == 'pi':
+        console.print("[yellow]Pi session injection is not supported yet[/yellow]")
         raise typer.Exit(1)
 
     if agent_info.storage_format == "sqlite":

@@ -28,6 +28,7 @@ cdir                        # list all known agents
 cdir opencode/              # sessions for opencode (name only)
 cdir -l opencode/           # sessions with modified date, size, message count, path
 cdir claude-code/           # sessions for claude code
+cdir pi/                    # sessions for pi coding agent
 cdir -R                     # all agents, recursive
 cdir opencode/ses_abc123    # export a session as JSON
 ```
@@ -79,6 +80,7 @@ Found:
 Not Found:
   Claude        Claude Desktop (Anthropic)  ~/.config/Claude/conversations/
   Codex         OpenAI Codex CLI            ~/.codex/sessions/
+  Pi            Pi Coding Agent            ~/.pi/agent/sessions/
 ```
 
 That alone should be convincing. But there's more.
@@ -106,7 +108,7 @@ graph LR
     FC --> DEST_C["destination C"]
 ```
 
-Context windows are endpoints: opencode, Claude Code, Codex. They all speak different protocols, but they all consume the same packets.
+Context windows are endpoints: opencode, Claude Code, Codex, Pi. They all speak different protocols, but they all consume the same packets.
 
 ```mermaid
 graph TB
@@ -114,6 +116,7 @@ graph TB
         OC[opencode]
         CC[Claude Code]
         CX[Codex]
+        PI[Pi]
     end
 
     subgraph "Concept Directory (Bus)"
@@ -423,6 +426,7 @@ The filter script can be anything that speaks JSON-RPC on stdio: a regex script,
 | claude-code | JSONL |
 | opencode | SQLite |
 | codex | JSONL |
+| pi | JSONL |
 
 Run `cdir` to see which endpoints are found on your system and where they store data.
 

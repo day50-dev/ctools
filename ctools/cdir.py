@@ -394,12 +394,224 @@ def get_codex_sessions(agent: Agent) -> List[Session]:
     return sessions
 
 
+# --- Pi Coding Agent ---
+
+def _pi_parse_timestamp(ts) -> Optional[datetime]:
+    """Parse a pi ISO-8601 timestamp (UTC, may end in 'Z').
+
+    Returns a naive local datetime to match the rest of the codebase.
+    """
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00'))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
+def _pi_message_text(message) -> str:
+    """Extract plain text from a pi message (string or block-list content)."""
+    content = message.get('content', '') if isinstance(message, dict) else message
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get('type') == 'text':
+                text = block.get('text', '')
+                if text:
+                    parts.append(text)
+        return '\n'.join(parts)
+    return ''
+
+
+def _pi_session_uuid(path_str) -> Optional[str]:
+    """Extract a pi session uuid from a parentSession path or uuid string."""
+    if not path_str:
+        return None
+    stem = Path(str(path_str)).stem
+    if '_' in stem:
+        return stem.split('_', 1)[1]
+    return stem
+
+
+def _find_pi_session_file(agent_path: Path, session_id: str) -> Optional[Path]:
+    """Locate a pi session file by filename suffix or header uuid."""
+    if not agent_path.exists():
+        return None
+    for session_file in agent_path.glob('**/*.jsonl'):
+        if session_id in session_file.name:
+            return session_file
+        try:
+            with open(session_file, 'r') as f:
+                header = json.loads(f.readline())
+            if header.get('type') == 'session' and header.get('id') == session_id:
+                return session_file
+        except (json.JSONDecodeError, OSError):
+            continue
+    return None
+
+
+def get_pi_sessions(agent: Agent) -> List[Session]:
+    """Extract sessions from Pi Coding Agent.
+
+    Pi stores each session as a JSONL tree file under
+    ~/.pi/agent/sessions/--<cwd-with-slashes-as--->/<timestamp>_<uuid>.jsonl.
+    The first line is a session header with id, timestamp, and cwd.
+    """
+    sessions = []
+    if not agent.base_path.exists():
+        return sessions
+
+    for session_file in sorted(agent.base_path.glob(agent.session_pattern)):
+        try:
+            header = None
+            name = None
+            cwd = None
+            parent_session = None
+            model = None
+            message_count = 0
+            total_tokens = 0
+            first_user_text = None
+            header_ts = None
+            last_ts = None
+
+            with open(session_file, 'r') as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    etype = entry.get('type')
+                    ts = entry.get('timestamp')
+                    if etype == 'session':
+                        header = entry
+                        header_ts = ts
+                        cwd = entry.get('cwd')
+                        parent_session = entry.get('parentSession')
+                        continue
+                    if ts:
+                        last_ts = ts
+                    if etype == 'session_info':
+                        if entry.get('name') and not name:
+                            name = entry['name']
+                    elif etype == 'model_change':
+                        model = entry.get('modelId') or model
+                    elif etype == 'message':
+                        message_count += 1
+                        msg = entry.get('message') or {}
+                        role = msg.get('role')
+                        if role == 'user' and first_user_text is None:
+                            first_user_text = _pi_message_text(msg)
+                        model = msg.get('model') or model
+                        usage = msg.get('usage') or {}
+                        total_tokens += usage.get('totalTokens', 0) or 0
+                    elif etype in ('compaction', 'branch_summary'):
+                        usage = entry.get('usage') or {}
+                        total_tokens += usage.get('totalTokens', 0) or 0
+
+            if not header:
+                continue
+
+            session_id = header.get('id') or session_file.stem
+            if not name:
+                name = first_user_text.strip() if first_user_text else ''
+                if len(name) > 80:
+                    name = name[:80] + '...'
+                if not name:
+                    name = session_id[:8]
+            ctime = _pi_parse_timestamp(header_ts)
+            mtime = _pi_parse_timestamp(last_ts) or ctime
+
+            sessions.append(Session(
+                id=session_id,
+                name=name,
+                ctime=ctime,
+                mtime=mtime,
+                size=total_tokens or session_file.stat().st_size,
+                path=cwd or str(session_file),
+                model=model,
+                message_count=message_count,
+                parent_id=_pi_session_uuid(parent_session),
+            ))
+        except (OSError, ValueError):
+            continue
+
+    return sessions
+
+
+def export_pi_session(agent_info: Agent, session_id: str) -> List[Message]:
+    """Export a pi session's active branch as Message objects.
+
+    Walks the active leaf branch (newest leaf in the message tree) back to the
+    root via parentId links, returning user/assistant messages in order.
+    """
+    session_file = _find_pi_session_file(agent_info.base_path, session_id)
+    if not session_file:
+        return []
+
+    entries = []
+    parents = {}
+    children = {}
+    by_id = {}
+    with open(session_file, 'r') as f:
+        for line in f:
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            eid = entry.get('id')
+            if not eid:
+                continue
+            entries.append(entry)
+            by_id[eid] = entry
+            pid = entry.get('parentId')
+            parents[eid] = pid
+            children.setdefault(pid, []).append(eid)
+
+    if not entries:
+        return []
+
+    leaves = [eid for eid in by_id if not children.get(eid)]
+    if leaves:
+        leaves.sort(key=lambda eid: by_id[eid].get('timestamp') or '')
+        active_leaf = leaves[-1]
+    else:
+        active_leaf = entries[-1].get('id')
+
+    branch = []
+    node = active_leaf
+    seen = set()
+    while node and node in by_id and node not in seen:
+        seen.add(node)
+        branch.append(by_id[node])
+        node = parents.get(node)
+    branch.reverse()
+
+    messages = []
+    for entry in branch:
+        if entry.get('type') != 'message':
+            continue
+        msg = entry.get('message') or {}
+        role = msg.get('role')
+        if role not in ('user', 'assistant'):
+            continue
+        content = _pi_message_text(msg)
+        if content:
+            messages.append(Message(role=role, content=content))
+    return messages
+
+
 # Session extractors for each agent
 SESSION_EXTRACTORS = {
     'claude': get_claude_sessions,
     'claude-code': get_claude_code_sessions,
     'opencode': get_opencode_sessions,
     'codex': get_codex_sessions,
+    'pi': get_pi_sessions,
 }
 
 
@@ -492,6 +704,7 @@ EXPORTERS = {
     'opencode': export_opencode_session,
     'claude-code': export_claude_code_session,
     'claude': export_claude_session,
+    'pi': export_pi_session,
 }
 
 

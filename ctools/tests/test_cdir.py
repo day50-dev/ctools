@@ -4,7 +4,8 @@ import pytest
 from pathlib import Path
 from typer.testing import CliRunner
 from datetime import datetime
-from ctools.cdir import app, Agent, Session, AGENTS, get_opencode_sessions, get_claude_code_sessions
+from ctools.cdir import (app, Agent, Session, AGENTS, get_opencode_sessions,
+                         get_claude_code_sessions, get_pi_sessions, export_pi_session)
 
 runner = CliRunner()
 
@@ -607,3 +608,176 @@ def test_cli_recursive_has_header(tmp_path):
     assert result.exit_code == 0
     assert "MODIFIED" in result.stdout
     assert "opencode/ses_test123" in result.stdout
+
+
+# --- Pi Coding Agent tests ---
+
+def _make_pi_session(tmp_path, session_id='019fe37e-d6a2-7344-8a05-5b04d8d40161',
+                     name='My Session', cwd='/home/user/project',
+                     parent_session=None, extra_entries=None):
+    """Create a pi session JSONL file and return its path."""
+    dir_path = tmp_path / 'sessions' / '--home-user-project--'
+    dir_path.mkdir(parents=True, exist_ok=True)
+    session_file = dir_path / f'2026-08-08T22-29-28-354Z_{session_id}.jsonl'
+    header = {
+        "type": "session", "version": 3, "id": session_id,
+        "timestamp": "2026-08-08T22:29:28.354Z", "cwd": cwd,
+    }
+    if parent_session:
+        header["parentSession"] = parent_session
+    lines = [
+        header,
+        {"type": "model_change", "provider": "openrouter",
+         "modelId": "moonshotai/kimi-k2.6", "timestamp": "2026-08-08T22:29:28.500Z"},
+        {"type": "session_info", "name": name, "timestamp": "2026-08-08T22:29:28.600Z"},
+        {"type": "message", "id": "m1", "parentId": "session",
+         "timestamp": "2026-08-08T22:29:29Z",
+         "message": {"role": "user", "content": "hello pi"}},
+        {"type": "message", "id": "m2", "parentId": "m1",
+         "timestamp": "2026-08-08T22:30:00Z",
+         "message": {"role": "assistant",
+                      "content": [{"type": "text", "text": "hi there"}],
+                      "model": "moonshotai/kimi-k2.6",
+                      "usage": {"input": 10, "output": 5, "totalTokens": 15}}},
+    ]
+    if extra_entries:
+        lines.extend(extra_entries)
+    session_file.write_text('\n'.join(json.dumps(l) for l in lines) + '\n')
+    return session_file
+
+
+def _pi_agent(tmp_path):
+    """Build a pi Agent pointing at tmp_path."""
+    return Agent(
+        name='pi', description='Pi Coding Agent',
+        base_path=tmp_path, storage_format='jsonl',
+        session_pattern='sessions/**/*.jsonl',
+    )
+
+
+def _run_pi_cli(tmp_path, args):
+    """Run cdir CLI with pi.base_path pointed at tmp_path."""
+    from ctools.cdir import AGENTS
+    original = AGENTS['pi'].base_path
+    AGENTS['pi'].base_path = tmp_path
+    try:
+        return runner.invoke(app, args)
+    finally:
+        AGENTS['pi'].base_path = original
+
+
+def test_pi_agent_in_registry():
+    """Test pi is a registered agent."""
+    assert 'pi' in AGENTS
+    assert AGENTS['pi'].storage_format == 'jsonl'
+
+
+def test_get_pi_sessions_empty(tmp_path):
+    """Test extracting sessions from an empty pi directory."""
+    assert get_pi_sessions(_pi_agent(tmp_path)) == []
+
+
+def test_get_pi_sessions_with_data(tmp_path):
+    """Test extracting a session from a pi JSONL file."""
+    session_id = '019fe37e-d6a2-7344-8a05-5b04d8d40161'
+    _make_pi_session(tmp_path, session_id)
+    sessions = get_pi_sessions(_pi_agent(tmp_path))
+    assert len(sessions) == 1
+    s = sessions[0]
+    assert s.id == session_id
+    assert s.name == 'My Session'  # session_info name wins
+    assert s.path == '/home/user/project'  # cwd
+    assert s.model == 'moonshotai/kimi-k2.6'
+    assert s.message_count == 2
+    assert s.size == 15  # totalTokens from usage
+    assert s.ctime and s.mtime
+    assert s.parent_id is None
+
+
+def test_get_pi_sessions_name_fallback(tmp_path):
+    """Test name falls back to the first user message text."""
+    _make_pi_session(tmp_path, name=None)
+    sessions = get_pi_sessions(_pi_agent(tmp_path))
+    assert sessions[0].name == 'hello pi'
+
+
+def test_get_pi_sessions_parent_id(tmp_path):
+    """Test parentSession header maps to a parent session uuid."""
+    parent = '2026-08-01T00-00-00-000Z_aaaa-bbbb-cccc-dddd-eeee'
+    _make_pi_session(tmp_path, '11111111-2222-3333-4444-555555555555',
+                     name='Fork', parent_session=parent)
+    sessions = get_pi_sessions(_pi_agent(tmp_path))
+    assert sessions[0].parent_id == 'aaaa-bbbb-cccc-dddd-eeee'
+
+
+def test_export_pi_session(tmp_path):
+    """Test exporting the active branch as user/assistant messages."""
+    session_id = '019fe37e-d6a2-7344-8a05-5b04d8d40161'
+    _make_pi_session(tmp_path, session_id)
+    messages = export_pi_session(_pi_agent(tmp_path), session_id)
+    assert [m.role for m in messages] == ['user', 'assistant']
+    assert messages[0].content == 'hello pi'
+    assert messages[1].content == 'hi there'
+
+
+def test_export_pi_session_skips_tool_messages(tmp_path):
+    """Test tool result messages are excluded from export."""
+    session_id = '019fe37e-d6a2-7344-8a05-5b04d8d40161'
+    extra = [
+        {"type": "message", "id": "m3", "parentId": "m2",
+         "timestamp": "2026-08-08T22:30:30Z",
+         "message": {"role": "toolResult",
+                      "content": [{"type": "tool_result", "text": "ls output"}]}},
+    ]
+    _make_pi_session(tmp_path, session_id, extra_entries=extra)
+    messages = export_pi_session(_pi_agent(tmp_path), session_id)
+    assert [m.role for m in messages] == ['user', 'assistant']
+
+
+def test_export_pi_session_uses_active_branch(tmp_path):
+    """Test export follows the newest leaf when a session is forked."""
+    session_id = '019fe37e-d6a2-7344-8a05-5b04d8d40161'
+    extra = [
+        # original branch continues after m2
+        {"type": "message", "id": "m3", "parentId": "m2",
+         "timestamp": "2026-08-08T22:30:30Z",
+         "message": {"role": "user", "content": "keep going"}},
+        # fork from m2 (newer) becomes the active branch
+        {"type": "message", "id": "m4", "parentId": "m2",
+         "timestamp": "2026-08-08T22:31:00Z",
+         "message": {"role": "user", "content": "fork point"}},
+        {"type": "message", "id": "m5", "parentId": "m4",
+         "timestamp": "2026-08-08T22:31:30Z",
+         "message": {"role": "assistant", "content": "forked reply"}},
+    ]
+    _make_pi_session(tmp_path, session_id, extra_entries=extra)
+    messages = export_pi_session(_pi_agent(tmp_path), session_id)
+    assert [m.content for m in messages] == ['hello pi', 'hi there', 'fork point', 'forked reply']
+
+
+def test_cli_pi_lists(tmp_path):
+    """Test cdir pi/ lists pi sessions with a header."""
+    _make_pi_session(tmp_path)
+    result = _run_pi_cli(tmp_path, ["pi/"])
+    assert result.exit_code == 0
+    assert '019fe37e' in result.stdout
+    assert 'My Session' in result.stdout
+
+
+def test_cli_pi_long_shows_cwd(tmp_path):
+    """Test cdir -l pi/ shows the working directory as PATH."""
+    _make_pi_session(tmp_path)
+    result = _run_pi_cli(tmp_path, ["-l", "pi/"])
+    assert result.exit_code == 0
+    assert "MODIFIED" in result.stdout
+    assert "/home/user/project" in result.stdout
+
+
+def test_cli_pi_export(tmp_path):
+    """Test cdir pi/<id> exports the session messages."""
+    session_id = '019fe37e-d6a2-7344-8a05-5b04d8d40161'
+    _make_pi_session(tmp_path, session_id)
+    result = _run_pi_cli(tmp_path, [f"pi/{session_id}"])
+    assert result.exit_code == 0
+    assert '"role": "user"' in result.stdout
+    assert 'hello pi' in result.stdout

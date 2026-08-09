@@ -214,6 +214,10 @@ def _inject_to_dest(destination: str, concepts: list, source: str,
         log.error("destination_agent_not_found", agent=dest_agent)
         return False
 
+    if dest_agent == 'pi':
+        log.error("unsupported_agent", agent=dest_agent, reason="injection not supported")
+        return False
+
     t0 = time.monotonic()
 
     if dest_agent_info.storage_format == "sqlite":
