@@ -173,7 +173,18 @@ def get_claude_sessions(agent: Agent) -> List[Session]:
     if not agent.base_path.exists():
         return sessions
     
+    # Config files to skip (not conversation sessions)
+    SKIP_FILES = {'manifest.json', 'plugin.json', 'scheduled-tasks.json', 
+                  'remote-session-spaces.json', 'ant-device-registry.json'}
+    
     for session_file in agent.base_path.glob(agent.session_pattern):
+        # Skip config/manifest files
+        if session_file.name in SKIP_FILES:
+            continue
+        # Skip .claude-plugin directories
+        if '.claude-plugin' in session_file.parts:
+            continue
+            
         try:
             ctime, mtime, size = get_file_metadata(session_file)
             
@@ -829,13 +840,11 @@ def main(
 
             if found:
                 print("Found:")
-                print(f"  {'AGENT':<{w_name}}  {'DESCRIPTION':<{w_desc}}  {'PATH':<{w_path}}")
                 for name, desc, path, files_read, exists in found:
                     print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path}/{files_read}")
 
             if missing:
                 print("Not Found:")
-                print(f"  {'AGENT':<{w_name}}  {'DESCRIPTION':<{w_desc}}  {'PATH':<{w_path}}")
                 for name, desc, path, files_read, exists in missing:
                     print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path}/{files_read}")
     elif path is not None:

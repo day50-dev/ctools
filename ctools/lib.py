@@ -77,7 +77,7 @@ def _claude_desktop_path() -> Path:
 AGENTS: Dict[str, Agent] = {
     'claude': Agent(
         name='claude',
-        description='Claude Desktop (Anthropic)',
+        description='Claude Desktop',
         base_path=_claude_desktop_path(),
         storage_format='json',
         display_name='Claude',
