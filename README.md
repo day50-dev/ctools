@@ -81,6 +81,7 @@ Not Found:
   Claude        Claude Desktop (Anthropic)  ~/.config/Claude/conversations/
   Codex         OpenAI Codex CLI            ~/.codex/sessions/
   Pi            Pi Coding Agent            ~/.pi/agent/sessions/
+  Goose         Goose AI agent              ~/.local/share/goose/sessions/sessions.db
 ```
 
 That alone should be convincing. But there's more.
@@ -427,8 +428,35 @@ The filter script can be anything that speaks JSON-RPC on stdio: a regex script,
 | opencode | SQLite |
 | codex | JSONL |
 | pi | JSONL |
+| goose | SQLite |
 
 Run `cdir` to see which endpoints are found on your system and where they store data.
+
+Every endpoint is one class in `ctools/agents.py`. The base `Agent` defines the
+whole interface the tools use — `sessions()`, `messages()`, `raw_messages()`,
+`lines()`, `inject_system()`, `inject_toolcall()`, `remove_messages()` — and the
+storage-shaped subclasses (`JsonAgent`, `JsonlAgent`, `SqliteAgent`) implement
+most of it. Adding an endpoint means writing one subclass and adding it to
+`AGENT_CLASSES`; no command changes.
+
+```python
+from ctools.agents import JsonlAgent, Session
+
+class MyAgent(JsonlAgent):
+    name = 'myagent'
+    description = 'My Coding Agent'
+    session_pattern = 'sessions/**/*.jsonl'
+
+    @classmethod
+    def default_base_path(cls):
+        return Path.home() / '.myagent'
+
+    def sessions(self):
+        ...
+```
+
+Anything the storage cannot do — pi's session trees cannot be rewritten in
+place — raises `UnsupportedOperation` instead of being silently skipped.
 
 ## MCP Server
 
@@ -466,11 +494,32 @@ pip install ctxttools[mcp]
 Works as a Python library too.
 
 ```python
-from ctools.lib import AGENTS, get_formatter
-from ctools.cdir import get_opencode_sessions
+from ctools.agents import REGISTRY, OpencodeAgent, SessionNotFound
+from ctools.lib import get_formatter
 from ctools.cgrep import grep_session
-from ctools.ccopy import extract_concepts_from_messages, inject_concepts_to_session
+from ctools.ccopy import extract_concepts_from_messages
 from ctools.cdu import count_tokens, get_session_tokens
 from ctools.filterlib import JSONRPCFilter, load_filter
 from ctools.log import configure_logging, get_logger
+```
+
+Everything goes through an agent:
+
+```python
+from ctools.agents import REGISTRY
+
+agent = REGISTRY['opencode']
+for session in agent.sessions():
+    print(session.id, session.name, session.size)
+
+for message in agent.messages('ses_abc123'):
+    print(message.role, message.content)
+```
+
+Point an agent somewhere else by constructing it with a path:
+
+```python
+from ctools.agents import OpencodeAgent
+
+agent = OpencodeAgent('/backup/opencode')
 ```

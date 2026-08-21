@@ -7,21 +7,48 @@ between conversations. Runs over stdio for integration with Claude, opencode,
 and other MCP-compatible clients.
 """
 
-import re
 import json
-import typer
+import re
+from typing import List, Optional, Tuple
+
 from mcp.server.fastmcp import FastMCP
 
-from ctools.lib import AGENTS
-from ctools.cdir import SESSION_EXTRACTORS, EXPORTERS
-from ctools.cgrep import CONTENT_EXTRACTORS
-from ctools.ccopy import (
-    extract_concepts_from_messages,
-    inject_concepts_to_session,
-    get_session_messages,
-)
+from ctools.agents import Agent, AgentError, REGISTRY as AGENTS
+from ctools.ccopy import concepts_to_text, extract_concepts_from_messages
 
 mcp = FastMCP("ctools")
+
+
+def _resolve(agent_name: str) -> Tuple[Optional[Agent], Optional[str]]:
+    """Look up an installed agent. Returns (agent, error_message)."""
+    agent = AGENTS.get(agent_name)
+    if agent is None:
+        return None, f"Unknown agent: {agent_name}. Available: {', '.join(AGENTS)}"
+    if not agent.exists():
+        return None, f"Agent {agent_name} not found at {agent.base_path}"
+    return agent, None
+
+
+def _session_ref(ref: str) -> Tuple[Optional[Agent], Optional[str], Optional[str]]:
+    """Resolve an '@agent/session_id' reference. Returns (agent, id, error)."""
+    agent_name, _, session_id = ref.lstrip("@").partition("/")
+    if not session_id:
+        return None, None, f"Invalid session reference: {ref}"
+    agent, error = _resolve(agent_name)
+    if error:
+        return None, None, error
+    return agent, session_id, None
+
+
+def _read_concepts(agent: Agent, session_id: str) -> Tuple[Optional[list], Optional[str]]:
+    """Extract concepts from a session. Returns (concepts, error_message)."""
+    try:
+        messages = agent.raw_messages(session_id)
+    except AgentError as exc:
+        return None, str(exc)
+    if not messages:
+        return None, f"Session not found: {agent.name}/{session_id}"
+    return extract_concepts_from_messages(messages), None
 
 
 # --- Tools ---
@@ -29,12 +56,11 @@ mcp = FastMCP("ctools")
 @mcp.tool()
 def list_agents() -> str:
     """List all supported LLM agents and whether they are installed."""
-    lines = []
-    for name, agent in AGENTS.items():
-        exists = agent.base_path.exists()
-        status = "installed" if exists else "not found"
-        lines.append(f"{name}: {agent.description} [{status}] ({agent.storage_format})")
-    return "\n".join(lines)
+    return "\n".join(
+        f"{agent.name}: {agent.description} "
+        f"[{'installed' if agent.exists() else 'not found'}] ({agent.storage_format})"
+        for agent in AGENTS.values()
+    )
 
 
 @mcp.tool()
@@ -42,21 +68,17 @@ def list_sessions(agent: str, sort: str = "time") -> str:
     """List conversation sessions for an agent.
 
     Args:
-        agent: Agent name (claude, claude-code, opencode, codex)
+        agent: Agent name (claude, claude-code, opencode, codex, pi, goose)
         sort: Sort by 'time' or 'size'
     """
-    if agent not in AGENTS:
-        return f"Unknown agent: {agent}. Available: {', '.join(AGENTS.keys())}"
+    resolved, error = _resolve(agent)
+    if error:
+        return error
 
-    agent_info = AGENTS[agent]
-    if not agent_info.base_path.exists():
-        return f"Agent {agent} not found at {agent_info.base_path}"
-
-    extractor = SESSION_EXTRACTORS.get(agent)
-    if not extractor:
-        return f"No session extractor for {agent}"
-
-    sessions = extractor(agent_info)
+    try:
+        sessions = resolved.sessions()
+    except AgentError as exc:
+        return str(exc)
     if not sessions:
         return f"No sessions found for {agent}"
 
@@ -98,50 +120,46 @@ def search_sessions(
     except re.error as e:
         return f"Invalid pattern: {e}"
 
-    # Determine which agents to search
     if agents == "*":
-        search_agents = list(AGENTS.keys())
+        targets: List[Agent] = list(AGENTS.values())
     else:
-        search_agents = [a.strip() for a in agents.split(",")]
-        for a in search_agents:
-            if a not in AGENTS:
-                return f"Unknown agent: {a}. Available: {', '.join(AGENTS.keys())}"
+        targets = []
+        for name in (a.strip() for a in agents.split(",")):
+            if name not in AGENTS:
+                return f"Unknown agent: {name}. Available: {', '.join(AGENTS)}"
+            targets.append(AGENTS[name])
 
-    all_matches = []
-    for agent_name in search_agents:
-        agent_info = AGENTS[agent_name]
-        if not agent_info.base_path.exists():
+    matches = []
+    for agent in targets:
+        if not agent.exists():
             continue
-
-        extractor = SESSION_EXTRACTORS.get(agent_name)
-        if not extractor:
+        try:
+            sessions = agent.sessions()
+        except AgentError:
             continue
-
-        sessions = extractor(agent_info)
         for session in sessions:
-            content_extractor = CONTENT_EXTRACTORS.get(agent_name)
-            if not content_extractor:
+            try:
+                lines = agent.lines(session.id)
+            except AgentError:
                 continue
-
-            lines = content_extractor(agent_info.base_path, session.id)
             for line_num, line in lines:
                 if compiled.search(line):
-                    all_matches.append(f"{agent_name}/{session.id}:{line_num}: {line}")
-                    if len(all_matches) >= max_results:
+                    matches.append(f"{agent.name}/{session.id}:{line_num}: {line}")
+                    if len(matches) >= max_results:
                         break
-            if len(all_matches) >= max_results:
+            if len(matches) >= max_results:
                 break
-        if len(all_matches) >= max_results:
+        if len(matches) >= max_results:
             break
 
-    if not all_matches:
+    if not matches:
         return f"No matches found for '{pattern}'"
 
-    header = f"Found {len(all_matches)} match(es) for '{pattern}':"
-    if len(all_matches) >= max_results:
+    header = f"Found {len(matches)} match(es) for '{pattern}':"
+    if len(matches) >= max_results:
         header += f" (capped at {max_results})"
 
-    return header + "\n" + "\n".join(all_matches)
+    return header + "\n" + "\n".join(matches)
 
 
 @mcp.tool()
@@ -149,27 +167,23 @@ def export_session(agent: str, session_id: str, max_messages: int = 100) -> str:
     """Export messages from a conversation session.
 
     Args:
-        agent: Agent name (claude, claude-code, opencode, codex)
+        agent: Agent name (claude, claude-code, opencode, codex, pi, goose)
         session_id: Session ID to export
         max_messages: Maximum number of messages to return
     """
-    if agent not in AGENTS:
-        return f"Unknown agent: {agent}. Available: {', '.join(AGENTS.keys())}"
+    resolved, error = _resolve(agent)
+    if error:
+        return error
 
-    agent_info = AGENTS[agent]
-    if not agent_info.base_path.exists():
-        return f"Agent {agent} not found at {agent_info.base_path}"
-
-    exporter = EXPORTERS.get(agent)
-    if not exporter:
-        return f"No exporter for {agent}"
-
-    messages = exporter(agent_info, session_id)
+    try:
+        messages = resolved.messages(session_id)
+    except AgentError as exc:
+        return str(exc)
     if not messages:
         return f"Session not found: {agent}/{session_id}"
 
     lines = [f"Session: {agent}/{session_id} ({len(messages)} messages)"]
-    for i, msg in enumerate(messages[:max_messages]):
+    for msg in messages[:max_messages]:
         content = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
         lines.append(f"[{msg.role}] {content}")
 
@@ -187,25 +201,21 @@ def extract_concepts(agent: str, session_id: str) -> str:
     and returns them as structured concept objects.
 
     Args:
-        agent: Agent name (claude, claude-code, opencode, codex)
+        agent: Agent name (claude, claude-code, opencode, codex, pi, goose)
         session_id: Session ID to extract concepts from
     """
-    if agent not in AGENTS:
-        return f"Unknown agent: {agent}. Available: {', '.join(AGENTS.keys())}"
+    resolved, error = _resolve(agent)
+    if error:
+        return error
 
-    try:
-        messages = get_session_messages(agent, session_id)
-    except (typer.Exit, Exception):
-        return f"Session not found: {agent}/{session_id}"
-
-    concepts = extract_concepts_from_messages(messages)
+    concepts, error = _read_concepts(resolved, session_id)
+    if error:
+        return error
     if not concepts:
         return f"No concepts found in {agent}/{session_id}"
 
     lines = [f"Found {len(concepts)} concept(s) in {agent}/{session_id}:"]
-    for c in concepts:
-        lines.append(f"  [{c['type']}] {c['short'][:100]}")
-
+    lines.extend(f"  [{c['type']}] {c['short'][:100]}" for c in concepts)
     return "\n".join(lines)
 
 
@@ -214,25 +224,21 @@ def copy_concepts(source: str, destination: str) -> str:
     """Copy concepts between sessions or concept files.
 
     Args:
-        source: Source reference (e.g. 'opencode/ses_abc' or path to concept JSON file)
-        destination: Destination reference (e.g. 'claude-code/ses_xyz' or path to concept JSON file)
+        source: Source reference (e.g. '@opencode/ses_abc' or path to concept JSON file)
+        destination: Destination reference (e.g. '@claude-code/ses_xyz' or path to concept JSON file)
     """
-    # Determine source type
     if source.startswith("@"):
-        ref = source[1:]
-        parts = ref.split("/", 1)
-        if len(parts) < 2 or parts[0] not in AGENTS:
-            return f"Invalid session reference: {source}"
-        try:
-            messages = get_session_messages(parts[0], parts[1])
-        except (typer.Exit, Exception):
-            return f"Session not found: {ref}"
-        concepts = extract_concepts_from_messages(messages)
+        agent, session_id, error = _session_ref(source)
+        if error:
+            return error
+        concepts, error = _read_concepts(agent, session_id)
+        if error:
+            return error
     elif source.endswith(".json"):
         try:
             with open(source) as f:
                 concepts = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             return f"Error reading {source}: {e}"
     else:
         return f"Unknown source type: {source}"
@@ -240,18 +246,17 @@ def copy_concepts(source: str, destination: str) -> str:
     if not concepts:
         return "No concepts found in source"
 
-    # Determine destination type
     if destination.startswith("@"):
-        ref = destination[1:]
-        parts = ref.split("/", 1)
-        if len(parts) < 2 or parts[0] not in AGENTS:
-            return f"Invalid session reference: {destination}"
+        agent, session_id, error = _session_ref(destination)
+        if error:
+            return error
         try:
-            inject_concepts_to_session(parts[0], parts[1], concepts)
-        except (typer.Exit, Exception):
-            return f"Could not inject into {ref}"
+            agent.inject_system(session_id, concepts_to_text(concepts))
+        except AgentError as exc:
+            return f"Could not inject into {destination}: {exc}"
         return f"Injected {len(concepts)} concept(s) into {destination}"
-    elif destination.endswith(".json"):
+
+    if destination.endswith(".json"):
         try:
             with open(destination, "w") as f:
                 json.dump(concepts, f, indent=2)
@@ -259,8 +264,8 @@ def copy_concepts(source: str, destination: str) -> str:
         except OSError as e:
             return f"Error writing {destination}: {e}"
         return f"Wrote {len(concepts)} concept(s) to {destination}"
-    else:
-        return f"Unknown destination type: {destination}"
+
+    return f"Unknown destination type: {destination}"
 
 
 @mcp.tool()
@@ -268,29 +273,27 @@ def get_session_concepts(agent: str, session_id: str, concept_type: str = "") ->
     """Get concepts from a session, optionally filtered by type.
 
     Args:
-        agent: Agent name (claude, claude-code, opencode, codex)
+        agent: Agent name (claude, claude-code, opencode, codex, pi, goose)
         session_id: Session ID to search
         concept_type: Filter by type (constraint, goal, preference, observation, reference). Empty for all.
     """
-    if agent not in AGENTS:
-        return f"Unknown agent: {agent}. Available: {', '.join(AGENTS.keys())}"
+    resolved, error = _resolve(agent)
+    if error:
+        return error
 
-    try:
-        messages = get_session_messages(agent, session_id)
-    except (typer.Exit, Exception):
-        return f"Session not found: {agent}/{session_id}"
+    concepts, error = _read_concepts(resolved, session_id)
+    if error:
+        return error
 
-    concepts = extract_concepts_from_messages(messages)
     if concept_type:
         concepts = [c for c in concepts if c["type"] == concept_type]
 
     if not concepts:
-        return f"No concepts found in {agent}/{session_id}" + (f" (type={concept_type})" if concept_type else "")
+        suffix = f" (type={concept_type})" if concept_type else ""
+        return f"No concepts found in {agent}/{session_id}{suffix}"
 
     lines = [f"Found {len(concepts)} concept(s) in {agent}/{session_id}:"]
-    for c in concepts:
-        lines.append(json.dumps(c, indent=2))
-
+    lines.extend(json.dumps(c, indent=2) for c in concepts)
     return "\n".join(lines)
 
 

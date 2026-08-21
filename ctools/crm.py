@@ -5,9 +5,6 @@ Surgically removes concept-containing sections from agent sessions.
 Concept JSON files are NOT deleted - only the relevant sections from the context.
 """
 
-import json
-import sys
-import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -15,13 +12,9 @@ import typer
 from rich.console import Console
 from rich.prompt import Confirm
 
-from ctools.lib import AGENTS, Session, Agent, Message
-from ctools.ccopy import (
-    get_session_messages,
-    resolve_session,
-    load_strategy,
-    read_concepts_from_file,
-)
+from ctools.agents import Message
+from ctools.ccopy import concept_text, load_strategy, read_concepts_from_file
+from ctools.cli import reporting, require_session
 
 app = typer.Typer()
 console = Console()
@@ -84,37 +77,19 @@ def _concept_matches_concept(concept: dict, message_content: str, strategy=None)
         return _detect_with_strategy(strategy, concept, message_content)
 
     # Fallback to string matching
-    concept_text = concept.get("short", "").lower()
-    if not concept_text:
-        concept_text = concept.get("medium", "").lower()
-    if not concept_text:
-        concept_text = concept.get("description", "").lower()
-
-    if not concept_text:
-        return False
-
-    return concept_text in message_content.lower()
+    text = concept_text(concept).lower()
+    return bool(text) and text in message_content.lower()
 
 
-def _concept_in_range(concept: dict, messages: List[Message], start: int, end: int, strategy=None) -> bool:
+def _concept_in_range(concept: dict, messages: List[Message], start: int, end: int,
+                      strategy=None) -> bool:
     """Check if a range of messages contains a concept."""
+    span = messages[start:end + 1]
     if strategy:
-        # For strategy-based detection, check the combined text
-        combined_text = " ".join(m.content for m in messages[start:end + 1])
-        return _detect_with_strategy(strategy, concept, combined_text)
-    else:
-        # For string matching, check if concept text appears anywhere
-        concept_text = concept.get("short", "").lower()
-        if not concept_text:
-            concept_text = concept.get("medium", "").lower()
-        if not concept_text:
-            concept_text = concept.get("description", "").lower()
+        return _detect_with_strategy(strategy, concept, " ".join(m.content for m in span))
 
-        if not concept_text:
-            return False
-
-        range_text = " ".join(m.content.lower() for m in messages[start:end + 1])
-        return concept_text in range_text
+    text = concept_text(concept).lower()
+    return bool(text) and text in " ".join(m.content.lower() for m in span)
 
 
 def _divide_and_conquer(messages: List[Message], concept: dict,
@@ -179,71 +154,12 @@ def _sliding_window(messages: List[Message], concept: dict,
     return sorted(indices_to_remove)
 
 
-def _remove_messages_sqlite(agent_info, session_id: str, message_indices: List[int],
-                           messages: List[Message], verbose: bool = False):
-    """Remove messages from a SQLite-backed session."""
-    import sqlite3
-
-    db_path = agent_info.base_path / "opencode.db"
-    if not db_path.exists():
-        console.print(f"[red]Database not found: {db_path}[/red]")
-        raise typer.Exit(1)
-
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-
-    # Get message IDs for the indices we want to remove
-    cursor.execute('''
-        SELECT m.id
-        FROM message m
-        WHERE m.session_id = ?
-        ORDER BY m.time_created
-    ''', (session_id,))
-
-    all_msg_ids = [row[0] for row in cursor.fetchall()]
-
-    if not all_msg_ids:
-        console.print(f"[yellow]No messages found for session {session_id}[/yellow]")
-        conn.close()
-        return
-
-    # Delete messages at the specified indices
-    for idx in message_indices:
-        if idx < len(all_msg_ids):
-            msg_id = all_msg_ids[idx]
-            if verbose:
-                console.print(f"  [red]Deleting message {idx} (id: {msg_id})[/red]")
-
-            # Delete parts first
-            cursor.execute("DELETE FROM part WHERE message_id = ?", (msg_id,))
-            # Delete message
-            cursor.execute("DELETE FROM message WHERE id = ?", (msg_id,))
-
-    conn.commit()
-    conn.close()
-
-
-def _remove_messages_jsonl(agent_info, session_id: str, message_indices: List[int],
-                          messages: List[Message], verbose: bool = False):
-    """Remove messages from a JSONL-backed session."""
-    for session_file in agent_info.base_path.glob(agent_info.session_pattern):
-        if session_file.stem == session_id:
-            lines = session_file.read_text().splitlines()
-            new_lines = []
-            removed_count = 0
-
-            for i, line in enumerate(lines):
-                if i in message_indices:
-                    removed_count += 1
-                    if verbose:
-                        console.print(f"  [red]Removing line {i}[/red]")
-                    continue
-                new_lines.append(line)
-
-            session_file.write_text("\n".join(new_lines) + "\n")
-            return
-
-    console.print(f"[yellow]Session file not found for {session_id}[/yellow]")
+SEARCHES = {
+    'divide': lambda messages, concept, size, strat, verbose:
+        _divide_and_conquer(messages, concept, strat, verbose),
+    'sliding': lambda messages, concept, size, strat, verbose:
+        _sliding_window(messages, concept, size, strat, verbose),
+}
 
 
 @app.command()
@@ -269,30 +185,25 @@ def main(
         crm -s my-strategy.json @opencode/ses_abc concept.json
         crm -i -v @opencode/ses_abc concept.json
     """
-    # Parse session reference
-    session_clean = session.lstrip("@")
-    parts = session_clean.split("/")
-    agent_name = parts[0]
-    session_id = parts[1] if len(parts) > 1 else None
+    agent, session_id = require_session(session)
 
-    if not session_id:
-        console.print("[red]Session must include session_id: @agent/session_id[/red]")
+    with reporting():
+        messages = agent.raw_messages(session_id)
+
+    if not messages:
+        console.print(f"[yellow]Session not found: {session_id}[/yellow]")
         raise typer.Exit(1)
 
-    # Get messages from session
-    messages = get_session_messages(agent_name, session_id)
-
     if verbose:
-        console.print(f"[dim]Loaded {len(messages)} messages from {agent_name}/{session_id}[/dim]")
+        console.print(f"[dim]Loaded {len(messages)} messages from {agent.name}/{session_id}[/dim]")
 
     # Load all concepts
     all_concepts = []
     for concept_path in concepts:
-        path = Path(concept_path)
-        if not path.exists():
+        if not Path(concept_path).exists():
             console.print(f"[red]Concept file not found: {concept_path}[/red]")
             raise typer.Exit(1)
-        all_concepts.extend(read_concepts_from_file(str(path)))
+        all_concepts.extend(read_concepts_from_file(concept_path))
 
     if not all_concepts:
         console.print("[yellow]No concepts found in files[/yellow]")
@@ -301,64 +212,41 @@ def main(
     if verbose:
         console.print(f"[dim]Loaded {len(all_concepts)} concepts[/dim]")
 
-    # Load strategy if provided
     strat = None
     if strategy:
         strat = load_strategy(strategy)
         if verbose:
-            console.print(f"[dim]Using strategy for detection[/dim]")
+            console.print("[dim]Using strategy for detection[/dim]")
+
+    if algo not in SEARCHES:
+        console.print(f"[red]Unknown algorithm: {algo}[/red]")
+        console.print(f"[dim]Available: {', '.join(SEARCHES)}[/dim]")
+        raise typer.Exit(1)
+    search = SEARCHES[algo]
 
     # Find messages to remove for each concept
-    all_indices_to_remove = set()
-
+    doomed = set()
     for concept in all_concepts:
-        if algo == "divide":
-            indices = _divide_and_conquer(messages, concept, strat, verbose)
-        elif algo == "sliding":
-            indices = _sliding_window(messages, concept, size, strat, verbose)
-        else:
-            console.print(f"[red]Unknown algorithm: {algo}[/red]")
-            raise typer.Exit(1)
+        doomed.update(search(messages, concept, size, strat, verbose))
 
-        all_indices_to_remove.update(indices)
-
-    if not all_indices_to_remove:
+    if not doomed:
         console.print("[yellow]No matching sections found to remove[/yellow]")
         return
 
-    # Interactive mode
     if interactive:
-        console.print(f"\n[yellow]Will remove {len(all_indices_to_remove)} message(s):[/yellow]")
-        for idx in sorted(all_indices_to_remove):
-            msg = messages[idx]
-            preview = msg.content[:100].replace("\n", " ")
-            console.print(f"  {idx}: [{msg.role}] {preview}...")
+        console.print(f"\n[yellow]Will remove {len(doomed)} message(s):[/yellow]")
+        for idx in sorted(doomed):
+            preview = messages[idx].content[:100].replace("\n", " ")
+            console.print(f"  {idx}: [{messages[idx].role}] {preview}...")
 
         if not Confirm.ask("\nProceed with removal?"):
             console.print("[dim]Aborted[/dim]")
             return
 
-    # Remove messages
-    agent_info = AGENTS.get(agent_name)
-    if not agent_info or not agent_info.base_path.exists():
-        console.print(f"[red]Agent {agent_name} not found[/red]")
-        raise typer.Exit(1)
+    with reporting():
+        removed = agent.remove_messages(session_id, sorted(doomed))
 
-    if agent_name == 'pi':
-        console.print("[yellow]Pi session message removal is not supported yet[/yellow]")
-        raise typer.Exit(1)
-
-    if agent_info.storage_format == "sqlite":
-        _remove_messages_sqlite(agent_info, session_id, sorted(all_indices_to_remove),
-                               messages, verbose)
-    elif agent_info.storage_format == "jsonl":
-        _remove_messages_jsonl(agent_info, session_id, sorted(all_indices_to_remove),
-                              messages, verbose)
-    else:
-        console.print(f"[red]Unsupported format: {agent_info.storage_format}[/red]")
-        raise typer.Exit(1)
-
-    console.print(f"[green]Removed {len(all_indices_to_remove)} message(s) from {agent_name}/{session_id}[/green]")
+    console.print(f"[green]Removed {removed} message(s) from {agent.name}/{session_id}[/green]")
 
 
 if __name__ == "__main__":

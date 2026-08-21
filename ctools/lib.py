@@ -1,125 +1,32 @@
 #!/usr/bin/env python3
 """
-lib - Shared types and formatters for cdir and cgrep.
+lib - Output formatting for the ctools commands.
 
-Provides dataclasses, agent registry, and output formatters
-(json, xml, md) for both tools.
+The agent model (Session, Message, Match) and the agent registry live in
+:mod:`ctools.agents`; they are re-exported here so commands can pull
+everything they need for presentation from one place.
 """
 
 import json
-import os
-import sys
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, asdict, field
 from datetime import datetime
-from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from xml.dom import minidom
 
+from ctools.agents import (
+    Agent, Session, Message, Match,
+    AgentError, SessionNotFound, UnsupportedOperation,
+    REGISTRY as AGENTS,
+    get_agent, agent_names, installed,
+)
 
-# --- Dataclasses ---
-
-@dataclass
-class Session:
-    """Represents a conversation session from any agent."""
-    id: str
-    name: str
-    ctime: Optional[datetime]
-    mtime: Optional[datetime]
-    size: int  # in bytes or message count
-    path: Optional[str] = None
-    model: Optional[str] = None
-    message_count: Optional[int] = None
-    parent_id: Optional[str] = None
-
-
-@dataclass
-class Agent:
-    """Represents an LLM agent with its storage configuration."""
-    name: str
-    description: str
-    base_path: Path
-    storage_format: str  # 'json', 'sqlite', 'jsonl'
-    display_name: Optional[str] = None
-    session_pattern: Optional[str] = None  # glob pattern for session files
-    files_read: Optional[str] = None  # what we actually read from this agent
-
-
-@dataclass
-class Match:
-    """A single grep match."""
-    session_id: str
-    agent: str
-    line_num: int
-    line: str
-    context_before: Optional[List[str]] = None
-    context_after: Optional[List[str]] = None
-
-
-@dataclass
-class Message:
-    """A single conversation message."""
-    role: str  # 'user', 'assistant', 'system'
-    content: str
-
-
-# --- Agent Registry ---
-
-def _claude_desktop_path() -> Path:
-    """Return Claude Desktop storage path based on OS."""
-    if sys.platform == 'darwin':
-        return Path.home() / 'Library/Application Support/Claude'
-    elif sys.platform == 'win32':
-        return Path(os.environ.get('APPDATA', '')) / 'Claude'
-    else:
-        return Path.home() / '.config/Claude'
-
-AGENTS: Dict[str, Agent] = {
-    'claude': Agent(
-        name='claude',
-        description='Claude Desktop',
-        base_path=_claude_desktop_path(),
-        storage_format='json',
-        display_name='Claude',
-        session_pattern='local-agent-mode-sessions/**/*.json',
-        files_read='conversations/',
-    ),
-    'claude-code': Agent(
-        name='claude-code',
-        description='Claude Code CLI',
-        base_path=Path.home() / '.claude',
-        storage_format='jsonl',
-        display_name='Claude Code',
-        session_pattern='projects/**/*.jsonl',
-        files_read='projects/',
-    ),
-    'opencode': Agent(
-        name='opencode',
-        description='Opencode CLI',
-        base_path=Path.home() / '.local/share/opencode',
-        storage_format='sqlite',
-        display_name='Opencode',
-        files_read='opencode.db',
-    ),
-    'codex': Agent(
-        name='codex',
-        description='OpenAI Codex CLI',
-        base_path=Path.home() / '.codex',
-        storage_format='jsonl',
-        display_name='Codex',
-        session_pattern='sessions/**/*.jsonl',
-        files_read='sessions/',
-    ),
-    'pi': Agent(
-        name='pi',
-        description='Pi Coding Agent',
-        base_path=Path.home() / '.pi' / 'agent',
-        storage_format='jsonl',
-        display_name='Pi',
-        session_pattern='sessions/**/*.jsonl',
-        files_read='sessions/',
-    ),
-}
+__all__ = [
+    'Agent', 'Session', 'Message', 'Match', 'AGENTS',
+    'AgentError', 'SessionNotFound', 'UnsupportedOperation',
+    'get_agent', 'agent_names', 'installed',
+    'format_size', 'format_datetime', 'get_formatter',
+    'OutputFormatter', 'JsonFormatter', 'XmlFormatter', 'MarkdownFormatter',
+]
 
 
 # --- Helper Functions ---
@@ -139,11 +46,6 @@ def format_datetime(dt: Optional[datetime]) -> str:
     if dt is None:
         return "N/A"
     return dt.strftime("%Y-%m-%d %H:%M")
-
-
-def _escape_xml(text: str) -> str:
-    """Escape text for XML content."""
-    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;').replace("'", '&apos;')
 
 
 # --- Output Formatters ---
@@ -353,9 +255,9 @@ class MarkdownFormatter(OutputFormatter):
         
         for m in messages:
             if m.role == 'user':
-                lines.append(f"## You")
+                lines.append("## You")
             elif m.role == 'assistant':
-                lines.append(f"## Assistant")
+                lines.append("## Assistant")
             else:
                 lines.append(f"## {m.role.title()}")
             lines.append("")

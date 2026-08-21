@@ -122,6 +122,7 @@ Not Found:
   Claude        Claude Desktop (Anthropic)  ~/.config/Claude/conversations/
   Codex         OpenAI Codex CLI            ~/.codex/sessions/
   Pi            Pi Coding Agent            ~/.pi/agent/sessions/
+  Goose         Goose AI agent              ~/.local/share/goose/sessions/sessions.db
 .fi
 .RE
 .PP
@@ -222,6 +223,11 @@ Claude Code session files.
 .TP
 .I ~/.pi/agent/sessions/**/*.jsonl
 Pi Coding Agent session files.
+.TP
+.I ~/.local/share/goose/sessions/sessions.db
+Goose AI agent SQLite session index (legacy per-session
+.B .jsonl
+files in the same directory are also read).
 .TP
 .I ~/Library/Application Support/Claude-3p/
 Claude Desktop session directory.

@@ -12,105 +12,73 @@ Usage:
 """
 
 import json
-import sqlite3
+from typing import Dict, Optional
+
 import typer
-from pathlib import Path
-from typing import List, Optional, Dict, Tuple
 from rich.console import Console
 from rich.table import Table
 
 try:
     import tiktoken
     _enc = tiktoken.get_encoding("cl100k_base")
+
     def count_tokens(text: str) -> int:
         return len(_enc.encode(text))
 except ImportError:
     def count_tokens(text: str) -> int:
         return len(text) // 4
 
-from ctools.lib import Session, Agent, AGENTS, Message, format_size
-from ctools.cdir import SESSION_EXTRACTORS, EXPORTERS
+from ctools.agents import Agent, AgentError, REGISTRY as AGENTS
+from ctools.cli import parse_ref, require_installed
 
 app = typer.Typer()
 console = Console()
 
+__all__ = ['app', 'count_tokens', 'format_tokens', 'get_session_tokens']
 
-def get_session_tokens(agent: str, session_id: str) -> Dict[str, int]:
-    """Get token breakdown for a session.
-    
-    Returns dict with keys: total, user, assistant, system, estimated.
-    'estimated' is True when tokens were estimated from content length.
+
+def get_session_tokens(agent_name: str, session_id: str) -> Dict[str, int]:
+    """Token breakdown for a session.
+
+    Prefers the counts an agent recorded itself; otherwise estimates from
+    message text and flags the result as estimated.
     """
-    agent_info = AGENTS.get(agent)
-    if not agent_info or not agent_info.base_path.exists():
-        return {}
-
-    # For opencode, we have actual token counts
-    if agent == "opencode":
-        return _get_opencode_tokens(agent_info, session_id)
-
-    # For others, estimate from content
-    exporter = EXPORTERS.get(agent)
-    if not exporter:
-        return {}
-
-    messages = exporter(agent_info, session_id)
-    if not messages:
-        return {}
-
-    tokens_by_role = {}
-    for msg in messages:
-        tokens_by_role[msg.role] = tokens_by_role.get(msg.role, 0) + count_tokens(msg.content)
-
-    total = sum(tokens_by_role.values())
-    return {
-        "total": total,
-        "user": tokens_by_role.get("user", 0),
-        "assistant": tokens_by_role.get("assistant", 0),
-        "system": tokens_by_role.get("system", 0),
-        "estimated": True,
-    }
-
-
-def _get_opencode_tokens(agent_info: Agent, session_id: str) -> Dict[str, int]:
-    """Get actual token counts from opencode SQLite database."""
-    db_path = agent_info.base_path / "opencode.db"
-    if not db_path.exists():
+    agent = AGENTS.get(agent_name)
+    if agent is None or not agent.exists():
         return {}
 
     try:
-        conn = sqlite3.connect(str(db_path))
-        cursor = conn.cursor()
+        recorded = agent.token_usage(session_id)
+        if recorded:
+            return {**recorded, "estimated": False}
 
-        cursor.execute(
-            "SELECT tokens_input, tokens_output FROM session WHERE id = ?",
-            (session_id,),
-        )
-        row = cursor.fetchone()
-        conn.close()
-
-        if not row:
-            return {}
-
-        tokens_input, tokens_output = row
-        return {
-            "total": (tokens_input or 0) + (tokens_output or 0),
-            "input": tokens_input or 0,
-            "output": tokens_output or 0,
-            "estimated": False,
-        }
-    except sqlite3.Error:
+        messages = agent.messages(session_id)
+    except AgentError:
         return {}
+
+    if not messages:
+        return {}
+
+    by_role = {}
+    for msg in messages:
+        by_role[msg.role] = by_role.get(msg.role, 0) + count_tokens(msg.content)
+
+    return {
+        "total": sum(by_role.values()),
+        "user": by_role.get("user", 0),
+        "assistant": by_role.get("assistant", 0),
+        "system": by_role.get("system", 0),
+        "estimated": True,
+    }
 
 
 def format_tokens(tokens: int) -> str:
     """Format token count in human-readable form."""
     if tokens < 1000:
         return f"{tokens}"
-    elif tokens < 1_000_000:
+    if tokens < 1_000_000:
         return f"{tokens / 1000:.1f}k"
-    else:
-        return f"{tokens / 1_000_000:.1f}M"
+    return f"{tokens / 1_000_000:.1f}M"
 
 
 @app.command()
@@ -128,44 +96,31 @@ def main(
     """
     if path is None:
         _show_all_agents(json_output)
+        return
+
+    agent_name, session_id = parse_ref(path)
+    agent = require_installed(agent_name)
+
+    if session_id:
+        _show_session_tokens(agent, session_id, json_output)
     else:
-        parts = path.strip("/").split("/", 1)
-        agent_name = parts[0]
-        session_id = parts[1] if len(parts) > 1 else None
-
-        if agent_name not in AGENTS:
-            console.print(f"[red]Unknown agent: {agent_name}[/red]")
-            console.print(f"[dim]Available: {', '.join(AGENTS.keys())}[/dim]")
-            raise typer.Exit(1)
-
-        agent_info = AGENTS[agent_name]
-        if not agent_info.base_path.exists():
-            console.print(f"[yellow]Agent {agent_name} not found at {agent_info.base_path}[/yellow]")
-            raise typer.Exit(1)
-
-        if session_id:
-            _show_session_tokens(agent_name, session_id, json_output)
-        else:
-            _show_agent_sessions(agent_name, json_output)
+        _show_agent_sessions(agent, json_output)
 
 
 def _show_all_agents(json_output: bool):
     """Show total token usage across all agents."""
     results = []
-    for name, agent_info in AGENTS.items():
-        if not agent_info.base_path.exists():
+    for agent in AGENTS.values():
+        if not agent.exists():
             continue
-
-        extractor = SESSION_EXTRACTORS.get(name)
-        if not extractor:
+        try:
+            sessions = agent.sessions()
+        except AgentError:
             continue
-
-        sessions = extractor(agent_info)
-        total_tokens = sum(s.size for s in sessions)
         results.append({
-            "agent": name,
+            "agent": agent.name,
             "sessions": len(sessions),
-            "tokens": total_tokens,
+            "tokens": sum(s.size for s in sessions),
         })
 
     if json_output:
@@ -192,17 +147,16 @@ def _show_all_agents(json_output: bool):
     console.print(table)
 
 
-def _show_agent_sessions(agent_name: str, json_output: bool):
+def _show_agent_sessions(agent: Agent, json_output: bool):
     """Show sessions for an agent sorted by token usage."""
-    agent_info = AGENTS[agent_name]
-    extractor = SESSION_EXTRACTORS.get(agent_name)
-    if not extractor:
-        console.print(f"[red]No session extractor for {agent_name}[/red]")
+    try:
+        sessions = agent.sessions()
+    except AgentError as exc:
+        console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
 
-    sessions = extractor(agent_info)
     if not sessions:
-        console.print(f"[yellow]No sessions found for {agent_name}[/yellow]")
+        console.print(f"[yellow]No sessions found for {agent.name}[/yellow]")
         return
 
     sessions.sort(key=lambda s: s.size, reverse=True)
@@ -219,7 +173,7 @@ def _show_agent_sessions(agent_name: str, json_output: bool):
         print(json.dumps(data, indent=2))
         return
 
-    table = Table(title=f"Context Usage — {agent_name}")
+    table = Table(title=f"Context Usage — {agent.name}")
     table.add_column("Session", style="cyan")
     table.add_column("Name")
     table.add_column("Tokens", justify="right", style="green")
@@ -241,8 +195,9 @@ def _show_agent_sessions(agent_name: str, json_output: bool):
     console.print(table)
 
 
-def _show_session_tokens(agent_name: str, session_id: str, json_output: bool):
+def _show_session_tokens(agent: Agent, session_id: str, json_output: bool):
     """Show token breakdown for a specific session."""
+    agent_name = agent.name
     tokens = get_session_tokens(agent_name, session_id)
     if not tokens:
         console.print(f"[yellow]Session not found: {agent_name}/{session_id}[/yellow]")

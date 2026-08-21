@@ -3,10 +3,9 @@ import sqlite3
 import pytest
 from pathlib import Path
 from typer.testing import CliRunner
-from ctools.cgrep import (app, parse_path_pattern, get_sessions_for_pattern,
-                          grep_session, get_opencode_session_content,
-                          get_pi_session_content)
-from ctools.cdir import AGENTS
+from ctools.cgrep import app, grep_session, parse_path_pattern
+from ctools.agents import (REGISTRY as AGENTS, SessionNotFound,
+                           GooseAgent, OpencodeAgent, PiAgent)
 
 runner = CliRunner()
 
@@ -83,20 +82,22 @@ def create_test_opencode_db(tmp_path, session_id="ses_test123", messages=None):
 def test_parse_single_agent():
     result = parse_path_pattern("opencode/*")
     assert len(result) == 1
-    assert result[0] == ("opencode", "*")
+    assert result[0][0].name == "opencode"
+    assert result[0][1] == "*"
 
 
 def test_parse_session_id():
     result = parse_path_pattern("opencode/ses_abc123")
     assert len(result) == 1
-    assert result[0] == ("opencode", "ses_abc123")
+    assert result[0][0].name == "opencode"
+    assert result[0][1] == "ses_abc123"
 
 
 def test_parse_multiple_agents():
     result = parse_path_pattern("opencode/* claude-code/*")
     assert len(result) == 2
-    assert result[0] == ("opencode", "*")
-    assert result[1] == ("claude-code", "*")
+    assert [a.name for a, _ in result] == ["opencode", "claude-code"]
+    assert [pat for _, pat in result] == ["*", "*"]
 
 
 def test_parse_unknown_agent():
@@ -113,7 +114,7 @@ def test_get_opencode_session_content(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        lines = get_opencode_session_content(tmp_path, "ses_test123")
+        lines = OpencodeAgent(tmp_path).lines("ses_test123")
         assert len(lines) >= 4
         assert lines[0][1] == "user: Hello world"
         assert "assistant: Hi there" in lines[1][1]
@@ -122,8 +123,73 @@ def test_get_opencode_session_content(tmp_path):
 
 
 def test_get_opencode_session_content_not_found(tmp_path):
-    lines = get_opencode_session_content(tmp_path, "ses_nonexistent")
-    assert lines == []
+    with pytest.raises(SessionNotFound):
+        OpencodeAgent(tmp_path).lines("ses_nonexistent")
+
+
+def _create_test_goose_db(base_path, session_id="20260101_1"):
+    db_dir = base_path / 'sessions'
+    db_dir.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_dir / 'sessions.db'))
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            session_type TEXT NOT NULL DEFAULT 'user',
+            working_dir TEXT NOT NULL,
+            created_at TIMESTAMP,
+            updated_at TIMESTAMP,
+            total_tokens INTEGER,
+            provider_name TEXT,
+            model_config_json TEXT,
+            parent_session_id TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id TEXT,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content_json TEXT NOT NULL,
+            created_timestamp INTEGER NOT NULL
+        )
+    ''')
+    cursor.execute(
+        "INSERT INTO sessions (id, name, working_dir) VALUES (?, '', '/tmp')",
+        (session_id,))
+    messages = [
+        ('user', json.dumps([{"type": "text", "text": "Hello world"}])),
+        ('assistant', json.dumps([
+            {"type": "text", "text": "Hi there"},
+            {"type": "toolRequest", "id": "t1"},
+        ])),
+        ('assistant', json.dumps([{"type": "toolResponse", "id": "t1"}])),
+        ('assistant', json.dumps([{"type": "text", "text": "Done"}])),
+    ]
+    for i, (role, content) in enumerate(messages):
+        cursor.execute(
+            "INSERT INTO messages (session_id, role, content_json, created_timestamp)"
+            " VALUES (?, ?, ?, ?)", (session_id, role, content, i))
+    conn.commit()
+    conn.close()
+
+
+def test_get_goose_session_content(tmp_path):
+    _create_test_goose_db(tmp_path)
+
+    lines = GooseAgent(tmp_path).lines("20260101_1")
+    assert lines[0] == (1, "user: Hello world")
+    assert (2, "assistant: Hi there") in lines
+    assert (3, "assistant: Done") in lines
+    assert not any("toolRequest" in text or "toolResponse" in text for _, text in lines)
+
+
+def test_get_goose_session_content_not_found(tmp_path):
+    with pytest.raises(SessionNotFound):
+        GooseAgent(tmp_path).lines("20260101_missing")
 
 
 # --- Grep session tests ---
@@ -136,7 +202,7 @@ def test_grep_session_match(tmp_path):
     try:
         import re
         pattern = re.compile("python")
-        matches = grep_session("opencode", "ses_test123", pattern)
+        matches = grep_session(AGENTS['opencode'], "ses_test123", pattern)
         assert len(matches) >= 2  # At least "Write some python code" and "Here is some python code"
     finally:
         AGENTS['opencode'].base_path = original
@@ -150,7 +216,7 @@ def test_grep_session_no_match(tmp_path):
     try:
         import re
         pattern = re.compile("nonexistent_pattern_xyz")
-        matches = grep_session("opencode", "ses_test123", pattern)
+        matches = grep_session(AGENTS['opencode'], "ses_test123", pattern)
         assert len(matches) == 0
     finally:
         AGENTS['opencode'].base_path = original
@@ -164,7 +230,7 @@ def test_grep_session_invert(tmp_path):
     try:
         import re
         pattern = re.compile("python")
-        matches = grep_session("opencode", "ses_test123", pattern, invert=True)
+        matches = grep_session(AGENTS['opencode'], "ses_test123", pattern, invert=True)
         assert len(matches) >= 2  # At least the non-python lines
     finally:
         AGENTS['opencode'].base_path = original
@@ -178,7 +244,7 @@ def test_grep_session_context_before(tmp_path):
     try:
         import re
         pattern = re.compile("python")
-        matches = grep_session("opencode", "ses_test123", pattern, before=1)
+        matches = grep_session(AGENTS['opencode'], "ses_test123", pattern, before=1)
         assert len(matches) > 0
         assert matches[0].context_before is not None
         assert len(matches[0].context_before) == 1
@@ -194,7 +260,7 @@ def test_grep_session_context_after(tmp_path):
     try:
         import re
         pattern = re.compile("python")
-        matches = grep_session("opencode", "ses_test123", pattern, after=1)
+        matches = grep_session(AGENTS['opencode'], "ses_test123", pattern, after=1)
         assert len(matches) > 0
         assert matches[0].context_after is not None
     finally:
@@ -204,7 +270,7 @@ def test_grep_session_context_after(tmp_path):
 def test_grep_session_unknown_agent():
     import re
     pattern = re.compile("test")
-    matches = grep_session("nonexistent", "ses_123", pattern)
+    matches = grep_session(AGENTS['opencode'], "ses_definitely_not_here", pattern)
     assert matches == []
 
 
@@ -426,7 +492,7 @@ def test_get_pi_session_content(tmp_path):
     original = AGENTS['pi'].base_path
     AGENTS['pi'].base_path = tmp_path
     try:
-        lines = get_pi_session_content(tmp_path, '019fe37e-d6a2-7344-8a05-5b04d8d40161')
+        lines = PiAgent(tmp_path).lines('019fe37e-d6a2-7344-8a05-5b04d8d40161')
         assert lines == [
             (1, 'user: what is this thing'),
             (2, 'assistant: Let me check the current directory.'),
@@ -436,8 +502,8 @@ def test_get_pi_session_content(tmp_path):
 
 
 def test_get_pi_session_content_not_found(tmp_path):
-    lines = get_pi_session_content(tmp_path, 'nope')
-    assert lines == []
+    with pytest.raises(SessionNotFound):
+        PiAgent(tmp_path).lines('nope')
 
 
 def test_grep_session_pi(tmp_path):
@@ -446,7 +512,7 @@ def test_grep_session_pi(tmp_path):
     AGENTS['pi'].base_path = tmp_path
     try:
         import re
-        matches = grep_session('pi', '019fe37e-d6a2-7344-8a05-5b04d8d40161', re.compile('directory'))
+        matches = grep_session(AGENTS['pi'], '019fe37e-d6a2-7344-8a05-5b04d8d40161', re.compile('directory'))
         assert len(matches) == 1
         assert 'directory' in matches[0].line
     finally:

@@ -4,8 +4,9 @@ import pytest
 from pathlib import Path
 from typer.testing import CliRunner
 from datetime import datetime
-from ctools.cdir import (app, Agent, Session, AGENTS, get_opencode_sessions,
-                         get_claude_code_sessions, get_pi_sessions, export_pi_session)
+from ctools.cdir import app
+from ctools.agents import (Session, SessionNotFound, REGISTRY as AGENTS,
+                           ClaudeCodeAgent, GooseAgent, OpencodeAgent, PiAgent)
 
 runner = CliRunner()
 
@@ -33,14 +34,8 @@ def test_agent_has_required_fields():
 
 def test_get_claude_code_sessions_empty(tmp_path):
     """Test extracting sessions from empty Claude Code directory."""
-    agent = Agent(
-        name='claude-code',
-        description='Claude Code CLI',
-        base_path=tmp_path,
-        storage_format='jsonl',
-        session_pattern='projects/**/*.jsonl'
-    )
-    sessions = get_claude_code_sessions(agent)
+    agent = ClaudeCodeAgent(tmp_path)
+    sessions = agent.sessions()
     assert sessions == []
 
 
@@ -60,15 +55,9 @@ def test_get_claude_code_sessions_with_data(tmp_path):
         "message": {"content": "Python is a programming language."}
     }) + '\n')
     
-    agent = Agent(
-        name='claude-code',
-        description='Claude Code CLI',
-        base_path=tmp_path,
-        storage_format='jsonl',
-        session_pattern='projects/**/*.jsonl'
-    )
+    agent = ClaudeCodeAgent(tmp_path)
     
-    sessions = get_claude_code_sessions(agent)
+    sessions = agent.sessions()
     assert len(sessions) == 1
     assert sessions[0].name == "What is Python?"
     assert sessions[0].message_count == 2
@@ -88,15 +77,9 @@ def test_get_claude_code_sessions_multiple(tmp_path):
             "message": {"content": f"Question {i}"}
         }) + '\n')
     
-    agent = Agent(
-        name='claude-code',
-        description='Claude Code CLI',
-        base_path=tmp_path,
-        storage_format='jsonl',
-        session_pattern='projects/**/*.jsonl'
-    )
+    agent = ClaudeCodeAgent(tmp_path)
     
-    sessions = get_claude_code_sessions(agent)
+    sessions = agent.sessions()
     assert len(sessions) == 3
 
 
@@ -104,13 +87,8 @@ def test_get_claude_code_sessions_multiple(tmp_path):
 
 def test_get_opencode_sessions_empty(tmp_path):
     """Test extracting sessions from empty OpenCode database."""
-    agent = Agent(
-        name='opencode',
-        description='opencode CLI',
-        base_path=tmp_path,
-        storage_format='sqlite'
-    )
-    sessions = get_opencode_sessions(agent)
+    agent = OpencodeAgent(tmp_path)
+    sessions = agent.sessions()
     assert sessions == []
 
 
@@ -189,14 +167,9 @@ def test_get_opencode_sessions_with_data(tmp_path):
     conn.commit()
     conn.close()
     
-    agent = Agent(
-        name='opencode',
-        description='opencode CLI',
-        base_path=tmp_path,
-        storage_format='sqlite'
-    )
+    agent = OpencodeAgent(tmp_path)
     
-    sessions = get_opencode_sessions(agent)
+    sessions = agent.sessions()
     assert len(sessions) == 2
     
     # Check first session (most recent by time_updated)
@@ -259,14 +232,9 @@ def test_get_opencode_sessions_no_title(tmp_path):
     conn.commit()
     conn.close()
     
-    agent = Agent(
-        name='opencode',
-        description='opencode CLI',
-        base_path=tmp_path,
-        storage_format='sqlite'
-    )
+    agent = OpencodeAgent(tmp_path)
     
-    sessions = get_opencode_sessions(agent)
+    sessions = agent.sessions()
     assert len(sessions) == 1
     assert sessions[0].name == 'ses_no_title'[:8]  # Falls back to ID prefix
 
@@ -648,11 +616,7 @@ def _make_pi_session(tmp_path, session_id='019fe37e-d6a2-7344-8a05-5b04d8d40161'
 
 def _pi_agent(tmp_path):
     """Build a pi Agent pointing at tmp_path."""
-    return Agent(
-        name='pi', description='Pi Coding Agent',
-        base_path=tmp_path, storage_format='jsonl',
-        session_pattern='sessions/**/*.jsonl',
-    )
+    return PiAgent(tmp_path)
 
 
 def _run_pi_cli(tmp_path, args):
@@ -674,14 +638,14 @@ def test_pi_agent_in_registry():
 
 def test_get_pi_sessions_empty(tmp_path):
     """Test extracting sessions from an empty pi directory."""
-    assert get_pi_sessions(_pi_agent(tmp_path)) == []
+    assert _pi_agent(tmp_path).sessions() == []
 
 
 def test_get_pi_sessions_with_data(tmp_path):
     """Test extracting a session from a pi JSONL file."""
     session_id = '019fe37e-d6a2-7344-8a05-5b04d8d40161'
     _make_pi_session(tmp_path, session_id)
-    sessions = get_pi_sessions(_pi_agent(tmp_path))
+    sessions = _pi_agent(tmp_path).sessions()
     assert len(sessions) == 1
     s = sessions[0]
     assert s.id == session_id
@@ -697,7 +661,7 @@ def test_get_pi_sessions_with_data(tmp_path):
 def test_get_pi_sessions_name_fallback(tmp_path):
     """Test name falls back to the first user message text."""
     _make_pi_session(tmp_path, name=None)
-    sessions = get_pi_sessions(_pi_agent(tmp_path))
+    sessions = _pi_agent(tmp_path).sessions()
     assert sessions[0].name == 'hello pi'
 
 
@@ -706,7 +670,7 @@ def test_get_pi_sessions_parent_id(tmp_path):
     parent = '2026-08-01T00-00-00-000Z_aaaa-bbbb-cccc-dddd-eeee'
     _make_pi_session(tmp_path, '11111111-2222-3333-4444-555555555555',
                      name='Fork', parent_session=parent)
-    sessions = get_pi_sessions(_pi_agent(tmp_path))
+    sessions = _pi_agent(tmp_path).sessions()
     assert sessions[0].parent_id == 'aaaa-bbbb-cccc-dddd-eeee'
 
 
@@ -714,7 +678,7 @@ def test_export_pi_session(tmp_path):
     """Test exporting the active branch as user/assistant messages."""
     session_id = '019fe37e-d6a2-7344-8a05-5b04d8d40161'
     _make_pi_session(tmp_path, session_id)
-    messages = export_pi_session(_pi_agent(tmp_path), session_id)
+    messages = _pi_agent(tmp_path).messages(session_id)
     assert [m.role for m in messages] == ['user', 'assistant']
     assert messages[0].content == 'hello pi'
     assert messages[1].content == 'hi there'
@@ -730,7 +694,7 @@ def test_export_pi_session_skips_tool_messages(tmp_path):
                       "content": [{"type": "tool_result", "text": "ls output"}]}},
     ]
     _make_pi_session(tmp_path, session_id, extra_entries=extra)
-    messages = export_pi_session(_pi_agent(tmp_path), session_id)
+    messages = _pi_agent(tmp_path).messages(session_id)
     assert [m.role for m in messages] == ['user', 'assistant']
 
 
@@ -751,7 +715,7 @@ def test_export_pi_session_uses_active_branch(tmp_path):
          "message": {"role": "assistant", "content": "forked reply"}},
     ]
     _make_pi_session(tmp_path, session_id, extra_entries=extra)
-    messages = export_pi_session(_pi_agent(tmp_path), session_id)
+    messages = _pi_agent(tmp_path).messages(session_id)
     assert [m.content for m in messages] == ['hello pi', 'hi there', 'fork point', 'forked reply']
 
 
@@ -781,3 +745,174 @@ def test_cli_pi_export(tmp_path):
     assert result.exit_code == 0
     assert '"role": "user"' in result.stdout
     assert 'hello pi' in result.stdout
+
+
+# --- Goose Session Tests ---
+
+def _make_goose_db(base_path, session_id='20260101_1'):
+    """Create a goose sessions.db with the real schema and one session."""
+    db_dir = base_path / 'sessions'
+    db_dir.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_dir / 'sessions.db'))
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            session_type TEXT NOT NULL DEFAULT 'user',
+            working_dir TEXT NOT NULL,
+            created_at TIMESTAMP,
+            updated_at TIMESTAMP,
+            total_tokens INTEGER,
+            provider_name TEXT,
+            model_config_json TEXT,
+            parent_session_id TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id TEXT,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content_json TEXT NOT NULL,
+            created_timestamp INTEGER NOT NULL
+        )
+    ''')
+    return conn, cursor
+
+
+def _goose_agent(base_path):
+    return GooseAgent(base_path)
+
+
+def test_get_goose_sessions_empty(tmp_path):
+    """Test extracting sessions from a missing goose data dir."""
+    assert _goose_agent(tmp_path).sessions() == []
+
+
+def test_get_goose_sessions_with_data(tmp_path):
+    """Test extracting sessions from the goose SQLite index."""
+    conn, cursor = _make_goose_db(tmp_path)
+    cursor.execute('''
+        INSERT INTO sessions (id, name, description, working_dir, created_at,
+                              updated_at, total_tokens, provider_name,
+                              model_config_json, parent_session_id)
+        VALUES ('20260101_1', 'Monitor Bug', '', '/home/user/project',
+                '2026-01-01T12:00:00.123456789+00:00',
+                '2026-01-01T13:00:00.987654321+00:00',
+                4200, 'openrouter',
+                '{"model_name":"gpt-4"}', NULL)
+    ''')
+    cursor.execute('''
+        INSERT INTO sessions (id, name, description, working_dir, parent_session_id)
+        VALUES ('20260101_2', '', 'Delegated task', '/home/user/project', '20260101_1')
+    ''')
+    for i, (role, text) in enumerate([('user', 'hi'), ('assistant', 'hello')]):
+        cursor.execute(
+            "INSERT INTO messages (session_id, role, content_json, created_timestamp)"
+            " VALUES (?, ?, ?, ?)",
+            ('20260101_1', role, json.dumps([{"type": "text", "text": text}]), i))
+    conn.commit()
+    conn.close()
+
+    sessions = _goose_agent(tmp_path).sessions()
+    assert len(sessions) == 2
+
+    main = next(s for s in sessions if s.id == '20260101_1')
+    assert main.name == 'Monitor Bug'
+    assert main.model == 'gpt-4'
+    assert main.size == 4200
+    assert main.message_count == 2
+    assert main.path == '/home/user/project'
+    assert main.parent_id is None
+    expected_mtime = datetime.fromisoformat(
+        '2026-01-01T13:00:00.987654+00:00').astimezone().replace(tzinfo=None)
+    assert main.mtime == expected_mtime
+
+    sub = next(s for s in sessions if s.id == '20260101_2')
+    assert sub.name == 'Delegated task'
+    assert sub.parent_id == '20260101_1'
+
+
+def test_get_goose_sessions_legacy_jsonl(tmp_path):
+    """Test the legacy per-session JSONL fallback."""
+    sessions_dir = tmp_path / 'sessions'
+    sessions_dir.mkdir()
+    (sessions_dir / '20250309_181707.jsonl').write_text(
+        '{"description":"legacy chat","id":"20250309_181707",'
+        '"created_at":"2025-03-09T18:17:07+00:00",'
+        '"updated_at":"2025-03-09T18:20:00+00:00","total_tokens":900}\n'
+        '{"role":"user","created":1741537027,"content":[{"Text":{"text":"Hello"}}]}\n'
+        '{"role":"assistant","created":1741537030,"content":[{"Text":{"text":"Hi"}}]}\n'
+    )
+    (sessions_dir / 'empty.jsonl').write_text('')
+
+    sessions = _goose_agent(tmp_path).sessions()
+    assert len(sessions) == 1
+    s = sessions[0]
+    assert s.id == '20250309_181707'
+    assert s.name == 'legacy chat'
+    assert s.message_count == 2
+    assert s.size == 900
+
+
+def test_export_goose_session(tmp_path):
+    """Test exporting messages from the goose SQLite index."""
+    conn, cursor = _make_goose_db(tmp_path)
+    blocks = [
+        ('user', [{"type": "text", "text": "run this"}]),
+        ('assistant', [{"type": "text", "text": "running"},
+                       {"type": "toolRequest", "id": "t1"}]),
+        ('assistant', [{"type": "toolResponse", "id": "t1"}]),
+        ('assistant', [{"type": "text", "text": "all done"}]),
+    ]
+    for i, (role, content) in enumerate(blocks):
+        cursor.execute(
+            "INSERT INTO messages (session_id, role, content_json, created_timestamp)"
+            " VALUES (?, ?, ?, ?)",
+            ('20260101_1', role, json.dumps(content), i))
+    conn.commit()
+    conn.close()
+
+    messages = _goose_agent(tmp_path).messages('20260101_1')
+    assert [m.content for m in messages] == ['run this', 'running', 'all done']
+    assert [m.role for m in messages] == ['user', 'assistant', 'assistant']
+
+
+def test_export_goose_session_legacy(tmp_path):
+    """Test exporting from a legacy JSONL session file."""
+    sessions_dir = tmp_path / 'sessions'
+    sessions_dir.mkdir()
+    (sessions_dir / '20250309_181707.jsonl').write_text(
+        '{"description":"legacy chat"}\n'
+        '{"role":"user","created":1741537027,"content":[{"Text":{"text":"Hello"}}]}\n'
+        '{"role":"assistant","created":1741537030,"content":[{"Text":{"text":"Hi"}}]}\n'
+    )
+
+    with pytest.raises(SessionNotFound):
+        _goose_agent(tmp_path).messages('20260309_missing')
+
+    messages = _goose_agent(tmp_path).messages('20250309_181707')
+    assert [(m.role, m.content) for m in messages] == [
+        ('user', 'Hello'), ('assistant', 'Hi')]
+
+
+def test_cli_goose_lists(tmp_path, monkeypatch):
+    """Test cdir goose/ lists sessions from the SQLite index."""
+    conn, cursor = _make_goose_db(tmp_path)
+    cursor.execute(
+        "INSERT INTO sessions (id, name, working_dir) VALUES ('20260101_1', 'Monitor Bug', '/tmp')")
+    conn.commit()
+    conn.close()
+
+    original = AGENTS['goose'].base_path
+    AGENTS['goose'].base_path = tmp_path
+    try:
+        result = runner.invoke(app, ["goose/"])
+    finally:
+        AGENTS['goose'].base_path = original
+    assert result.exit_code == 0
+    assert '20260101_1' in result.stdout
+    assert 'Monitor Bug' in result.stdout

@@ -443,3 +443,47 @@ def test_strategy_custom_prompt(tmp_path):
     
     loaded = Strategy.load(path)
     assert loaded.prompt == custom
+
+
+# --- Integration tests (require Ollama proxy) ---
+
+def test_strategy_extract_via_proxy():
+    """Test LLM-based concept extraction through Ollama proxy.
+    
+    Requires localhost:11434 with gemma4:latest available.
+    Skipped if proxy is not reachable.
+    """
+    import requests
+    from ctools.strategy import Strategy
+    
+    # Check if proxy is available
+    try:
+        r = requests.get("http://localhost:11434/api/tags", timeout=3)
+        r.raise_for_status()
+    except Exception:
+        pytest.skip("Ollama proxy not reachable at localhost:11434")
+    
+    # Check if gemma4 is available
+    models = [m["name"] for m in r.json().get("models", [])]
+    if not any("gemma4" in m for m in models):
+        pytest.skip("gemma4 model not available on proxy")
+    
+    strat = Strategy(host="http://localhost:11434", model="gemma4:latest")
+    
+    messages = [
+        {"role": "system", "content": "You are a helpful coding assistant."},
+        {"role": "user", "content": "How do I sort a list in Python?"},
+        {"role": "assistant", "content": "Use sorted() or list.sort(). I prefer sorted() for immutability."},
+        {"role": "user", "content": "What about error handling?"},
+        {"role": "assistant", "content": "Always use try/except. The goal is robust error handling. Prefer specific exceptions over bare except."},
+    ]
+    
+    concepts = strat.extract(messages)
+    
+    assert isinstance(concepts, list)
+    assert len(concepts) > 0
+    
+    for c in concepts:
+        assert "type" in c
+        assert c["type"] in ("constraint", "goal", "preference", "observation", "reference")
+        assert "short" in c or "description" in c

@@ -10,23 +10,22 @@ Supports one-to-many pipelines via --pipeline:
 """
 
 import json
-import sys
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import typer
 from rich.console import Console
 
-from ctools.lib import AGENTS, Session, Agent, Message
+from ctools.agents import AgentError, REGISTRY as AGENTS
 from ctools.ccopy import (
+    _filter_concepts,
+    concept_text,
     extract_concepts_from_messages,
-    get_session_messages,
-    resolve_session,
     load_strategy,
     read_concepts_from_dir,
 )
-from ctools.filterlib import load_filter
+from ctools.cli import parse_ref
 from ctools.log import configure_logging, get_logger
 
 app = typer.Typer()
@@ -36,131 +35,36 @@ log = get_logger()
 __all__ = ['app']
 
 
-def _filter_concepts(concepts: list, filter_config: dict) -> list:
-    """Filter concepts based on filter configuration."""
+def _apply_filter(concepts: list, filter_config: Optional[str], **log_fields) -> list:
+    """Apply a filter JSON config, if one is configured and present."""
     if not filter_config:
         return concepts
-
-    prompt = filter_config.get("prompt", "")
-    types = filter_config.get("types", [])
-    exclude_types = filter_config.get("exclude_types", [])
-
-    filtered = []
-    for c in concepts:
-        ctype = c.get("type", "")
-
-        if types and ctype not in types:
-            log.debug("concept_filtered", reason="type_not_included", type=ctype, short=c.get("short", "")[:60])
-            continue
-        if exclude_types and ctype in exclude_types:
-            log.debug("concept_filtered", reason="type_excluded", type=ctype, short=c.get("short", "")[:60])
-            continue
-        if prompt:
-            description = c.get("description", "").lower()
-            short = c.get("short", "").lower()
-            if prompt.lower() not in description and prompt.lower() not in short:
-                log.debug("concept_filtered", reason="prompt_no_match", prompt=prompt, short=c.get("short", "")[:60])
-                continue
-
-        log.debug("concept_passed", type=ctype, short=c.get("short", "")[:60])
-        filtered.append(c)
-
-    return filtered
+    filter_path = Path(filter_config)
+    if not filter_path.exists():
+        return concepts
+    with open(filter_path) as f:
+        filter_data = json.load(f)
+    before = len(concepts)
+    concepts = _filter_concepts(concepts, filter_data)
+    log.info("filter_applied", config=filter_config, input_count=before,
+             output_count=len(concepts), dropped=before - len(concepts), **log_fields)
+    return concepts
 
 
-def _inject_toolcall_sqlite(agent_info, session_id: str, source_agent: str,
-                            source_session_id: str, concepts: list,
-                            tool_name: str = "context_from_source"):
-    """Inject a toolcall into a SQLite-backed session."""
-    import sqlite3
-
-    db_path = agent_info.base_path / "opencode.db"
-    if not db_path.exists():
-        log.error("database_not_found", path=str(db_path))
-        raise typer.Exit(1)
-
-    concept_lines = []
-    for c in concepts:
-        ctype = c.get("type", "preference")
-        text = c.get("short") or c.get("medium") or c.get("description", "")
-        concept_lines.append(f"- {ctype}: {text}")
-
-    tool_content = f"Concepts from {source_agent}/{source_session_id}:\n" + "\n".join(concept_lines)
-
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT id FROM message WHERE session_id = ? AND data LIKE ?",
-        (session_id, f'%"name": "{tool_name}"%'),
-    )
-    row = cursor.fetchone()
-
-    now_ms = int(time.time() * 1000)
-
-    if row:
-        msg_id = row[0]
-        data = json.dumps({"role": "tool", "name": tool_name, "content": tool_content})
-        cursor.execute("UPDATE message SET data = ?, time_updated = ? WHERE id = ?", (data, now_ms, msg_id))
-        cursor.execute("UPDATE part SET data = ? WHERE message_id = ?", (json.dumps({"type": "text", "text": tool_content}), msg_id))
-        log.debug("toolcall_updated", session=session_id, msg_id=msg_id)
-    else:
-        msg_id = f"cconnect_{now_ms}"
-        data = json.dumps({"role": "tool", "name": tool_name, "content": tool_content})
-        cursor.execute("INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)", (msg_id, session_id, now_ms, now_ms, data))
-        cursor.execute("INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)", (f"part_{msg_id}", msg_id, session_id, now_ms, now_ms, json.dumps({"type": "text", "text": tool_content})))
-        log.debug("toolcall_inserted", session=session_id, msg_id=msg_id)
-
-    conn.commit()
-    conn.close()
-
-
-def _inject_toolcall_jsonl(agent_info, session_id: str, source_agent: str,
-                           source_session_id: str, concepts: list,
-                           tool_name: str = "context_from_source"):
-    """Inject a toolcall into a JSONL-backed session."""
-    concept_lines = []
-    for c in concepts:
-        ctype = c.get("type", "preference")
-        text = c.get("short") or c.get("medium") or c.get("description", "")
-        concept_lines.append(f"- {ctype}: {text}")
-
-    tool_content = f"Concepts from {source_agent}/{source_session_id}:\n" + "\n".join(concept_lines)
-
-    for session_file in agent_info.base_path.glob(agent_info.session_pattern):
-        if session_file.stem == session_id:
-            lines = session_file.read_text().splitlines()
-            replaced = False
-            new_lines = []
-            for line in lines:
-                try:
-                    data = json.loads(line)
-                    if data.get("name") == tool_name:
-                        data["content"] = tool_content
-                        new_lines.append(json.dumps(data))
-                        replaced = True
-                    else:
-                        new_lines.append(line)
-                except json.JSONDecodeError:
-                    new_lines.append(line)
-
-            if not replaced:
-                new_lines.append(json.dumps({"role": "tool", "name": tool_name, "content": tool_content}))
-
-            session_file.write_text("\n".join(new_lines) + "\n")
-            log.debug("toolcall_written", session=session_id, file=str(session_file))
-            return
-
-    log.warning("session_file_not_found", session=session_id)
+def _toolcall_text(concepts: list, source_agent: str, source_session_id: str) -> str:
+    """Render concepts as the body of the synthetic tool message."""
+    lines = "\n".join(f"- {c.get('type', 'preference')}: {concept_text(c)}" for c in concepts)
+    return f"Concepts from {source_agent}/{source_session_id}:\n{lines}"
 
 
 def _extract_concepts(source: str, strategy: Optional[str]) -> Optional[list]:
-    """Extract concepts from a source. Returns None on error."""
-    source_clean = source.lstrip("@")
-    source_parts = source_clean.split("/", 2)
-    source_agent = source_parts[0]
-    source_session_id = source_parts[1] if len(source_parts) > 1 else None
-    source_directory = source_parts[2] if len(source_parts) > 2 else None
+    """Extract concepts from a source. Returns None on error.
+
+    A source is ``@agent/session_id`` or ``@agent/session_id/directory``;
+    the third part reads pre-extracted concepts off disk instead.
+    """
+    source_agent, _, remainder = source.lstrip("@").partition("/")
+    source_session_id, _, source_directory = remainder.partition("/")
 
     if not source_session_id:
         log.error("invalid_source", source=source, reason="missing session_id")
@@ -169,71 +73,62 @@ def _extract_concepts(source: str, strategy: Optional[str]) -> Optional[list]:
     t0 = time.monotonic()
 
     if source_directory:
-        source_path = Path(source_directory)
-        if not source_path.exists():
-            log.error("source_not_found", path=str(source_path))
+        if not Path(source_directory).exists():
+            log.error("source_not_found", path=source_directory)
             return None
-        concepts = read_concepts_from_dir(str(source_path))
+        concepts = read_concepts_from_dir(source_directory)
     else:
-        messages = get_session_messages(source_agent, source_session_id)
+        agent = AGENTS.get(source_agent)
+        if agent is None or not agent.exists():
+            log.error("source_agent_not_found", agent=source_agent)
+            return None
+        try:
+            messages = agent.raw_messages(source_session_id)
+        except AgentError as exc:
+            log.error("source_read_failed", source=source, error=str(exc))
+            return None
         if strategy:
             strat = load_strategy(strategy)
             concepts = strat.extract([{"role": m.role, "content": m.content} for m in messages])
         else:
             concepts = extract_concepts_from_messages(messages)
 
-    elapsed = time.monotonic() - t0
     types = {}
     for c in concepts:
         t = c.get("type", "unknown")
         types[t] = types.get(t, 0) + 1
 
-    log.info("concepts_extracted", source=source, count=len(concepts), types=types, elapsed_ms=round(elapsed * 1000))
+    log.info("concepts_extracted", source=source, count=len(concepts), types=types,
+             elapsed_ms=round((time.monotonic() - t0) * 1000))
     return concepts
 
 
 def _inject_to_dest(destination: str, concepts: list, source: str,
                     tool_name: str) -> bool:
     """Inject concepts into a destination. Returns True on success."""
-    dest_clean = destination.lstrip("@")
-    dest_parts = dest_clean.split("/")
-    dest_agent = dest_parts[0]
-    dest_session_id = dest_parts[1] if len(dest_parts) > 1 else None
-
+    dest_agent_name, dest_session_id = parse_ref(destination)
     if not dest_session_id:
         log.error("invalid_destination", destination=destination, reason="missing session_id")
         return False
 
-    source_clean = source.lstrip("@")
-    source_parts = source_clean.split("/")
-    source_agent = source_parts[0]
-    source_session_id = source_parts[1] if len(source_parts) > 1 else "unknown"
+    source_agent, source_session_id = parse_ref(source)
+    source_session_id = source_session_id or "unknown"
 
-    dest_agent_info = AGENTS.get(dest_agent)
-    if not dest_agent_info or not dest_agent_info.base_path.exists():
-        log.error("destination_agent_not_found", agent=dest_agent)
-        return False
-
-    if dest_agent == 'pi':
-        log.error("unsupported_agent", agent=dest_agent, reason="injection not supported")
+    agent = AGENTS.get(dest_agent_name)
+    if agent is None or not agent.exists():
+        log.error("destination_agent_not_found", agent=dest_agent_name)
         return False
 
     t0 = time.monotonic()
-
-    if dest_agent_info.storage_format == "sqlite":
-        _inject_toolcall_sqlite(dest_agent_info, dest_session_id,
-                                source_agent, source_session_id,
-                                concepts, tool_name)
-    elif dest_agent_info.storage_format == "jsonl":
-        _inject_toolcall_jsonl(dest_agent_info, dest_session_id,
-                               source_agent, source_session_id,
-                               concepts, tool_name)
-    else:
-        log.error("unsupported_format", agent=dest_agent, format=dest_agent_info.storage_format)
+    content = _toolcall_text(concepts, source_agent, source_session_id)
+    try:
+        agent.inject_toolcall(dest_session_id, content, tool_name)
+    except AgentError as exc:
+        log.error("inject_failed", destination=destination, error=str(exc))
         return False
 
-    elapsed = time.monotonic() - t0
-    log.info("inject_complete", destination=destination, count=len(concepts), elapsed_ms=round(elapsed * 1000))
+    log.info("inject_complete", destination=destination, count=len(concepts),
+             elapsed_ms=round((time.monotonic() - t0) * 1000))
     return True
 
 
@@ -248,14 +143,7 @@ def _run_cycle(source: str, destination: str, strategy: Optional[str],
         log.warning("no_concepts", source=source)
         return False
 
-    if filter_config:
-        filter_path = Path(filter_config)
-        if filter_path.exists():
-            with open(filter_path, 'r') as f:
-                filter_data = json.load(f)
-            before = len(concepts)
-            concepts = _filter_concepts(concepts, filter_data)
-            log.info("filter_applied", config=filter_config, input_count=before, output_count=len(concepts), dropped=before - len(concepts))
+    concepts = _apply_filter(concepts, filter_config)
 
     if not concepts:
         log.warning("all_concepts_filtered", source=source, destination=destination)
@@ -287,15 +175,8 @@ def _run_pipeline_cycle(pipeline: dict) -> bool:
         session = dest["session"]
         dest_concepts = list(concepts)
 
-        dest_filter = dest.get("filter")
-        if dest_filter:
-            filter_path = Path(dest_filter)
-            if filter_path.exists():
-                with open(filter_path, 'r') as f:
-                    filter_data = json.load(f)
-                before = len(dest_concepts)
-                dest_concepts = _filter_concepts(dest_concepts, filter_data)
-                log.info("filter_applied", destination=session, config=dest_filter, input_count=before, output_count=len(dest_concepts), dropped=before - len(dest_concepts))
+        dest_concepts = _apply_filter(dest_concepts, dest.get("filter"),
+                                      destination=session)
 
         dest_tool_name = dest.get("tool_name", tool_name)
 

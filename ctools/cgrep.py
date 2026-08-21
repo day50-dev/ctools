@@ -10,257 +10,89 @@ Usage:
     cgrep -c "pattern" "opencode/*" "claude-code/*"
 """
 
-import re
-import sys
-import json
-import sqlite3
 import fnmatch
+import re
+from typing import List, Tuple
+
 import typer
-from pathlib import Path
-from typing import List, Optional, Tuple, Dict
 from rich.console import Console
 
-from ctools.lib import (
-    Match, Agent, AGENTS, Message,
-    get_formatter, JsonFormatter, XmlFormatter, MarkdownFormatter
-)
+from ctools.agents import Agent, AgentError, Match, REGISTRY as AGENTS
+from ctools.lib import get_formatter
 
-# Re-export for backward compatibility
-__all__ = ['app', 'parse_path_pattern', 'get_sessions_for_pattern', 'grep_session', 
-           'get_opencode_session_content', 'get_claude_code_session_content', 'get_claude_session_content']
+__all__ = ['app', 'parse_path_pattern', 'sessions_for_pattern', 'grep_session']
 
 app = typer.Typer()
 console = Console()
 
 
-def get_opencode_session_content(agent_path: Path, session_id: str) -> List[Tuple[int, str]]:
-    """Extract message content from opencode session, returns (line_num, text) pairs."""
-    db_path = agent_path / 'opencode.db'
-    if not db_path.exists():
-        return []
-    
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-    
-    # Get messages for this session
-    cursor.execute('''
-        SELECT m.id, m.data
-        FROM message m
-        WHERE m.session_id = ?
-        ORDER BY m.time_created
-    ''', (session_id,))
-    
-    lines = []
-    line_num = 1
-    for msg_id, msg_data in cursor.fetchall():
-        data = json.loads(msg_data)
-        role = data.get('role', '')
-        
-        # Get parts for this message
-        cursor.execute('''
-            SELECT data FROM part
-            WHERE message_id = ?
-            ORDER BY time_created
-        ''', (msg_id,))
-        
-        for (part_data,) in cursor.fetchall():
-            part = json.loads(part_data)
-            if part.get('type') == 'text':
-                text = part.get('text', '')
-                if text:
-                    for line in text.split('\n'):
-                        if line.strip():
-                            lines.append((line_num, f"{role}: {line}"))
-                            line_num += 1
-    
-    conn.close()
-    return lines
+def parse_path_pattern(pattern: str) -> List[Tuple[Agent, str]]:
+    """Parse patterns like 'opencode/*' or 'opencode/ses_abc123'.
 
-
-def get_claude_code_session_content(agent_path: Path, session_id: str) -> List[Tuple[int, str]]:
-    """Extract message content from claude-code session."""
-    for session_file in agent_path.glob('projects/**/*.jsonl'):
-        if session_file.stem == session_id:
-            lines = []
-            line_num = 1
-            with open(session_file, 'r') as f:
-                for line in f:
-                    try:
-                        data = json.loads(line)
-                        msg_type = data.get('type', '')
-                        content = ''
-                        if msg_type == 'human':
-                            content = data.get('message', {}).get('content', '')
-                            role = 'user'
-                        elif msg_type == 'assistant':
-                            content = data.get('message', {}).get('content', '')
-                            role = 'assistant'
-                        
-                        if content:
-                            for text_line in content.split('\n'):
-                                if text_line.strip():
-                                    lines.append((line_num, f"{role}: {text_line}"))
-                                    line_num += 1
-                    except json.JSONDecodeError:
-                        continue
-            return lines
-    return []
-
-
-def get_claude_session_content(agent_path: Path, session_id: str) -> List[Tuple[int, str]]:
-    """Extract message content from claude-desktop session."""
-    for session_file in agent_path.glob('local-agent-mode-sessions/**/*.json'):
-        if session_file.stem == session_id:
-            try:
-                with open(session_file, 'r') as f:
-                    data = json.load(f)
-                
-                messages = data if isinstance(data, list) else data.get('messages', [])
-                lines = []
-                line_num = 1
-                for msg in messages:
-                    role = msg.get('role', '')
-                    content = msg.get('content', '')
-                    if isinstance(content, str) and content:
-                        for text_line in content.split('\n'):
-                            if text_line.strip():
-                                lines.append((line_num, f"{role}: {text_line}"))
-                                line_num += 1
-                return lines
-            except (json.JSONDecodeError, KeyError):
-                pass
-    return []
-
-
-def get_pi_session_content(agent_path: Path, session_id: str) -> List[Tuple[int, str]]:
-    """Extract user/assistant message content from a pi session file."""
-    from ctools.cdir import _find_pi_session_file, _pi_message_text
-
-    session_file = _find_pi_session_file(agent_path, session_id)
-    if not session_file:
-        return []
-
-    lines = []
-    line_num = 1
-    try:
-        with open(session_file, 'r') as f:
-            for line in f:
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if entry.get('type') != 'message':
-                    continue
-                msg = entry.get('message') or {}
-                role = msg.get('role')
-                if role not in ('user', 'assistant'):
-                    continue
-                content = _pi_message_text(msg)
-                for text_line in content.split('\n'):
-                    if text_line.strip():
-                        lines.append((line_num, f"{role}: {text_line}"))
-                        line_num += 1
-    except OSError:
-        return []
-    return lines
-
-
-CONTENT_EXTRACTORS = {
-    'opencode': get_opencode_session_content,
-    'claude-code': get_claude_code_session_content,
-    'claude': get_claude_session_content,
-    'pi': get_pi_session_content,
-}
-
-
-def parse_path_pattern(pattern: str) -> List[Tuple[str, Optional[str]]]:
-    """Parse path pattern like 'opencode/*' or 'opencode/ses_abc123'.
-    
-    Returns list of (agent_name, session_id_or_none) tuples.
+    Returns (agent, session_glob) pairs. Unknown agents are reported and
+    skipped rather than aborting the whole search.
     """
     results = []
-    
-    # Handle multiple patterns
     for pat in pattern.split():
-        pat = pat.strip('/')
-        parts = pat.split('/', 1)
-        agent_name = parts[0]
-        session_pat = parts[1] if len(parts) > 1 else '*'
-        
-        if agent_name not in AGENTS:
+        agent_name, _, session_pat = pat.strip('/').partition('/')
+        agent = AGENTS.get(agent_name)
+        if agent is None:
             console.print(f"[red]Unknown agent: {agent_name}[/red]")
             continue
-        
-        results.append((agent_name, session_pat))
-    
+        results.append((agent, session_pat or '*'))
     return results
 
 
-def get_sessions_for_pattern(agent_name: str, session_pat: str) -> List[str]:
-    """Get session IDs matching a pattern for an agent."""
-    from ctools.cdir import SESSION_EXTRACTORS
-    
-    agent_info = AGENTS.get(agent_name)
-    if not agent_info or not agent_info.base_path.exists():
+def sessions_for_pattern(agent: Agent, session_pat: str) -> List[str]:
+    """Session IDs of `agent` matching a glob."""
+    if not agent.exists():
         return []
-    
-    extractor = SESSION_EXTRACTORS.get(agent_name)
-    if not extractor:
+    try:
+        sessions = agent.sessions()
+    except AgentError:
         return []
-    
-    sessions = extractor(agent_info)
-    matched = []
-    for s in sessions:
-        if fnmatch.fnmatch(s.id, session_pat):
-            matched.append(s.id)
-    
-    return matched
+    return [s.id for s in sessions if fnmatch.fnmatch(s.id, session_pat)]
 
 
-def grep_session(agent_name: str, session_id: str, pattern: re.Pattern,
+def grep_session(agent: Agent, session_id: str, pattern: re.Pattern,
                  invert: bool = False, before: int = 0, after: int = 0) -> List[Match]:
-    """Search a session for pattern matches."""
-    agent_info = AGENTS.get(agent_name)
-    if not agent_info or not agent_info.base_path.exists():
+    """Search one session for pattern matches."""
+    if not agent.exists():
         return []
-    
-    extractor = CONTENT_EXTRACTORS.get(agent_name)
-    if not extractor:
+    try:
+        lines = agent.lines(session_id)
+    except AgentError:
         return []
-    
-    lines = extractor(agent_info.base_path, session_id)
-    if not lines:
-        return []
-    
+
     matches = []
     for i, (line_num, line) in enumerate(lines):
-        found = bool(pattern.search(line))
-        if invert:
-            found = not found
-        
-        if found:
-            # Get context lines
-            ctx_before = []
-            ctx_after = []
-            
-            if before > 0:
-                start = max(0, i - before)
-                ctx_before = [lines[j][1] for j in range(start, i)]
-            
-            if after > 0:
-                end = min(len(lines), i + after + 1)
-                ctx_after = [lines[j][1] for j in range(i + 1, end)]
-            
-            matches.append(Match(
-                session_id=session_id,
-                agent=agent_name,
-                line_num=line_num,
-                line=line,
-                context_before=ctx_before if before > 0 else None,
-                context_after=ctx_after if after > 0 else None
-            ))
-    
+        if bool(pattern.search(line)) == invert:
+            continue
+        matches.append(Match(
+            session_id=session_id,
+            agent=agent.name,
+            line_num=line_num,
+            line=line,
+            context_before=[l for _, l in lines[max(0, i - before):i]] if before else None,
+            context_after=[l for _, l in lines[i + 1:i + 1 + after]] if after else None,
+        ))
     return matches
+
+
+def _print_matches(matches: List[Match]) -> None:
+    """grep-style output: matches grouped by session, separated by '--'."""
+    current_session = None
+    for m in matches:
+        path = f"{m.agent}/{m.session_id}"
+        if path != current_session:
+            if current_session is not None:
+                print("--")
+            current_session = path
+        for line in m.context_before or ():
+            print(f"  {line}")
+        print(f"{m.line_num}:{m.line}")
+        for line in m.context_after or ():
+            print(f"  {line}")
 
 
 @app.command()
@@ -279,29 +111,25 @@ def main(
 ):
     """
     Search through agent session content.
-    
+
     Patterns are PCRE. Paths specify agents and optionally session IDs.
-    
+
     Examples:
         cgrep "error" "opencode/*"
         cgrep -l "TODO" "opencode/*" "claude-code/*"
         cgrep -c "import" "opencode/*"
         cgrep -B2 -A2 "FIXME" "opencode/ses_abc123"
     """
-    # Build regex
     flags = re.IGNORECASE if ignore_case else 0
     try:
         compiled = re.compile(pattern, flags)
     except re.error as e:
         console.print(f"[red]Invalid pattern: {e}[/red]")
         raise typer.Exit(1)
-    
-    # Apply -C to both before and after
+
     if context > 0:
-        before = context
-        after = context
-    
-    # Get formatter if specified
+        before = after = context
+
     formatter = None
     if fmt != "default":
         try:
@@ -309,79 +137,44 @@ def main(
         except ValueError as e:
             console.print(f"[red]{e}[/red]")
             raise typer.Exit(1)
-    
-    # Parse path patterns
-    path_list = parse_path_pattern(' '.join(paths))
-    
+
     all_matches = []
-    sessions_with_matches = set()
-    sessions_without_matches = set()
-    session_counts = {}
-    
-    for agent_name, session_pat in path_list:
-        session_ids = get_sessions_for_pattern(agent_name, session_pat)
-        
-        for session_id in session_ids:
-            matches = grep_session(agent_name, session_id, compiled,
+    with_matches = set()
+    without_matches = set()
+    counts = {}
+
+    for agent, session_pat in parse_path_pattern(' '.join(paths)):
+        for session_id in sessions_for_pattern(agent, session_pat):
+            matches = grep_session(agent, session_id, compiled,
                                    invert=invert, before=before, after=after)
-            
+            path = f"{agent.name}/{session_id}"
             if matches:
-                sessions_with_matches.add(f"{agent_name}/{session_id}")
-                session_counts[f"{agent_name}/{session_id}"] = len(matches)
+                with_matches.add(path)
+                counts[path] = len(matches)
                 all_matches.extend(matches)
             else:
-                sessions_without_matches.add(f"{agent_name}/{session_id}")
-    
-    # Output based on flags
-    if list_files:
-        files = sorted(sessions_with_matches)
+                without_matches.add(path)
+
+    if list_files or list_files_neg:
+        found = list_files
+        files = sorted(with_matches if found else without_matches)
         if formatter:
-            print(formatter.format_match_files(files, has_matches=True))
-        else:
-            for path in files:
-                print(path)
-    elif list_files_neg:
-        files = sorted(sessions_without_matches)
-        if formatter:
-            print(formatter.format_match_files(files, has_matches=False))
+            print(formatter.format_match_files(files, has_matches=found))
         else:
             for path in files:
                 print(path)
     elif count:
         if formatter:
-            print(formatter.format_match_counts(session_counts))
+            print(formatter.format_match_counts(counts))
         else:
-            for path, cnt in sorted(session_counts.items()):
+            for path, cnt in sorted(counts.items()):
                 print(f"{path}:{cnt}")
+    elif formatter:
+        print(formatter.format_matches(all_matches))
+    elif all_matches:
+        _print_matches(all_matches)
     else:
-        # Print matches with context
-        if formatter:
-            print(formatter.format_matches(all_matches))
-        else:
-            current_session = None
-            for m in all_matches:
-                path = f"{m.agent}/{m.session_id}"
-                
-                if path != current_session:
-                    if current_session is not None:
-                        print("--")
-                    current_session = path
-                
-                # Print context before
-                if m.context_before:
-                    for line in m.context_before:
-                        print(f"  {line}")
-                
-                # Print the matching line
-                print(f"{m.line_num}:{m.line}")
-                
-                # Print context after
-                if m.context_after:
-                    for line in m.context_after:
-                        print(f"  {line}")
-            
-            if not all_matches:
-                console.print("[dim]No matches found[/dim]")
+        console.print("[dim]No matches found[/dim]")
 
 
 if __name__ == "__main__":

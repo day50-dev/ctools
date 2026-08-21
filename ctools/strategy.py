@@ -153,7 +153,7 @@ class Strategy:
 
 DEFAULT_STRATEGY = Strategy(
     host="http://localhost:11434",
-    model="qwen2.5:3b",
+    model="gemma4:latest",
     prompt=DEFAULT_PROMPT,
 )
 

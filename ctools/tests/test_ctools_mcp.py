@@ -328,7 +328,7 @@ def test_copy_concepts_source_not_found(patched_opencode):
 
 def test_copy_concepts_invalid_session_ref():
     result = copy_concepts("@bad_agent/ses_123", "out.json")
-    assert "Invalid session reference" in result
+    assert "bad_agent" in result
 
 
 def test_copy_concepts_invalid_dest_session_ref(patched_opencode, tmp_path):
@@ -336,4 +336,4 @@ def test_copy_concepts_invalid_dest_session_ref(patched_opencode, tmp_path):
     src_file = tmp_path / "concepts.json"
     src_file.write_text(json.dumps(concepts))
     result = copy_concepts(str(src_file), "@bad_agent/ses_123")
-    assert "Invalid session reference" in result
+    assert "bad_agent" in result
