@@ -73,15 +73,15 @@ Output shows Found/Not Found with actual paths:
 
 ```
 Found:
-  AGENT         DESCRIPTION                PATH
-  Claude Code   Claude Code CLI            ~/.claude/projects/
-  Opencode      Opencode CLI               ~/.local/share/opencode/opencode.db
+  AGENT         DESCRIPTION                 PATH
+  claude-code   Claude Code CLI             ~/.claude/projects/
+  opencode      Opencode CLI                ~/.local/share/opencode/opencode.db
 
 Not Found:
-  Claude        Claude Desktop (Anthropic)  ~/.config/Claude/conversations/
-  Codex         OpenAI Codex CLI            ~/.codex/sessions/
-  Pi            Pi Coding Agent            ~/.pi/agent/sessions/
-  Goose         Goose AI agent              ~/.local/share/goose/sessions/sessions.db
+  claude        Claude Desktop (Anthropic)  ~/.config/Claude/conversations/
+  codex         OpenAI Codex CLI            ~/.codex/sessions/
+  pi            Pi Coding Agent             ~/.pi/agent/sessions/
+  goose         Goose AI agent              ~/.local/share/goose/sessions/sessions.db
 ```
 
 That alone should be convincing. But there's more.

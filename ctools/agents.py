@@ -1308,9 +1308,28 @@ AGENT_CLASSES = (
 REGISTRY: Dict[str, Agent] = {cls.name: cls() for cls in AGENT_CLASSES}
 
 
+def normalize_name(name: str) -> str:
+    """Fold a human spelling of an agent name onto its registry key.
+
+    Display names carry spaces and capitals ("Claude Code") that make poor
+    command-line arguments, so anything that differs from the key only by
+    case or by space/underscore separators resolves to the same agent.
+    """
+    return re.sub(r'[\s_]+', '-', name.strip()).lower()
+
+
+_ALIASES: Dict[str, str] = {}
+for _agent in REGISTRY.values():
+    for _spelling in (_agent.name, _agent.display_name or _agent.name):
+        _ALIASES.setdefault(normalize_name(_spelling), _agent.name)
+
+
 def get_agent(name: str) -> Optional[Agent]:
-    """Look up an agent by name."""
-    return REGISTRY.get(name)
+    """Look up an agent by registry key, display name, or a spelling variant."""
+    if name in REGISTRY:
+        return REGISTRY[name]
+    key = _ALIASES.get(normalize_name(name))
+    return REGISTRY.get(key) if key else None
 
 
 def agent_names() -> List[str]:

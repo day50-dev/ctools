@@ -250,6 +250,14 @@ def test_cli_list_agents():
     assert "Codex" in result.stdout
 
 
+def test_cli_list_agents_shows_addressable_names():
+    """The AGENT column must be copy-pasteable back into `cdir <agent>/`."""
+    result = runner.invoke(app, [])
+    assert result.exit_code == 0
+    assert "claude-code" in result.stdout
+    assert "Claude Code  " not in result.stdout
+
+
 def test_cli_no_args_shows_agents():
     """Test that no arguments shows agents."""
     result = runner.invoke(app, [])

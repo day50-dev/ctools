@@ -17,7 +17,7 @@ from typing import List, Tuple
 import typer
 from rich.console import Console
 
-from ctools.agents import Agent, AgentError, Match, REGISTRY as AGENTS
+from ctools.agents import Agent, AgentError, Match, REGISTRY as AGENTS, get_agent
 from ctools.lib import get_formatter
 
 __all__ = ['app', 'parse_path_pattern', 'sessions_for_pattern', 'grep_session']
@@ -35,7 +35,7 @@ def parse_path_pattern(pattern: str) -> List[Tuple[Agent, str]]:
     results = []
     for pat in pattern.split():
         agent_name, _, session_pat = pat.strip('/').partition('/')
-        agent = AGENTS.get(agent_name)
+        agent = get_agent(agent_name)
         if agent is None:
             console.print(f"[red]Unknown agent: {agent_name}[/red]")
             continue

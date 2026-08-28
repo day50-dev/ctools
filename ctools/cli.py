@@ -13,7 +13,7 @@ from typing import Optional, Tuple
 import typer
 from rich.console import Console
 
-from ctools.agents import Agent, AgentError, REGISTRY
+from ctools.agents import Agent, AgentError, REGISTRY, get_agent
 
 console = Console()
 
@@ -30,7 +30,7 @@ def parse_ref(ref: str) -> Tuple[str, Optional[str]]:
 
 def require_agent(name: str) -> Agent:
     """Look up an agent by name, or exit with a usage message."""
-    agent = REGISTRY.get(name)
+    agent = get_agent(name)
     if agent is None:
         console.print(f"[red]Unknown agent: {name}[/red]")
         console.print(f"[dim]Available agents: {', '.join(REGISTRY)}[/dim]")

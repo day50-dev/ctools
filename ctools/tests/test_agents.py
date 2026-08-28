@@ -8,7 +8,8 @@ import pytest
 from ctools.agents import (
     AGENT_CLASSES, REGISTRY, Agent, ClaudeCodeAgent, ClaudeDesktopAgent,
     CodexAgent, GooseAgent, OpencodeAgent, PiAgent, SessionNotFound,
-    UnsupportedOperation, epoch_ms, file_metadata, parse_timestamp, text_of,
+    UnsupportedOperation, epoch_ms, file_metadata, get_agent, normalize_name,
+    parse_timestamp, text_of,
 )
 
 
@@ -50,6 +51,22 @@ def test_source_points_at_what_is_actually_read(tmp_path):
 
 def test_label_prefers_display_name():
     assert REGISTRY['claude-code'].label == 'Claude Code'
+
+
+def test_registry_keys_are_shell_safe():
+    """Keys are what users type as `cdir <agent>/`, so no quoting required."""
+    for name in REGISTRY:
+        assert name == normalize_name(name)
+        assert ' ' not in name
+
+
+def test_get_agent_accepts_display_name_spellings():
+    for spelling in ('claude-code', 'Claude Code', 'CLAUDE_CODE', ' claude code '):
+        assert get_agent(spelling) is REGISTRY['claude-code']
+
+
+def test_get_agent_returns_none_for_unknown():
+    assert get_agent('nonesuch') is None
 
 
 # --- text_of ---

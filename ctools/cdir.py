@@ -220,7 +220,9 @@ def _list_agents(formatter) -> None:
         } for agent in AGENTS.values()], indent=2))
         return
 
-    rows = [(agent.label, agent.description, str(agent.base_path),
+    # The registry key, not the display name: this column is what the user
+    # types back at us as `cdir <agent>/`, so it has to be shell-safe.
+    rows = [(agent.name, agent.description, str(agent.base_path),
              agent.files_read or agent.storage_format, agent.exists())
             for agent in AGENTS.values()]
     found = [r for r in rows if r[4]]

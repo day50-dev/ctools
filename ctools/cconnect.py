@@ -17,7 +17,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from ctools.agents import AgentError, REGISTRY as AGENTS
+from ctools.agents import AgentError, REGISTRY as AGENTS, get_agent
 from ctools.ccopy import (
     _filter_concepts,
     concept_text,
@@ -78,7 +78,7 @@ def _extract_concepts(source: str, strategy: Optional[str]) -> Optional[list]:
             return None
         concepts = read_concepts_from_dir(source_directory)
     else:
-        agent = AGENTS.get(source_agent)
+        agent = get_agent(source_agent)
         if agent is None or not agent.exists():
             log.error("source_agent_not_found", agent=source_agent)
             return None
@@ -114,7 +114,7 @@ def _inject_to_dest(destination: str, concepts: list, source: str,
     source_agent, source_session_id = parse_ref(source)
     source_session_id = source_session_id or "unknown"
 
-    agent = AGENTS.get(dest_agent_name)
+    agent = get_agent(dest_agent_name)
     if agent is None or not agent.exists():
         log.error("destination_agent_not_found", agent=dest_agent_name)
         return False

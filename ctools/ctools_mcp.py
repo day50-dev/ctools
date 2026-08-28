@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple
 
 from mcp.server.fastmcp import FastMCP
 
-from ctools.agents import Agent, AgentError, REGISTRY as AGENTS
+from ctools.agents import Agent, AgentError, REGISTRY as AGENTS, get_agent
 from ctools.ccopy import concepts_to_text, extract_concepts_from_messages
 
 mcp = FastMCP("ctools")
@@ -21,7 +21,7 @@ mcp = FastMCP("ctools")
 
 def _resolve(agent_name: str) -> Tuple[Optional[Agent], Optional[str]]:
     """Look up an installed agent. Returns (agent, error_message)."""
-    agent = AGENTS.get(agent_name)
+    agent = get_agent(agent_name)
     if agent is None:
         return None, f"Unknown agent: {agent_name}. Available: {', '.join(AGENTS)}"
     if not agent.exists():
@@ -125,9 +125,10 @@ def search_sessions(
     else:
         targets = []
         for name in (a.strip() for a in agents.split(",")):
-            if name not in AGENTS:
+            agent = get_agent(name)
+            if agent is None:
                 return f"Unknown agent: {name}. Available: {', '.join(AGENTS)}"
-            targets.append(AGENTS[name])
+            targets.append(agent)
 
     matches = []
     for agent in targets:

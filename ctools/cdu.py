@@ -28,7 +28,7 @@ except ImportError:
     def count_tokens(text: str) -> int:
         return len(text) // 4
 
-from ctools.agents import Agent, AgentError, REGISTRY as AGENTS
+from ctools.agents import Agent, AgentError, REGISTRY as AGENTS, get_agent
 from ctools.cli import parse_ref, require_installed
 
 app = typer.Typer()
@@ -43,7 +43,7 @@ def get_session_tokens(agent_name: str, session_id: str) -> Dict[str, int]:
     Prefers the counts an agent recorded itself; otherwise estimates from
     message text and flags the result as estimated.
     """
-    agent = AGENTS.get(agent_name)
+    agent = get_agent(agent_name)
     if agent is None or not agent.exists():
         return {}
 
