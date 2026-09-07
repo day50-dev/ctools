@@ -38,7 +38,7 @@ FIELDS = {
     'size': 'Size: token count for opencode, bytes for file-based agents',
     'msgs': 'Number of messages in the session',
     'model': 'Model used for the session',
-    'path': 'Source path where the session is stored',
+    'path': 'Session working directory (where the conversation\'s code lives)',
     'parent': 'Parent session ID (present on subagent sessions)',
 }
 

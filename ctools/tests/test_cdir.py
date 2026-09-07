@@ -48,7 +48,8 @@ def test_get_claude_code_sessions_with_data(tmp_path):
     # Create a sample JSONL session file
     session_file = project_dir / 'session-abc123.jsonl'
     session_file.write_text(json.dumps({
-        "type": "human",
+        "type": "user",
+        "cwd": "/home/user/src/project",
         "message": {"content": "What is Python?"}
     }) + '\n' + json.dumps({
         "type": "assistant",
@@ -61,6 +62,21 @@ def test_get_claude_code_sessions_with_data(tmp_path):
     assert len(sessions) == 1
     assert sessions[0].name == "What is Python?"
     assert sessions[0].message_count == 2
+    assert sessions[0].path == "/home/user/src/project"  # session working directory
+
+
+def test_get_claude_code_sessions_path_falls_back_to_file(tmp_path):
+    """Test that a transcript without a cwd reports its storage path."""
+    project_dir = tmp_path / 'projects' / 'my-project'
+    project_dir.mkdir(parents=True)
+    session_file = project_dir / 'session-abc123.jsonl'
+    session_file.write_text(json.dumps({
+        "type": "human",
+        "message": {"content": "What is Python?"}
+    }) + '\n')
+
+    sessions = ClaudeCodeAgent(tmp_path).sessions()
+    assert len(sessions) == 1
     assert sessions[0].path == str(session_file)
 
 

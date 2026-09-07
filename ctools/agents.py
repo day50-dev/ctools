@@ -641,10 +641,13 @@ class ClaudeCodeAgent(JsonlAgent):
             title = None
             first_user = None
             model = None
+            cwd = None
             line_count = 0
             for entry in read_json_lines(path):
                 line_count += 1
                 etype = entry.get('type')
+                if cwd is None:
+                    cwd = entry.get('cwd')
                 if etype == 'ai-title':
                     title = entry.get('aiTitle') or title
                 elif etype in ('user', 'human') and first_user is None:
@@ -662,7 +665,7 @@ class ClaudeCodeAgent(JsonlAgent):
                 ctime=ctime,
                 mtime=mtime,
                 size=size,
-                path=str(path),
+                path=cwd or str(path),
                 model=model,
                 message_count=line_count,
             ))
