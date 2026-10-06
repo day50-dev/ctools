@@ -25,7 +25,7 @@ from ctools.ccopy import (
     load_strategy,
     read_concepts_from_dir,
 )
-from ctools.cli import parse_ref
+from ctools.cli import parse_ref, version_option
 from ctools.log import configure_logging, get_logger
 
 app = typer.Typer()
@@ -201,6 +201,7 @@ def main(
     poll_interval: float = typer.Option(5.0, "--poll-interval", "-p", help="Poll interval in seconds"),
     pipeline: Optional[str] = typer.Option(None, "--pipeline", "-P", help="Pipeline JSON config for one-to-many"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    version: bool = version_option("cconnect"),
 ):
     """
     Connect context windows via live concept pipelines.

@@ -177,3 +177,11 @@ def test_cli_json_agent_sessions(patched_opencode):
     data = json.loads(result.stdout)
     assert len(data) == 1
     assert data[0]["tokens"] == 1500
+
+
+def test_cli_version():
+    """--version prints the GNU-style version line and exits 0."""
+    from ctools import __version__
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert result.stdout == f"cdu (ctxttools) {__version__}\n"

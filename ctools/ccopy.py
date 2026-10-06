@@ -26,7 +26,7 @@ import typer
 from rich.console import Console
 
 from ctools.agents import Agent, Message
-from ctools.cli import reporting, require_session
+from ctools.cli import reporting, require_session, version_option
 from ctools.log import configure_logging, get_logger
 from ctools.strategy import Strategy, DEFAULT_STRATEGY
 
@@ -298,6 +298,7 @@ def main(
     strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for LLM-based extraction"),
     filter_config: Optional[str] = typer.Option(None, "--filter", "-F", help="Filter JSON file"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    version: bool = version_option("ccopy"),
 ):
     """
     Copy concepts between sessions and concept directories.

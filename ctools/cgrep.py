@@ -25,6 +25,7 @@ import typer
 from rich.console import Console
 
 from ctools.agents import Agent, AgentError, Match, get_agent
+from ctools.cli import version_option
 from ctools.lib import get_formatter
 
 __all__ = ['app', 'parse_path_pattern', 'sessions_for_pattern', 'grep_session',
@@ -202,6 +203,7 @@ def main(
     context: int = typer.Option(0, "--context", "-C", help="Show N lines before and after match"),
     ignore_case: bool = typer.Option(False, "--ignore-case", "-i", help="Ignore case"),
     fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md, or default"),
+    version: bool = version_option("cgrep"),
 ):
     """
     Search through agent session content.

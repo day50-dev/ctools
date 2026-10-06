@@ -24,7 +24,7 @@ import typer
 from rich.console import Console
 
 from ctools.agents import Agent, Session, REGISTRY as AGENTS
-from ctools.cli import parse_ref, reporting, require_installed
+from ctools.cli import parse_ref, reporting, require_installed, version_option
 from ctools.lib import format_datetime, format_size, get_formatter
 
 __all__ = ['app']
@@ -359,6 +359,7 @@ def main(
     color: str = typer.Option("auto", "--color", help="Colorize output: never, auto, or always"),
     fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md, or default"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Select output fields (comma-separated). Use 'help' to list available fields."),
+    version: bool = version_option("cdir"),
 ):
     """
     List agents and their conversation sessions.

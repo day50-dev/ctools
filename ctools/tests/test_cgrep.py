@@ -797,3 +797,11 @@ def test_cli_search_pi(tmp_path):
         assert 'user: what is this thing' in result.stdout
     finally:
         AGENTS['pi'].base_path = original
+
+
+def test_cli_version():
+    """--version prints the GNU-style version line and exits 0."""
+    from ctools import __version__
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert result.stdout == f"cgrep (ctxttools) {__version__}\n"

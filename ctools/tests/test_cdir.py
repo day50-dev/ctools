@@ -1152,3 +1152,11 @@ def test_cli_goose_lists(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert '20260101_1' in result.stdout
     assert 'Monitor Bug' in result.stdout
+
+
+def test_cli_version():
+    """--version prints the GNU-style version line and exits 0."""
+    from ctools import __version__
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert result.stdout == f"cdir (ctxttools) {__version__}\n"

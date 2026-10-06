@@ -29,7 +29,7 @@ except ImportError:
         return len(text) // 4
 
 from ctools.agents import Agent, AgentError, REGISTRY as AGENTS, get_agent
-from ctools.cli import parse_ref, require_installed
+from ctools.cli import parse_ref, require_installed, version_option
 
 app = typer.Typer()
 console = Console()
@@ -85,6 +85,7 @@ def format_tokens(tokens: int) -> str:
 def main(
     path: Optional[str] = typer.Argument(None, help="Agent or agent/session_id"),
     json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
+    version: bool = version_option("cdu"),
 ):
     """
     Show token length of conversations.

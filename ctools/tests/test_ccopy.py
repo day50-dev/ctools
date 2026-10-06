@@ -487,3 +487,11 @@ def test_strategy_extract_via_proxy():
         assert "type" in c
         assert c["type"] in ("constraint", "goal", "preference", "observation", "reference")
         assert "short" in c or "description" in c
+
+
+def test_cli_version():
+    """--version wins over required arguments, GNU style."""
+    from ctools import __version__
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert result.stdout == f"ccopy (ctxttools) {__version__}\n"

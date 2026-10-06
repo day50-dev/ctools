@@ -3,9 +3,24 @@
 <a href=https://pypi.org/project/ctxttools><img src=https://badge.fury.io/py/ctxttools.svg/></a>
 </p>
 
-Memory tools for LLM conversations. Extracted from [Gab n' Go](https://github.com/day50-dev/gabngo). Named after [GNU mtools](https://www.gnu.org/software/mtools/), which does the same thing for DOS floppies because your context window is about the size of a DOS-floppy. Maybe we can use that for inspiration.
+Memory tools for LLM conversations: GNU tools for the history your agents leave behind.
 
-Even without that complication `cdir` is a game-changer alone. Because of that we document it up-front.
+**Have you ever wanted to grep through your Claude Code history?**
+
+Not the tab you have open — the whole thing. Every session you ever had, sitting on disk as plain files. Months of "how did I fix that last time?" answered with one regex:
+
+```shell
+$ cgrep -i "ssl" "opencode/"
+opencode/ses_fc9be2522ffeXE49mrCYRhd3Sa:54:assistant: Test bug #2 — I forgot to stub `check` this time, so the real one ran … Fixing the test:
+opencode/ses_000d460faffeqbm72mRhiOH329:16:user: ok graflex has an erorr in the check. i see this: … [[SSL: WRONG_VERSION_NUMBER] wrong version number …
+opencode/ses_000d460faffeqbm72mRhiOH329:34:assistant: Found it. Root cause: `_check_host` (graflex/__init__.py:128) tries `http`, and …
+```
+
+That last line is the root-cause analysis you wrote six months ago and would never have found again.
+
+It really is grep: matches print as `session:line:text`, context lines use `-`, the flags are the ones you already know (`-i -c -o -w -x -F -l -m -h -H -A/-B/-C --include/--exclude`), and the exit codes are scriptable — `0` match, `1` none, `2` bad pattern. `cgrep` is the big one; everything else is in service of it.
+
+Its companion is `cdir`, `ls` for the same history — documented up-front too:
 
 ```shell
 $ cdir opencode
@@ -17,7 +32,9 @@ $ cdir opencode
   ses_08b74487fffeTmQzA810dE9WRV    Add -f option to override SSL errors
 ```
 
-Now I can easily resume those sessions. 
+Now I can easily resume those sessions.
+
+Extracted from [Gab n' Go](https://github.com/day50-dev/gabngo). Named after [GNU mtools](https://www.gnu.org/software/mtools/), which does the same thing for DOS floppies because your context window is about the size of a DOS-floppy. Maybe we can use that for inspiration. The flag habits are GNU's too — `--version`, `-1`, `-S`, `-u`, and the rest behave the way you'd expect.
 
 ### cdir
 
@@ -336,7 +353,7 @@ LOGLEVEL=DEBUG cconnect -f my-filter.json @opencode/ses_abc @claude-code/ses_xyz
 
 ### cgrep
 
-Searches packet content across the bus. Regex supported. Works across all endpoints.
+Searches conversation content across every session you have. Regex in, matches out. Works across all agents — this is the tool the whole suite is named for.
 
 ```sh
 cgrep "pattern" "opencode/*"

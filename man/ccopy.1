@@ -7,6 +7,7 @@ ccopy \- copy concepts between sessions and concept files
 .IR format ]
 .RB [ \-s
 .IR strategy ]
+.RB [ \-\-version ]
 .I source
 .RI [ destination ]
 .SH DESCRIPTION
@@ -38,6 +39,9 @@ Set output format: json, xml, or md.
 Use a custom chunking strategy for concept extraction.
 A strategy defines the LLM host, model, API key, and extraction prompt.
 Without this flag, ccopy uses regex pattern matching on conversation messages.
+.TP
+.B \-\-version
+Print version information and exit.
 .SH ARGUMENTS
 .TP
 .I sources

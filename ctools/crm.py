@@ -14,7 +14,7 @@ from rich.prompt import Confirm
 
 from ctools.agents import Message
 from ctools.ccopy import concept_text, load_strategy, read_concepts_from_file
-from ctools.cli import reporting, require_session
+from ctools.cli import reporting, require_session, version_option
 
 app = typer.Typer()
 console = Console()
@@ -171,6 +171,7 @@ def main(
     strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for detection"),
     interactive: bool = typer.Option(False, "-i", "--interactive", help="Confirm each removal"),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
+    version: bool = version_option("crm"),
 ):
     """
     Scalpel remove concepts from sessions.

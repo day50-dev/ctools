@@ -13,9 +13,24 @@ from typing import Optional, Tuple
 import typer
 from rich.console import Console
 
+from ctools import __version__
 from ctools.agents import Agent, AgentError, REGISTRY, get_agent
 
 console = Console()
+
+
+def version_option(tool: str):
+    """A GNU-style ``--version`` option printing ``tool (ctxttools) X.Y.Z``.
+
+    Eager, so it wins over required arguments: ``crm --version`` works
+    without a session.
+    """
+    def callback(ctx, value):
+        if value:
+            typer.echo(f"{tool} (ctxttools) {__version__}")
+            raise typer.Exit()
+    return typer.Option(False, "--version", callback=callback, is_eager=True,
+                        help="Print version information and exit")
 
 
 def parse_ref(ref: str) -> Tuple[str, Optional[str]]:
