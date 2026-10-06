@@ -662,6 +662,158 @@ def test_cli_sort_by_size_legacy_s_alias(tmp_path):
     assert result.stdout.index('ses_big') < result.stdout.index('ses_small')
 
 
+def test_cli_sort_last_flag_wins_size_then_time(tmp_path):
+    """With -S -t, the later -t wins: time order (ls style)."""
+    _make_opencode_db_two_sizes(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["-S", "-t", "-l", "opencode/"])
+    assert result.exit_code == 0
+    assert result.stdout.index('ses_small') < result.stdout.index('ses_big')
+
+
+def test_cli_sort_last_flag_wins_time_then_size(tmp_path):
+    """With -t -S, the later -S wins: size order (ls style)."""
+    _make_opencode_db_two_sizes(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["-t", "-S", "-l", "opencode/"])
+    assert result.exit_code == 0
+    assert result.stdout.index('ses_big') < result.stdout.index('ses_small')
+
+
+def _make_opencode_db_two_ctimes(tmp_path):
+    """Create an opencode.db where mtime order and ctime order disagree."""
+    db_path = tmp_path / 'opencode.db'
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE session (
+            id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, slug TEXT,
+            directory TEXT, title TEXT, version TEXT, share_url TEXT,
+            summary_additions INTEGER, summary_deletions INTEGER,
+            summary_files INTEGER, summary_diffs TEXT, revert TEXT,
+            permission TEXT, time_created INTEGER, time_updated INTEGER,
+            time_compacting INTEGER, time_archived INTEGER, workspace_id TEXT,
+            path TEXT, agent TEXT, model TEXT, cost REAL,
+            tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER,
+            tokens_cache_read INTEGER, tokens_cache_write INTEGER, metadata TEXT
+        )
+    ''')
+    # Old creation, recent modification
+    cursor.execute('''
+        INSERT INTO session (id, title, time_created, time_updated,
+                             tokens_input, tokens_output, directory)
+        VALUES ('ses_old_created', 'Old created', 1700000000000,
+                1700000060000, 10, 10, '/tmp')
+    ''')
+    # Recent creation, older modification
+    cursor.execute('''
+        INSERT INTO session (id, title, time_created, time_updated,
+                             tokens_input, tokens_output, directory)
+        VALUES ('ses_new_created', 'New created', 1700000050000,
+                1700000010000, 10, 10, '/tmp')
+    ''')
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_cli_sort_by_ctime(tmp_path):
+    """-u sorts by creation time (newest ctime first)."""
+    _make_opencode_db_two_ctimes(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["-u", "-l", "opencode/"])
+    assert result.exit_code == 0
+    assert result.stdout.index('ses_new_created') < result.stdout.index('ses_old_created')
+
+
+def test_cli_sort_ctime_long_flag(tmp_path):
+    """--ctime is the long form of -u."""
+    _make_opencode_db_two_ctimes(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["--ctime", "-l", "opencode/"])
+    assert result.exit_code == 0
+    assert result.stdout.index('ses_new_created') < result.stdout.index('ses_old_created')
+
+
+def test_cli_sort_by_time_ignores_ctime(tmp_path):
+    """Default sort still uses mtime, even when ctimes differ."""
+    _make_opencode_db_two_ctimes(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["-l", "opencode/"])
+    assert result.exit_code == 0
+    assert result.stdout.index('ses_old_created') < result.stdout.index('ses_new_created')
+
+
+def test_cli_one_line_no_header(tmp_path):
+    """-1 prints exactly one session ID per line, no header or footer."""
+    _make_opencode_db_two_sizes(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["-1", "opencode/"])
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert lines == ['ses_small', 'ses_big']
+    assert 'Source:' not in result.stdout
+    assert 'MODIFIED' not in result.stdout
+    assert 'session(s)' not in result.stdout
+
+
+def test_cli_one_line_long_flag(tmp_path):
+    """--one-line is the long form of -1."""
+    _make_opencode_db(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["--one-line", "opencode/"])
+    assert result.exit_code == 0
+    assert result.stdout.splitlines() == ['ses_test123']
+
+
+def test_cli_one_line_recursive(tmp_path):
+    """-1 -R prints agent-prefixed IDs, one per line."""
+    _make_opencode_db(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["-1", "-R"])
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert 'opencode/ses_test123' in lines
+    for line in lines:
+        assert '/' in line
+        assert 'MODIFIED' not in line
+
+
+def test_cli_color_always_emits_escapes(tmp_path):
+    """--color always emits ANSI bold for the header."""
+    _make_opencode_db(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["--color", "always", "opencode/"])
+    assert result.exit_code == 0
+    assert '\033[1m' in result.stdout
+    assert '\033[0m' in result.stdout
+
+
+def test_cli_color_never_has_no_escapes(tmp_path):
+    """--color never emits no ANSI escapes."""
+    _make_opencode_db(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["--color", "never", "opencode/"])
+    assert result.exit_code == 0
+    assert '\033[' not in result.stdout
+
+
+def test_cli_color_auto_is_plain_when_piped(tmp_path):
+    """--color auto (the default) is plain when stdout is not a tty."""
+    _make_opencode_db(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["opencode/"])
+    assert result.exit_code == 0
+    assert '\033[' not in result.stdout
+
+
+def test_cli_color_invalid_value():
+    """An unknown --color value fails with a usage error."""
+    result = runner.invoke(app, ["--color", "blink"])
+    assert result.exit_code == 2
+    assert 'must be one of' in result.output
+
+
 # --- Pi Coding Agent tests ---
 
 def _make_pi_session(tmp_path, session_id='019fe37e-d6a2-7344-8a05-5b04d8d40161',

@@ -8,6 +8,14 @@ cgrep \- search through LLM context window sessions
 .RB [ \-h ]
 .RB [ \-H ]
 .RB [ \-c ]
+.RB [ \-q ]
+.RB [ \-m
+.IR N ]
+.RB [ \-o ]
+.RB [ \-w ]
+.RB [ \-x ]
+.RB [ \-E ]
+.RB [ \-F ]
 .RB [ \-v ]
 .RB [ \-i ]
 .RB [ \-B
@@ -16,6 +24,10 @@ cgrep \- search through LLM context window sessions
 .IR N ]
 .RB [ \-C
 .IR N ]
+.RB [ \-\-include
+.IR glob ]
+.RB [ \-\-exclude
+.IR glob ]
 .RB [ \-f
 .IR format ]
 .I pattern
@@ -69,6 +81,41 @@ wins.
 .TP
 .BR \-c ", " \-\-count
 Print only a count of matching lines per session.
+.TP
+.BR \-q ", " \-\-quiet
+Suppress all output; report the result through the exit status only.
+.TP
+.BR \-m ", " \-\-max\-count
+.I N
+Stop after
+.I N
+matches in each session.
+.TP
+.BR \-o ", " \-\-only\-matching
+Print only the matched text, one hit per line, instead of whole lines.
+.TP
+.BR \-w ", " \-\-word\-regexp
+Select only matches that are surrounded by word boundaries.
+.TP
+.BR \-x ", " \-\-line\-regexp
+Select only matches that span the entire line.
+.TP
+.BR \-E ", " \-\-extended\-regexp
+Use extended (default) regular expressions. Accepted for grep
+compatibility; this is already how cgrep interprets patterns.
+.TP
+.BR \-F ", " \-\-fixed\-strings
+Treat the pattern as a fixed string instead of a regular expression.
+.TP
+.BR \-\-include ", " \-\-exclude
+.I glob
+Only search (or skip) sessions whose
+.I agent/session_id
+path matches the glob. Repeatable; both may be combined, where a session
+must match an
+.B \-\-include
+and must not match any
+.BR \-\-exclude .
 .TP
 .BR \-v ", " \-\-invert\-match
 Select non-matching lines.
@@ -228,7 +275,11 @@ $ cgrep --format xml "error" "opencode/*"
 One or more matches found.
 .TP
 .B 1
-No matches found or invalid pattern.
+No matches found.
+.TP
+.B 2
+An error occurred (invalid pattern, unknown agent, missing session data).
+An error takes precedence over a match.
 .SH SEE ALSO
 .BR cdir (1)
 .SH AUTHORS

@@ -28,11 +28,25 @@ cdir                        # list all known agents
 cdir opencode/              # sessions for opencode (name only)
 cdir -l opencode/           # sessions with modified date, size, message count, path
 cdir -S opencode/           # sessions biggest first (ls -S); -t sorts by time
+cdir -u opencode/           # sessions newest first by creation time (ctime)
+cdir -1 opencode/           # one session ID per line, no header
 cdir claude-code/           # sessions for claude code
 cdir pi/                    # sessions for pi coding agent
 cdir -R                     # all agents, recursive
 cdir opencode/ses_abc123    # export a session as JSON
 ```
+
+Sort flags are `ls`-style: `-t` by time (default), `-S` by size, `-u` by creation time, and when you give several the last one wins (`cdir -St opencode/` is the same as `cdir -S opencode/`). Add `-r` to reverse.
+
+`-1` prints bare session IDs, one per line — shell-script friendly, no header, no tree:
+
+```sh
+$ cdir -1 opencode/
+ses_08b4ab356ffeQvmBXnu1oj4Gqe
+ses_08b74487fffeTmQzA810dE9WRV
+```
+
+`--color` controls ANSI bold on the header: `auto` (default, on only when stdout is a terminal), `always`, `never`.
 
 Long format adds a header and shows the modified date, size, message count, and source path at the end of each row:
 
@@ -331,9 +345,16 @@ cgrep -c "def " "opencode/"              # count per session
 cgrep -C 2 "exception" "claude-code/"    # context lines
 cgrep "TODO" "opencode/" "claude-code/"  # multiple agents
 cgrep -h "TODO" "opencode/ses_abc123"    # drop the session path prefix
+cgrep -o -w "foo" "opencode/"            # whole-word hits, matched text only
+cgrep -q "needle" "opencode/"            # exit code only, like grep -q
+cgrep -m 3 "retry" "opencode/"           # stop after 3 hits per session
+cgrep -F "[ERROR]" "opencode/"           # fixed string, no regex
+cgrep --include "ses_abc*" "err" "opencode/"  # only matching session IDs
 ```
 
-Flags: `-l` list files, `-c` count, `-v` invert, `-i` case-insensitive, `-A/-B/-C` context, `-h`/`-H` filename prefix.
+Flags: `-l` list files, `-L` sessions without matches, `-c` count, `-v` invert, `-i` case-insensitive, `-A/-B/-C` context, `-h`/`-H` filename prefix, `-q` quiet (exit code only), `-m N` max matches per session, `-o` only the matched text, `-w` whole word, `-x` whole line, `-E` extended/POSIX regex (default), `-F` fixed string, `--include`/`--exclude` session ID globs.
+
+Exit status is grep's: `0` if a match was found, `1` if none, `2` on error (bad pattern, missing agent) — errors beat matches. `-q` prints nothing and still reports the status.
 
 Output is grep-shaped: every line is prefixed with the session it came from, so hits stay locatable:
 

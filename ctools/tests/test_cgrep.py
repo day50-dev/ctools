@@ -404,6 +404,192 @@ def test_cli_count_no_filename(tmp_path):
         AGENTS['opencode'].base_path = original
 
 
+# --- grep feature parity tests ---
+
+def _with_opencode_db(tmp_path, func):
+    """Point the registry at tmp_path, run func, restore."""
+    original = AGENTS['opencode'].base_path
+    AGENTS['opencode'].base_path = tmp_path
+    try:
+        return func()
+    finally:
+        AGENTS['opencode'].base_path = original
+
+
+def test_cli_quiet_exit_status_only(tmp_path):
+    """-q prints nothing; the exit status carries the result."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    def run():
+        match = runner.invoke(app, ["-q", "python", "opencode/ses_test123"])
+        assert match.exit_code == 0
+        assert match.stdout.strip() == ""
+
+        miss = runner.invoke(app, ["-q", "zzzz_no_such_thing", "opencode/ses_test123"])
+        assert miss.exit_code == 1
+        assert miss.stdout.strip() == ""
+
+    _with_opencode_db(tmp_path, run)
+
+
+def test_cli_quiet_still_reports_errors(tmp_path):
+    """-q is quiet about results, not about errors."""
+    def run():
+        result = runner.invoke(app, ["-q", "[invalid", "opencode/ses_test123"])
+        assert result.exit_code == 2
+        assert "Invalid pattern" in result.stdout
+
+    create_test_opencode_db(tmp_path, "ses_test123")
+    _with_opencode_db(tmp_path, run)
+
+
+def test_cli_max_count(tmp_path):
+    """-m N stops after N matches per session."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    def run():
+        full = runner.invoke(app, ["-c", "python", "opencode/ses_test123"])
+        capped = runner.invoke(app, ["-m", "1", "-c", "python", "opencode/ses_test123"])
+        assert full.exit_code == 0 and capped.exit_code == 0
+        full_count = int(full.stdout.strip().split(":")[-1])
+        capped_count = int(capped.stdout.strip().split(":")[-1])
+        assert full_count >= 2
+        assert capped_count == 1
+
+    _with_opencode_db(tmp_path, run)
+
+
+def test_cli_max_count_must_be_positive():
+    result = runner.invoke(app, ["-m", "0", "python", "opencode/*"])
+    assert result.exit_code == 2
+    assert "max count" in result.stdout.lower()
+
+
+def test_cli_word_regexp(tmp_path):
+    """-w matches whole words only."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    def run():
+        substring = runner.invoke(app, ["-c", "cod", "opencode/ses_test123"])
+        assert substring.exit_code == 0
+        assert int(substring.stdout.strip().split(":")[-1]) >= 1
+
+        whole = runner.invoke(app, ["-w", "-c", "cod", "opencode/ses_test123"])
+        assert whole.exit_code == 1
+
+    _with_opencode_db(tmp_path, run)
+
+
+def test_cli_line_regexp(tmp_path):
+    """-x matches whole lines only."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    def run():
+        partial = runner.invoke(app, ["-c", "user: Hello", "opencode/ses_test123"])
+        assert partial.exit_code == 0
+        assert int(partial.stdout.strip().split(":")[-1]) >= 1
+
+        whole = runner.invoke(app, ["-x", "-c", "user: Hello", "opencode/ses_test123"])
+        assert whole.exit_code == 1
+
+        exact = runner.invoke(app, ["-x", "user: Hello world", "opencode/ses_test123"])
+        assert exact.exit_code == 0
+        assert "opencode/ses_test123:1:user: Hello world" in exact.stdout
+
+    _with_opencode_db(tmp_path, run)
+
+
+def test_cli_only_matching(tmp_path):
+    """-o prints just the hit text, one per occurrence."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    def run():
+        result = runner.invoke(app, ["-o", "python", "opencode/ses_test123"])
+        assert result.exit_code == 0
+        lines = [l for l in result.stdout.splitlines() if l]
+        assert lines == [
+            "opencode/ses_test123:3:python",
+            "opencode/ses_test123:4:python",
+            "opencode/ses_test123:5:python",
+        ]
+
+    _with_opencode_db(tmp_path, run)
+
+
+def test_cli_only_matching_count_is_occurrences(tmp_path):
+    """With -o, -c counts hits rather than matching lines."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    def run():
+        result = runner.invoke(app, ["-o", "-c", "python", "opencode/ses_test123"])
+        assert result.exit_code == 0
+        assert int(result.stdout.strip().split(":")[-1]) == 3
+
+    _with_opencode_db(tmp_path, run)
+
+
+def test_cli_fixed_strings(tmp_path):
+    """-F treats the pattern literally, including regex metacharacters."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    def run():
+        # As a regex, '.' matches the 'l' in hello.
+        regex = runner.invoke(app, ["h.llo", "opencode/ses_test123"])
+        assert regex.exit_code == 0
+        assert "print('hello')" in regex.stdout
+
+        # As a fixed string, 'h.llo' is not present.
+        fixed = runner.invoke(app, ["-F", "h.llo", "opencode/ses_test123"])
+        assert fixed.exit_code == 1
+
+        # An invalid regex is an error without -F, and a literal with it.
+        bad = runner.invoke(app, ["[invalid", "opencode/ses_test123"])
+        assert bad.exit_code == 2
+        fixed_bad = runner.invoke(app, ["-F", "[invalid", "opencode/ses_test123"])
+        assert fixed_bad.exit_code == 1
+
+    _with_opencode_db(tmp_path, run)
+
+
+def test_cli_extended_regexp_is_default(tmp_path):
+    """-E is accepted as the default regex mode."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    def run():
+        result = runner.invoke(app, ["-E", "Wri[te]+ some python", "opencode/ses_test123"])
+        assert result.exit_code == 0
+        assert "opencode/ses_test123:3:user: Write some python code" in result.stdout
+
+    _with_opencode_db(tmp_path, run)
+
+
+def test_cli_include_exclude_globs(tmp_path):
+    """--include/--exclude filter sessions by agent/session path glob."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    def run():
+        excluded = runner.invoke(app, ["--exclude", "opencode/ses_*", "python", "opencode/ses_test123"])
+        assert excluded.exit_code == 1
+
+        included = runner.invoke(app, ["--include", "opencode/ses_test*", "python", "opencode/ses_test123"])
+        assert included.exit_code == 0
+        assert "opencode/ses_test123" in included.stdout
+
+    _with_opencode_db(tmp_path, run)
+
+
+def test_cli_missing_agent_data_is_error(tmp_path):
+    """Searching an agent that has no data is an error, not a silent miss."""
+    original = AGENTS['opencode'].base_path
+    AGENTS['opencode'].base_path = tmp_path / "does-not-exist"
+    try:
+        result = runner.invoke(app, ["python", "opencode/*"])
+        assert result.exit_code == 2
+        assert "not found" in result.stdout
+    finally:
+        AGENTS['opencode'].base_path = original
+
+
 def test_cli_context(tmp_path):
     create_test_opencode_db(tmp_path, "ses_test123")
     
@@ -423,7 +609,7 @@ def test_cli_no_match(tmp_path):
     AGENTS['opencode'].base_path = tmp_path
     try:
         result = runner.invoke(app, ["nonexistent_xyz", f"opencode/ses_test123"])
-        assert result.exit_code == 0
+        assert result.exit_code == 1
         assert "No matches" in result.stdout
     finally:
         AGENTS['opencode'].base_path = original
@@ -431,8 +617,15 @@ def test_cli_no_match(tmp_path):
 
 def test_cli_invalid_pattern():
     result = runner.invoke(app, ["[invalid", "opencode/*"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "Invalid pattern" in result.stdout
+
+
+def test_cli_unknown_agent_exit_status():
+    """An unknown agent is an error: exit 2, not a quiet no-match."""
+    result = runner.invoke(app, ["pattern", "nonexistent-agent/*"])
+    assert result.exit_code == 2
+    assert "Unknown agent" in result.stdout
 
 
 # --- Format flag tests ---
@@ -535,7 +728,7 @@ def test_cli_format_xml_list_files(tmp_path):
 def test_cli_format_invalid():
     """Test --format with invalid format."""
     result = runner.invoke(app, ["--format", "csv", "python", "opencode/*"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "Unknown format" in result.stdout
 
 

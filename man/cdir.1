@@ -5,9 +5,13 @@ cdir \- list agents and sessions from LLM context windows
 .B cdir
 .RB [ \-t ]
 .RB [ \-S ]
+.RB [ \-u ]
 .RB [ \-r ]
 .RB [ \-R ]
 .RB [ \-l ]
+.RB [ \-1 ]
+.RB [ \-\-color
+.IR when ]
 .RB [ \-o
 .IR fields ]
 .RB [ \-f
@@ -24,6 +28,13 @@ It can also export individual sessions as conversation JSON.
 .PP
 Without arguments, cdir lists all known agents and their storage paths.
 .SH OPTIONS
+Sort flags follow
+.B ls
+semantics: if more than one of
+.BR \-t ,
+.BR \-S ,
+.B \-u
+is given, the last one on the command line wins.
 .TP
 .BR \-t ", " \-\-time
 Sort sessions by modification time (default).
@@ -31,6 +42,10 @@ Sort sessions by modification time (default).
 .BR \-S ", " \-s ", " \-\-size
 Sort sessions by size, largest first. Equivalent to
 .BR "ls \-S" .
+.TP
+.BR \-u ", " \-\-ctime
+Sort sessions by creation time, newest first. Equivalent to
+.BR "ls \-u" .
 .TP
 .BR \-r ", " \-\-reverse
 Reverse the sort order.
@@ -43,6 +58,22 @@ recurse all agents and show all sessions with agent prefix.
 Show full details: last-modified date, size, message count, and
 source path. The creation date is suppressed. Equivalent to
 .BR "\-o id,name,mtime,size,msgs,path" .
+.TP
+.BR \-1 ", " \-\-one\-line
+Print one session ID per line and nothing else: no header, no
+Source line, no summary footer, no tree connectors. With
+.B \-R
+the IDs carry their agent prefix. Sort order still applies.
+.TP
+.BR \-\-color
+.I when
+Control ANSI bold coloring of the header row.
+.I when
+is one of
+.BR never ,
+.B auto
+(default; color only when standard output is a terminal),
+.BR always .
 .TP
 .BR \-o ", " \-\-output
 .I fields
@@ -181,6 +212,16 @@ $ cdir -S -l opencode/
   ID            NAME          MODIFIED            SIZE    MSGS  PATH
   ses_abc123    Python Help   2024-01-15 10:30   2.4 KB     12  /home/user/src/project
   ses_def456    Code Review   2024-01-16 09:00   1.2 KB      8  /home/user/src/project
+.fi
+.RE
+.PP
+One session ID per line, for scripting:
+.PP
+.RS
+.nf
+$ cdir -1 opencode/
+ses_abc123
+ses_def456
 .fi
 .RE
 .PP
