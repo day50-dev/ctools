@@ -8,6 +8,7 @@ Usage:
     cgrep -r "pattern" "opencode/*"
     cgrep -l "pattern" "opencode/ses_abc123"
     cgrep -c "pattern" "opencode/*" "claude-code/*"
+    cgrep -h "pattern" "opencode/ses_abc123"   # drop the session path prefix
 """
 
 import fnmatch
@@ -79,8 +80,12 @@ def grep_session(agent: Agent, session_id: str, pattern: re.Pattern,
     return matches
 
 
-def _print_matches(matches: List[Match]) -> None:
-    """grep-style output: matches grouped by session, separated by '--'."""
+def _print_matches(matches: List[Match], show_filename: bool = True) -> None:
+    """grep-style output: `path:lineno:text`, grouped by session, separated by '--'.
+
+    Context lines use grep's `-` separators (`path-lineno-text`). Session line
+    numbers are contiguous, so context numbers follow from the match line.
+    """
     current_session = None
     for m in matches:
         path = f"{m.agent}/{m.session_id}"
@@ -88,11 +93,20 @@ def _print_matches(matches: List[Match]) -> None:
             if current_session is not None:
                 print("--")
             current_session = path
-        for line in m.context_before or ():
-            print(f"  {line}")
-        print(f"{m.line_num}:{m.line}")
-        for line in m.context_after or ():
-            print(f"  {line}")
+        prefix = f"{path}:" if show_filename else ""
+        ctx_prefix = f"{path}-" if show_filename else ""
+
+        before = m.context_before or ()
+        for i, line in enumerate(before):
+            print(f"{ctx_prefix}{m.line_num - len(before) + i}-{line}")
+        print(f"{prefix}{m.line_num}:{m.line}")
+        for i, line in enumerate(m.context_after or (), start=1):
+            print(f"{ctx_prefix}{m.line_num + i}-{line}")
+
+
+def _show_filename(no_filename: bool, with_filename: bool) -> bool:
+    """Resolve -h/-H the way grep does: -H wins when both are given."""
+    return with_filename or not no_filename
 
 
 @app.command()
@@ -101,6 +115,8 @@ def main(
     paths: List[str] = typer.Argument(..., help="Agent/session paths (e.g., opencode/*)"),
     list_files: bool = typer.Option(False, "--files-with-matches", "-l", help="Show only session IDs with matches"),
     list_files_neg: bool = typer.Option(False, "--files-without-match", "-L", help="Show only session IDs without matches"),
+    no_filename: bool = typer.Option(False, "--no-filename", "-h", help="Suppress the session path prefix"),
+    with_filename: bool = typer.Option(False, "--with-filename", "-H", help="Force the session path prefix (default)"),
     count: bool = typer.Option(False, "--count", "-c", help="Show match count per session"),
     invert: bool = typer.Option(False, "--invert-match", "-v", help="Invert match"),
     before: int = typer.Option(0, "--before", "-B", help="Show N lines before match"),
@@ -119,6 +135,9 @@ def main(
         cgrep -l "TODO" "opencode/*" "claude-code/*"
         cgrep -c "import" "opencode/*"
         cgrep -B2 -A2 "FIXME" "opencode/ses_abc123"
+
+    Match lines are prefixed with the session path, grep-style. Use -h to
+    suppress that prefix, or -H to force it back on.
     """
     flags = re.IGNORECASE if ignore_case else 0
     try:
@@ -129,6 +148,8 @@ def main(
 
     if context > 0:
         before = after = context
+
+    show_filename = _show_filename(no_filename, with_filename)
 
     formatter = None
     if fmt != "default":
@@ -166,13 +187,16 @@ def main(
     elif count:
         if formatter:
             print(formatter.format_match_counts(counts))
+        elif not show_filename:
+            for path, cnt in sorted(counts.items()):
+                print(cnt)
         else:
             for path, cnt in sorted(counts.items()):
                 print(f"{path}:{cnt}")
     elif formatter:
         print(formatter.format_matches(all_matches))
     elif all_matches:
-        _print_matches(all_matches)
+        _print_matches(all_matches, show_filename)
     else:
         console.print("[dim]No matches found[/dim]")
 

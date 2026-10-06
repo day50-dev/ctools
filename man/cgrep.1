@@ -5,6 +5,8 @@ cgrep \- search through LLM context window sessions
 .B cgrep
 .RB [ \-l ]
 .RB [ \-L ]
+.RB [ \-h ]
+.RB [ \-H ]
 .RB [ \-c ]
 .RB [ \-v ]
 .RB [ \-i ]
@@ -26,6 +28,21 @@ LLM agent session files using PCRE regular expressions.
 The tool reads actual session data from each agent's storage
 format and applies pattern matching to find matches within
 conversation messages.
+.PP
+Output follows grep conventions. Every match line is prefixed
+with the session it came from
+.RI ( agent/session_id : lineno : text ),
+context lines use a
+.RB \(dq - \(dq
+separator in the same position
+.RI ( agent/session_id - lineno - text ),
+and non-contiguous groups are separated by
+.BR \-\- .
+The
+.B \-h
+and
+.B \-H
+options suppress and restore the session prefix.
 .SH OPTIONS
 .TP
 .BR \-l ", " \-\-files\-with\-matches
@@ -33,6 +50,22 @@ List only session IDs that contain matches, not the matches themselves.
 .TP
 .BR \-L ", " \-\-files\-without\-match
 List only session IDs that do NOT contain matches.
+.TP
+.BR \-h ", " \-\-no\-filename
+Suppress the session path prefix. Match lines become
+.IR lineno : text .
+With
+.B \-c
+only the counts are printed.
+.TP
+.BR \-H ", " \-\-with\-filename
+Force the session path prefix on. This is the default; if
+.B \-h
+and
+.B \-H
+are both given,
+.B \-H
+wins.
 .TP
 .BR \-c ", " \-\-count
 Print only a count of matching lines per session.
@@ -101,8 +134,18 @@ Search for "error" in all opencode sessions:
 .RS
 .nf
 $ cgrep "error" "opencode/*"
-3: user: I'm getting an error in my code
-7: assistant: The error is caused by...
+opencode/ses_abc123:3:user: I'm getting an error in my code
+opencode/ses_abc123:7:assistant: The error is caused by...
+.fi
+.RE
+.PP
+Drop the session prefix for a single-session search:
+.PP
+.RS
+.nf
+$ cgrep -h "error" "opencode/ses_abc123"
+3:user: I'm getting an error in my code
+7:assistant: The error is caused by...
 .fi
 .RE
 .PP
@@ -110,12 +153,12 @@ Search case-insensitively and show context:
 .PP
 .RS
 .nf
-$ cgrep -i -C 2 "error" "opencode/*"
-  user: I'm getting an error in my code
-  assistant: Let me help you debug this
-3: user: I'm getting an ERROR in my code
-  assistant: I see the issue now
-  assistant: You need to fix the...
+$ cgrep -h -i -C 2 "error" "opencode/*"
+1-assistant: Hello! How can I help?
+2-user: I'm getting an error in my code
+3-user: I'm getting an ERROR in my code
+4-assistant: Let me help you debug this
+5-assistant: I see the issue now
 .fi
 .RE
 .PP
@@ -144,8 +187,8 @@ Invert match (find lines WITHOUT "test"):
 .RS
 .nf
 $ cgrep -v "test" "opencode/ses_abc123"
-1: user: Hello world
-4: assistant: Here is some code
+1:user: Hello world
+4:assistant: Here is some code
 .fi
 .RE
 .PP

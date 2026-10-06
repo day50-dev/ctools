@@ -9,6 +9,7 @@ Usage:
     cdir                    # List all known agents
     cdir claude/            # List sessions for Claude
     cdir opencode/          # List sessions for opencode
+    cdir -S codex/          # List codex sessions, largest first
     cdir codex/             # List sessions for codex
 """
 
@@ -289,7 +290,7 @@ def _list_all_sessions(by_size, reverse, formatter, fields) -> None:
 def main(
     path: Optional[str] = typer.Argument(None, help="Agent or agent/session_id"),
     by_time: bool = typer.Option(False, "--time", "-t", help="Sort by modification time"),
-    by_size: bool = typer.Option(False, "--size", "-s", help="Sort by size"),
+    by_size: bool = typer.Option(False, "--size", "-S", "-s", help="Sort by size"),
     reverse: bool = typer.Option(False, "--reverse", "-r", help="Reverse sort order"),
     recursive: bool = typer.Option(False, "--recursive", "-R", help="Show agent name, recurse all agents if no path given"),
     long_format: bool = typer.Option(False, "--long", "-l", help="Show details: modified, size, messages, path"),
@@ -305,6 +306,7 @@ def main(
     With -R, shows agent name and recurse all agents if no path given.
     With -l, shows full details (modified, size, message count, path).
     With -o, selects the output fields shown (see 'cdir -o help').
+    With -S, sorts by size (ls -S) instead of by modification time.
     """
     fields = _resolve_fields(output)
 

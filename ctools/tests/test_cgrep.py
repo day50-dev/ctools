@@ -329,6 +329,81 @@ def test_cli_invert(tmp_path):
         AGENTS['opencode'].base_path = original
 
 
+# --- Filename prefix tests (grep-compatible -h/-H) ---
+
+def test_cli_default_prefixes_session_path(tmp_path):
+    """Default output shows agent/session:lineno:line, like grep on many files."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    original = AGENTS['opencode'].base_path
+    AGENTS['opencode'].base_path = tmp_path
+    try:
+        result = runner.invoke(app, ["python", f"opencode/ses_test123"])
+        assert result.exit_code == 0
+        assert "opencode/ses_test123:3:user: Write some python code" in result.stdout
+    finally:
+        AGENTS['opencode'].base_path = original
+
+
+def test_cli_no_filename_suppresses_prefix(tmp_path):
+    """-h drops the session path prefix, grep-style single-file output."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    original = AGENTS['opencode'].base_path
+    AGENTS['opencode'].base_path = tmp_path
+    try:
+        result = runner.invoke(app, ["-h", "python", f"opencode/ses_test123"])
+        assert result.exit_code == 0
+        assert "opencode/ses_test123:" not in result.stdout
+        assert "3:user: Write some python code" in result.stdout
+    finally:
+        AGENTS['opencode'].base_path = original
+
+
+def test_cli_with_filename_forces_prefix(tmp_path):
+    """-H keeps the prefix even when -h is also given."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    original = AGENTS['opencode'].base_path
+    AGENTS['opencode'].base_path = tmp_path
+    try:
+        result = runner.invoke(app, ["-h", "-H", "python", f"opencode/ses_test123"])
+        assert result.exit_code == 0
+        assert "opencode/ses_test123:3:user: Write some python code" in result.stdout
+    finally:
+        AGENTS['opencode'].base_path = original
+
+
+def test_cli_context_lines_are_numbered(tmp_path):
+    """Context lines carry grep's `-` separators and line numbers."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    original = AGENTS['opencode'].base_path
+    AGENTS['opencode'].base_path = tmp_path
+    try:
+        result = runner.invoke(app, ["-C1", "python", f"opencode/ses_test123"])
+        assert result.exit_code == 0
+        assert "opencode/ses_test123-2-assistant: Hi there! How can I help?" in result.stdout
+        assert "opencode/ses_test123:3:user: Write some python code" in result.stdout
+    finally:
+        AGENTS['opencode'].base_path = original
+
+
+def test_cli_count_no_filename(tmp_path):
+    """-c with -h prints bare counts, like grep."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    original = AGENTS['opencode'].base_path
+    AGENTS['opencode'].base_path = tmp_path
+    try:
+        result = runner.invoke(app, ["-h", "-c", "python", f"opencode/ses_test123"])
+        assert result.exit_code == 0
+        assert "ses_test123" not in result.stdout
+        assert ":" not in result.stdout.strip()
+    finally:
+        AGENTS['opencode'].base_path = original
+
+
 def test_cli_context(tmp_path):
     create_test_opencode_db(tmp_path, "ses_test123")
     

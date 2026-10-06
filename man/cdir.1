@@ -4,7 +4,7 @@ cdir \- list agents and sessions from LLM context windows
 .SH SYNOPSIS
 .B cdir
 .RB [ \-t ]
-.RB [ \-s ]
+.RB [ \-S ]
 .RB [ \-r ]
 .RB [ \-R ]
 .RB [ \-l ]
@@ -28,8 +28,9 @@ Without arguments, cdir lists all known agents and their storage paths.
 .BR \-t ", " \-\-time
 Sort sessions by modification time (default).
 .TP
-.BR \-s ", " \-\-size
-Sort sessions by size.
+.BR \-S ", " \-s ", " \-\-size
+Sort sessions by size, largest first. Equivalent to
+.BR "ls \-S" .
 .TP
 .BR \-r ", " \-\-reverse
 Reverse the sort order.
@@ -169,6 +170,17 @@ $ cdir -o id,model,path opencode/
 
   ID            MODEL        PATH
   ses_abc123    big-pickle   /home/user/src/project
+.fi
+.RE
+.PP
+Sort by size instead of time:
+.PP
+.RS
+.nf
+$ cdir -S -l opencode/
+  ID            NAME          MODIFIED            SIZE    MSGS  PATH
+  ses_abc123    Python Help   2024-01-15 10:30   2.4 KB     12  /home/user/src/project
+  ses_def456    Code Review   2024-01-16 09:00   1.2 KB      8  /home/user/src/project
 .fi
 .RE
 .PP

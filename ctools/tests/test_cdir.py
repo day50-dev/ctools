@@ -602,6 +602,66 @@ def test_cli_recursive_has_header(tmp_path):
     assert "opencode/ses_test123" in result.stdout
 
 
+def _make_opencode_db_two_sizes(tmp_path):
+    """Create an opencode.db with one small/newer and one large/older session."""
+    db_path = tmp_path / 'opencode.db'
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE session (
+            id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, slug TEXT,
+            directory TEXT, title TEXT, version TEXT, share_url TEXT,
+            summary_additions INTEGER, summary_deletions INTEGER,
+            summary_files INTEGER, summary_diffs TEXT, revert TEXT,
+            permission TEXT, time_created INTEGER, time_updated INTEGER,
+            time_compacting INTEGER, time_archived INTEGER, workspace_id TEXT,
+            path TEXT, agent TEXT, model TEXT, cost REAL,
+            tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER,
+            tokens_cache_read INTEGER, tokens_cache_write INTEGER, metadata TEXT
+        )
+    ''')
+    cursor.execute('''
+        INSERT INTO session (id, title, time_created, time_updated,
+                             tokens_input, tokens_output, directory)
+        VALUES ('ses_small', 'Small', 1700000000000, 1700000060000, 10, 10, '/tmp')
+    ''')
+    cursor.execute('''
+        INSERT INTO session (id, title, time_created, time_updated,
+                             tokens_input, tokens_output, directory)
+        VALUES ('ses_big', 'Big', 1700000000000, 1700000010000, 5000, 5000, '/tmp')
+    ''')
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_cli_sort_by_size_flag(tmp_path):
+    """-S sorts by size (ls -S), biggest first, regardless of mtime."""
+    _make_opencode_db_two_sizes(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["-S", "-l", "opencode/"])
+    assert result.exit_code == 0
+    assert result.stdout.index('ses_big') < result.stdout.index('ses_small')
+
+
+def test_cli_sort_by_size_default_sorts_by_time(tmp_path):
+    """Without -S the newest session still leads."""
+    _make_opencode_db_two_sizes(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["-l", "opencode/"])
+    assert result.exit_code == 0
+    assert result.stdout.index('ses_small') < result.stdout.index('ses_big')
+
+
+def test_cli_sort_by_size_legacy_s_alias(tmp_path):
+    """-s still sorts by size."""
+    _make_opencode_db_two_sizes(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["-s", "-l", "opencode/"])
+    assert result.exit_code == 0
+    assert result.stdout.index('ses_big') < result.stdout.index('ses_small')
+
+
 # --- Pi Coding Agent tests ---
 
 def _make_pi_session(tmp_path, session_id='019fe37e-d6a2-7344-8a05-5b04d8d40161',

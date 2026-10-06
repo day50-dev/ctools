@@ -27,6 +27,7 @@ Lists sessions (endpoints). Think `ls` for your conversation history. Subagents 
 cdir                        # list all known agents
 cdir opencode/              # sessions for opencode (name only)
 cdir -l opencode/           # sessions with modified date, size, message count, path
+cdir -S opencode/           # sessions biggest first (ls -S); -t sorts by time
 cdir claude-code/           # sessions for claude code
 cdir pi/                    # sessions for pi coding agent
 cdir -R                     # all agents, recursive
@@ -329,9 +330,22 @@ cgrep -i "error" "claude-code/"
 cgrep -c "def " "opencode/"              # count per session
 cgrep -C 2 "exception" "claude-code/"    # context lines
 cgrep "TODO" "opencode/" "claude-code/"  # multiple agents
+cgrep -h "TODO" "opencode/ses_abc123"    # drop the session path prefix
 ```
 
-Flags: `-l` list files, `-c` count, `-v` invert, `-i` case-insensitive, `-A/-B/-C` context.
+Flags: `-l` list files, `-c` count, `-v` invert, `-i` case-insensitive, `-A/-B/-C` context, `-h`/`-H` filename prefix.
+
+Output is grep-shaped: every line is prefixed with the session it came from, so hits stay locatable:
+
+```sh
+$ cgrep "import" "opencode/*"
+opencode/ses_abc123:17:user: from pathlib import Path
+opencode/ses_abc123-18-assistant: That should work.
+--
+opencode/ses_def456:4:user: import sqlite3
+```
+
+`-h` drops the prefix (single-session look), `-H` forces it back on. Context lines use grep's `-` separator instead of `:`.
 
 ### cdu
 
