@@ -14,7 +14,7 @@ from typing import List, Optional, Tuple
 from mcp.server.fastmcp import FastMCP
 
 from ctools.agents import Agent, AgentError, REGISTRY as AGENTS, get_agent
-from ctools.ccopy import concepts_to_text, extract_concepts_from_messages
+from ctools.cextract import concepts_to_text, extract_concepts_from_messages
 
 mcp = FastMCP("ctools")
 

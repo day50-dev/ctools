@@ -302,27 +302,25 @@ def main(
     fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md"),
     strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for LLM-based extraction"),
     filter_config: Optional[str] = typer.Option(None, "--filter", "-F", help="Filter JSON file"),
-    into: Optional[str] = typer.Option(None, "--into", help="Copy the session's whole conversation into a NEW session in this agent (source untouched)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
-    version: bool = version_option("ccopy"),
+    version: bool = version_option("cextract"),
 ):
     """
-    Copy concepts between sessions and concept directories.
+    Extract concepts from sessions into files, and inject them back.
 
     A leading @ marks a session (agent/session_id); anything else is a concept
     file path. With no destination, extracted concepts dump to stdout as JSON.
 
-    Use --into to copy a session's ENTIRE conversation into a brand-new session
-    in another agent. The source is never modified, so it is a true copy:
+    To copy a whole CONVERSATION from one agent to a new session in another,
+    use `ccopy`.
 
     Examples:
-        ccopy @opencode/ses_abc
-        ccopy @opencode/ses_abc concepts/
-        ccopy concepts/ @opencode/ses_abc
-        ccopy @opencode/ses_abc @claude/ses_xyz
-        ccopy --into claude-code @opencode/ses_abc     # whole conversation -> NEW claude-code session
-        ccopy --strategy my-strategy.json @opencode/ses_abc concepts/
-        ccopy --filter my-filter.json @opencode/ses_abc concepts/
+        cextract @opencode/ses_abc
+        cextract @opencode/ses_abc concepts/
+        cextract concepts/ @opencode/ses_abc
+        cextract @opencode/ses_abc @claude/ses_xyz
+        cextract --strategy my-strategy.json @opencode/ses_abc concepts/
+        cextract --filter my-filter.json @opencode/ses_abc concepts/
     """
     configure_logging(verbose=verbose)
     sessions, files = parse_args(args)
@@ -330,11 +328,6 @@ def main(
     if not sessions:
         console.print("[red]No session references (use @ prefix)[/red]")
         raise typer.Exit(1)
-
-    # --into: copy the whole conversation into a NEW session in the named agent.
-    if into is not None:
-        _copy_to_new_agent(sessions[0], into)
-        return
 
     # Files -> session: the destination is the trailing @ref.
     if files and args[-1].startswith("@"):
@@ -372,39 +365,6 @@ def main(
     else:
         # No destination: dump to stdout.
         _dump_concepts(concepts, fmt)
-
-
-def _copy_to_new_agent(source_ref: str, agent_name: str) -> None:
-    """`ccopy --into AGENT @agent/session`: copy the session's whole
-    conversation into a brand-new session in AGENT, leaving the source intact.
-
-    The source session is never touched, so this is a true copy, not a move.
-    """
-    source, source_id = require_session(source_ref)
-
-    dest = get_agent(agent_name)
-    if dest is None:
-        console.print(f"[red]Unknown agent: {agent_name}[/red]")
-        console.print(f"[dim]Available agents: {', '.join(REGISTRY)}[/dim]")
-        raise typer.Exit(1)
-    if not dest.supports_create():
-        console.print(f"[red]{dest.label} does not support session creation[/red]")
-        console.print("[dim]The conversation could not be seeded into this agent's storage format.[/dim]")
-        raise typer.Exit(1)
-    if not dest.exists():
-        console.print(f"[yellow]Agent path not found: {dest.base_path}[/yellow]")
-        console.print(f"[dim]Is {dest.name} installed?[/dim]")
-        raise typer.Exit(1)
-
-    new_id, count = copy_session_to_new_agent(source, source_id, dest)
-    log.info("conversation_copied", source=f"{source.name}/{source_id}",
-             destination=f"{dest.name}/{new_id}", messages=count)
-    console.print(f"[green]Copied {count} message(s) from {source.name}/{source_id} "
-                  f"to a new {dest.name} session: {new_id}[/green]")
-    resume = get_resume_command(dest.name, new_id)
-    if resume:
-        console.print("[green]Resume it with:[/green]")
-        console.print(f"  {resume}")
 
 
 if __name__ == "__main__":

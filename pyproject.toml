@@ -23,6 +23,7 @@ dev = ["pytest>=7.0.0"]
 cdir = "ctools.cdir:app"
 cgrep = "ctools.cgrep:app"
 ccopy = "ctools.ccopy:app"
+cextract = "ctools.cextract:app"
 cdu = "ctools.cdu:app"
 cconnect = "ctools.cconnect:app"
 crm = "ctools.crm:app"

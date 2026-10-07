@@ -1217,7 +1217,7 @@ class OpencodeAgent(SqliteAgent):
             find_sql='SELECT id FROM message WHERE session_id = ? AND data LIKE ?',
             find_arg='%"role": "system"%',
             data={'role': 'system', 'content': content},
-            id_prefix='ccopy',
+            id_prefix='cextract',
         )
 
     def inject_toolcall(self, session_id: str, content: str,

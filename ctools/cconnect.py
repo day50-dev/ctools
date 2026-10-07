@@ -18,7 +18,7 @@ import typer
 from rich.console import Console
 
 from ctools.agents import AgentError, REGISTRY as AGENTS, get_agent
-from ctools.ccopy import (
+from ctools.cextract import (
     _filter_concepts,
     concept_text,
     extract_concepts_from_messages,

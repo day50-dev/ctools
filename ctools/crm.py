@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.prompt import Confirm
 
 from ctools.agents import Message
-from ctools.ccopy import concept_text, load_strategy, read_concepts_from_file
+from ctools.cextract import concept_text, load_strategy, read_concepts_from_file
 from ctools.cli import reporting, require_session, version_option
 
 app = typer.Typer()

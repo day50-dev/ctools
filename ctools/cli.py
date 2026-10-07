@@ -36,7 +36,7 @@ def version_option(tool: str):
 def parse_ref(ref: str) -> Tuple[str, Optional[str]]:
     """Split an ``agent`` or ``agent/session_id`` reference.
 
-    A leading ``@`` (used by ccopy and cconnect to mark session arguments)
+    A leading ``@`` (used by cextract and cconnect to mark session arguments)
     and surrounding slashes are ignored.
     """
     parts = ref.lstrip('@').strip('/').split('/', 1)
