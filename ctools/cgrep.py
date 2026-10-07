@@ -19,12 +19,13 @@ Usage:
 
 import fnmatch
 import re
-from typing import List, Optional, Tuple
+import sys
+from typing import IO, List, Optional, Tuple
 
 import typer
 from rich.console import Console
 
-from ctools.agents import Agent, AgentError, Match, get_agent
+from ctools.agents import REGISTRY, Agent, AgentError, Match, get_agent
 from ctools.cli import version_option
 from ctools.lib import get_formatter
 
@@ -40,10 +41,21 @@ EXIT_NO_MATCH = 1
 EXIT_ERROR = 2
 
 
+def _all_agents() -> List[Tuple[Agent, str]]:
+    """Every installed agent, matched against all of its sessions."""
+    return [(agent, '*') for agent in REGISTRY.values() if agent.exists()]
+
+
 def _resolve_path_patterns(pattern: str) -> Tuple[List[Tuple[Agent, str]], List[str]]:
-    """Resolve path patterns into (agent, session_glob) pairs plus unknown names."""
+    """Resolve path patterns into (agent, session_glob) pairs plus unknown names.
+
+    A bare ``*`` (or empty) means every installed agent, every session.
+    """
+    tokens = pattern.split()
+    if not tokens or tokens == ['*']:
+        return _all_agents(), []
     results, unknown = [], []
-    for pat in pattern.split():
+    for pat in tokens:
         agent_name, _, session_pat = pat.strip('/').partition('/')
         agent = get_agent(agent_name)
         if agent is None:
@@ -144,27 +156,51 @@ def _expand_only_matching(matches: List[Match], pattern: re.Pattern) -> List[Mat
 
 
 def _print_matches(matches: List[Match], show_filename: bool = True) -> None:
-    """grep-style output: `path:lineno:text`, grouped by session, separated by '--'.
-
-    Context lines use grep's `-` separators (`path-lineno-text`). Session line
-    numbers are contiguous, so context numbers follow from the match line.
-    """
-    current_session = None
+    """Batch-mode grep-style output: `path:lineno:text`, separated by '--'."""
+    state = _StreamState(show_filename, sys.stdout)
     for m in matches:
-        path = f"{m.agent}/{m.session_id}"
-        if path != current_session:
-            if current_session is not None:
-                print("--")
-            current_session = path
-        prefix = f"{path}:" if show_filename else ""
-        ctx_prefix = f"{path}-" if show_filename else ""
+        state.emit(m)
 
+
+# Matches in the default (grep-style) format are written here as each session
+# is searched, so they reach the terminal line-by-line as soon as they exist.
+# Tests point this at a StringIO to capture the streamed output.
+_stream: IO[str] = sys.stdout
+
+
+class _StreamState:
+    """Tracks the last session we printed so we can interpose grep's '--'.
+
+    One instance per streamed output; calling .emit for a match prints that
+    match's lines immediately (flushed, no end-of-search delay).
+    """
+
+    def __init__(self, show_filename: bool, stream: Optional[IO[str]] = None):
+        self.show_filename = show_filename
+        self.stream = stream if stream is not None else _stream
+        self.last_session: Optional[str] = None
+
+    def emit(self, m: Match) -> None:
+        path = f"{m.agent}/{m.session_id}"
+        if path != self.last_session:
+            if self.last_session is not None:
+                print("--", file=self.stream, flush=True)
+            self.last_session = path
+        prefix = f"{path}:" if self.show_filename else ""
+        ctx_prefix = f"{path}-" if self.show_filename else ""
         before = m.context_before or ()
         for i, line in enumerate(before):
-            print(f"{ctx_prefix}{m.line_num - len(before) + i}-{line}")
-        print(f"{prefix}{m.line_num}:{m.line}")
+            print(f"{ctx_prefix}{m.line_num - len(before) + i}-{line}",
+                  file=self.stream, flush=True)
+        print(f"{prefix}{m.line_num}:{m.line}", file=self.stream, flush=True)
         for i, line in enumerate(m.context_after or (), start=1):
-            print(f"{ctx_prefix}{m.line_num + i}-{line}")
+            print(f"{ctx_prefix}{m.line_num + i}-{line}", file=self.stream, flush=True)
+
+
+def stream_session_matches(state: _StreamState, matches: List[Match]) -> None:
+    """Print a session's matches right now, one line at a time."""
+    for m in matches:
+        state.emit(m)
 
 
 def _show_filename(no_filename: bool, with_filename: bool) -> bool:
@@ -182,7 +218,8 @@ def _exit_status(errors: bool, has_result: bool) -> int:
 @app.command()
 def main(
     pattern: str = typer.Argument(..., help="Regex search pattern"),
-    paths: List[str] = typer.Argument(..., help="Agent/session paths (e.g., opencode/*)"),
+    paths: List[str] = typer.Argument(None,
+                                     help="Agent/session paths (e.g., opencode/*); omit (or pass '*') for all agents"),
     list_files: bool = typer.Option(False, "--files-with-matches", "-l", help="Show only session IDs with matches"),
     list_files_neg: bool = typer.Option(False, "--files-without-match", "-L", help="Show only session IDs without matches"),
     no_filename: bool = typer.Option(False, "--no-filename", "-h", help="Suppress the session path prefix"),
@@ -196,6 +233,7 @@ def main(
     fixed_string: bool = typer.Option(False, "--fixed-strings", "-F", help="Treat the pattern as a fixed string, not a regex"),
     include: Optional[List[str]] = typer.Option(None, "--include", help="Only search sessions matching this glob (e.g. 'opencode/ses_*'); repeatable"),
     exclude: Optional[List[str]] = typer.Option(None, "--exclude", help="Skip sessions matching this glob; repeatable"),
+    all_agents: bool = typer.Option(False, "--all", "-a", help="Search every installed agent (same as omitting paths)"),
     count: bool = typer.Option(False, "--count", "-c", help="Show match count per session"),
     invert: bool = typer.Option(False, "--invert-match", "-v", help="Invert match"),
     before: int = typer.Option(0, "--before", "-B", help="Show N lines before match"),
@@ -211,7 +249,9 @@ def main(
     Patterns are regex. Paths specify agents and optionally session IDs.
 
     Examples:
-        cgrep "error" "opencode/*"
+        cgrep "error"                    # search every installed agent
+        cgrep -a "TODO"                  # same, with the explicit flag
+        cgrep "error" "opencode/*"       # only opencode
         cgrep -l "TODO" "opencode/*" "claude-code/*"
         cgrep -c "import" "opencode/*"
         cgrep -B2 -A2 "FIXME" "opencode/ses_abc123"
@@ -225,6 +265,9 @@ def main(
     if max_matches is not None and max_matches < 1:
         console.print("[red]Invalid max count: must be >= 1[/red]")
         raise typer.Exit(EXIT_ERROR)
+
+    if all_agents:
+        paths = ["*"]
 
     flags = re.IGNORECASE if ignore_case else 0
     try:
@@ -247,15 +290,22 @@ def main(
             raise typer.Exit(EXIT_ERROR)
 
     errors = False
-    agent_specs, unknown_agents = _resolve_path_patterns(' '.join(paths))
+    agent_specs, unknown_agents = _resolve_path_patterns(' '.join(paths or []))
     for agent_name in unknown_agents:
         console.print(f"[red]Unknown agent: {agent_name}[/red]")
         errors = True
 
-    all_matches = []
+    # Streaming modes print matches as each session is searched, line by line,
+    # so results reach the terminal as soon as they exist (like grep on a
+    # slow directory). Count/list/formatted modes still buffer.
+    streaming = not quiet and not list_files and not list_files_neg \
+        and not count and formatter is None
+    stream = _StreamState(show_filename) if streaming else None
+
     with_matches = set()
     without_matches = set()
     counts = {}
+    all_matches = []
 
     for agent, session_pat in agent_specs:
         if not agent.exists():
@@ -275,7 +325,10 @@ def main(
             if matches:
                 with_matches.add(path)
                 counts[path] = len(matches)
-                all_matches.extend(matches)
+                if stream is not None:
+                    stream_session_matches(stream, matches)
+                else:
+                    all_matches.extend(matches)
             else:
                 without_matches.add(path)
 
@@ -289,10 +342,15 @@ def main(
         has_result = bool(with_matches)
         files = []
     else:
-        has_result = bool(all_matches)
+        has_result = bool(with_matches)
         files = []
 
     if quiet:
+        raise typer.Exit(_exit_status(errors, has_result))
+
+    if streaming:
+        if not has_result:
+            print("No matches found", file=stream.stream, flush=True)
         raise typer.Exit(_exit_status(errors, has_result))
 
     if list_files or list_files_neg:

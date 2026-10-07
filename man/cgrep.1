@@ -28,11 +28,12 @@ cgrep \- search through LLM context window sessions
 .IR glob ]
 .RB [ \-\-exclude
 .IR glob ]
+.RB [ \-a ]
 .RB [ \-f
 .IR format ]
 .RB [ \-\-version ]
 .I pattern
-.IR paths ...
+.IR [ paths ...]
 .SH DESCRIPTION
 .B cgrep
 (context grep) searches through conversation content stored in
@@ -160,6 +161,13 @@ XML document with session and match elements.
 Markdown with match highlights.
 .RE
 .TP
+.B \-a
+.RB ,
+.B \-\-all
+Search every installed agent, the same as omitting
+.I paths
+entirely.
+.TP
 .B \-\-version
 Print version information and exit.
 .SH ARGUMENTS
@@ -167,7 +175,7 @@ Print version information and exit.
 .I pattern
 PCRE regular expression pattern to search for.
 .TP
-.I paths
+.IR [ paths ...]
 One or more agent/session paths in the format:
 .RS
 .TP
@@ -178,8 +186,24 @@ Search all sessions for agent.
 Search a specific session.
 .RE
 .PP
-Multiple paths can be specified separated by spaces.
+Multiple paths can be specified separated by spaces. When
+.I paths
+is omitted (or is
+.BR * ,
+or
+.B \-a
+is given), every installed agent is searched at once.
 .SH EXAMPLES
+Search for "ssl" across every installed agent:
+.PP
+.RS
+.nf
+$ cgrep -i "ssl"
+claude-code/a351eedf:142:assistant: ... the TLS handshake fails ...
+opencode/ses_000d460f:16:user: ok graflex has an erorr in the check. ...
+.fi
+.RE
+.PP
 Search for "error" in all opencode sessions:
 .PP
 .RS

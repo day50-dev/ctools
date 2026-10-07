@@ -7,18 +7,18 @@ Memory tools for LLM conversations: GNU tools for the history your agents leave 
 
 **Works with the agents you already use:** Claude Desktop, Claude Code, Opencode, Kilo, Codex, Pi, Goose, Hermes, Cline, omp (oh-my-pi), and Freebuff (Codebuff).
 
-**Have you ever wanted to grep through your Claude Code history?**
+**Have you ever wanted to grep through your coding-agent history?**
 
 Not the tab you have open — the whole thing. Every session you ever had, sitting on disk as plain files. Months of "how did I fix that last time?" answered with one regex:
 
 ```shell
-$ cgrep -i "ssl" "opencode/"
-opencode/ses_fc9be2522ffeXE49mrCYRhd3Sa:54:assistant: Test bug #2 — I forgot to stub `check` this time, so the real one ran … Fixing the test:
-opencode/ses_000d460faffeqbm72mRhiOH329:16:user: ok graflex has an erorr in the check. i see this: … [[SSL: WRONG_VERSION_NUMBER] wrong version number …
-opencode/ses_000d460faffeqbm72mRhiOH329:34:assistant: Found it. Root cause: `_check_host` (graflex/__init__.py:128) tries `http`, and …
+$ cgrep -i "ssl"
+claude-code/a351eedf:142:assistant: … the TLS handshake fails with SSL wrong version number …
+opencode/ses_000d460f:16:user: ok graflex has an erorr in the check. i see this: … [[SSL: WRONG_VERSION_NUMBER] …
+opencode/ses_000d460f:34:assistant: Found it. Root cause: `_check_host` (graflex/__init__.py:128) tries `http`, and …
 ```
 
-That last line is the root-cause analysis you wrote six months ago and would never have found again.
+No agent argument? It searches **every installed agent at once** — Claude Code, Opencode, Kilo, Codex, Pi, Goose, Hermes, Cline, omp, and Freebuff, all in one pass. That last line is the root-cause analysis you wrote six months ago and would never have found again.
 
 It really is grep: matches print as `session:line:text`, context lines use `-`, the flags are the ones you already know (`-i -c -o -w -x -F -l -m -h -H -A/-B/-C --include/--exclude`), and the exit codes are scriptable — `0` match, `1` none, `2` bad pattern. `cgrep` is the big one; everything else is in service of it.
 
@@ -220,9 +220,19 @@ ccopy @opencode/ses_abc                        # dump to stdout (JSON)
 ccopy @opencode/ses_abc concepts/              # extract packets to bus
 ccopy concepts/ @opencode/ses_abc               # inject packets from bus
 ccopy @opencode/ses_abc @claude-code/ses_xyz   # endpoint to endpoint
+ccopy --into claude-code @opencode/ses_abc     # whole conversation -> NEW claude-code session
 ccopy -s my-strategy.json @opencode/ses_abc concepts/  # custom extraction
 ccopy -F my-filter.json @opencode/ses_abc concepts/    # filter concepts
 ccopy -v @opencode/ses_abc concepts/            # verbose logging
+```
+
+`--into AGENT` copies a session's **entire conversation** into a brand-new session in another agent. The source is never touched, so it's a true copy (not a move):
+
+```sh
+$ ccopy --into codex @opencode/ses_abc
+Copied 42 message(s) from opencode/ses_abc to a new codex session: 1a2b3c
+Resume it with:
+  codex resume 1a2b3c
 ```
 
 Each concept file is a packet with filterable headers:
@@ -362,21 +372,24 @@ LOGLEVEL=DEBUG cconnect -f my-filter.json @opencode/ses_abc @claude-code/ses_xyz
 
 Searches conversation content across every session you have. Regex in, matches out. Works across all agents — this is the tool the whole suite is named for.
 
+With no path argument (or `*`, or `-a`) it searches **every installed agent** at once. Name a path to narrow to one agent, one session, or a glob:
+
 ```sh
-cgrep "pattern" "opencode/*"
-cgrep -i "error" "claude-code/"
-cgrep -c "def " "opencode/"              # count per session
-cgrep -C 2 "exception" "claude-code/"    # context lines
-cgrep "TODO" "opencode/" "claude-code/"  # multiple agents
-cgrep -h "TODO" "opencode/ses_abc123"    # drop the session path prefix
-cgrep -o -w "foo" "opencode/"            # whole-word hits, matched text only
-cgrep -q "needle" "opencode/"            # exit code only, like grep -q
-cgrep -m 3 "retry" "opencode/"           # stop after 3 hits per session
-cgrep -F "[ERROR]" "opencode/"           # fixed string, no regex
+cgrep "pattern"                           # every installed agent
+cgrep -a "error"                          # same, explicit flag
+cgrep -i "error" "claude-code/"           # only one agent
+cgrep "def " "opencode/" "claude-code/"   # multiple named agents
+cgrep -c "import" "opencode/"             # count per session
+cgrep -C 2 "exception" "claude-code/"     # context lines
+cgrep -h "TODO" "opencode/ses_abc123"     # drop the session path prefix
+cgrep -o -w "foo" "opencode/"             # whole-word hits, matched text only
+cgrep -q "needle" "opencode/"             # exit code only, like grep -q
+cgrep -m 3 "retry" "opencode/"            # stop after 3 hits per session
+cgrep -F "[ERROR]" "opencode/"            # fixed string, no regex
 cgrep --include "ses_abc*" "err" "opencode/"  # only matching session IDs
 ```
 
-Flags: `-l` list files, `-L` sessions without matches, `-c` count, `-v` invert, `-i` case-insensitive, `-A/-B/-C` context, `-h`/`-H` filename prefix, `-q` quiet (exit code only), `-m N` max matches per session, `-o` only the matched text, `-w` whole word, `-x` whole line, `-E` extended/POSIX regex (default), `-F` fixed string, `--include`/`--exclude` session ID globs.
+Flags: `-l` list files, `-L` sessions without matches, `-c` count, `-v` invert, `-i` case-insensitive, `-A/-B/-C` context, `-h`/`-H` filename prefix, `-q` quiet (exit code only), `-m N` max matches per session, `-o` only the matched text, `-w` whole word, `-x` whole line, `-E` extended/POSIX regex (default), `-F` fixed string, `--include`/`--exclude` session ID globs, `-a`/`--all` search every installed agent.
 
 Exit status is grep's: `0` if a match was found, `1` if none, `2` on error (bad pattern, missing agent) — errors beat matches. `-q` prints nothing and still reports the status.
 

@@ -21,6 +21,7 @@ import re
 import sqlite3
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -303,6 +304,21 @@ class Agent:
         """
         raise UnsupportedOperation(self.name, 'message removal')
 
+    def create_session(self, messages: List[Message]) -> str:
+        """Create a brand-new session holding `messages`; return its id.
+
+        Used to seed a conversation into an agent that has none yet (e.g.
+        migrating a transcript from another agent).  Agents whose storage
+        cannot be written in a way the tool itself understands refuse with
+        :class:`UnsupportedOperation`.
+        """
+        raise UnsupportedOperation(self.name, 'session creation')
+
+    def supports_create(self) -> bool:
+        """Whether this agent can seed a new session from a conversation."""
+        fn = type(self).create_session
+        return fn is not Agent.create_session
+
 
 # --- Storage shapes ---
 
@@ -490,6 +506,31 @@ class JsonlAgent(FileAgent):
             entry['content'] = content
         return entry
 
+    def _session_dir(self) -> Path:
+        """Where new session files are written (overridable)."""
+        return self.base_path
+
+    def _new_entry(self, message: Message, session_id: str, index: int) -> dict:
+        """Build one native entry for `message` in a fresh session."""
+        raise UnsupportedOperation(self.name, 'session creation')
+
+    def _new_header(self, session_id: str) -> Optional[dict]:
+        """An optional file header record, or None if the agent has none."""
+        return None
+
+    def create_session(self, messages: List[Message]) -> str:
+        session_id = str(uuid.uuid4())
+        lines = []
+        header = self._new_header(session_id)
+        if header is not None:
+            lines.append(json.dumps(header))
+        lines += [json.dumps(self._new_entry(m, session_id, i))
+                  for i, m in enumerate(messages)]
+        path = self._session_dir() / f'{session_id}.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('\n'.join(lines) + '\n' if lines else '')
+        return session_id
+
     @staticmethod
     def _is_system(entry: dict) -> bool:
         message = entry.get('message')
@@ -646,6 +687,18 @@ class ClaudeCodeAgent(JsonlAgent):
             return None
         return Message(role=role, content=content)
 
+    def _new_entry(self, message: Message, session_id: str, index: int) -> dict:
+        etype = 'user' if message.role in ('user', 'system') else 'assistant'
+        entry = {'type': etype, 'uuid': str(uuid.uuid4()),
+                 'sessionId': session_id, 'timestamp': time.time(),
+                 'message': {'role': message.role, 'content': message.content}}
+        if etype == 'assistant':
+            entry['message']['model'] = 'claude-sonnet-4-5'
+        return entry
+
+    def _session_dir(self) -> Path:
+        return self.base_path / 'projects' / '-ctools'
+
     def sessions(self) -> List[Session]:
         sessions = []
         for path in self.session_files():
@@ -740,6 +793,20 @@ class CodexAgent(JsonlAgent):
         if not content:
             return None
         return Message(role=role, content=content)
+
+    def _new_header(self, session_id: str) -> dict:
+        return {'session_meta': {'id': session_id,
+                                 'timestamp': int(time.time()),
+                                 'cwd': str(self.base_path)}}
+
+    def _new_entry(self, message: Message, session_id: str, index: int) -> dict:
+        payload = {'type': 'message', 'role': message.role,
+                   'content': [{'type': 'input_text' if message.role == 'user'
+                                else 'output_text', 'text': message.content}]}
+        return {'type': 'response_item', 'payload': payload}
+
+    def _session_dir(self) -> Path:
+        return self.base_path / 'sessions'
 
     def _index_sessions(self) -> List[Session]:
         if not self.index_path.exists():
@@ -946,6 +1013,26 @@ class PiAgent(JsonlAgent):
                 parent_id=self._session_uuid(parent_session),
             ))
         return sessions
+
+    def create_session(self, messages: List[Message]) -> str:
+        session_id = str(uuid.uuid4())
+        now_iso = datetime.now().isoformat()
+        first_user = next((m.content for m in messages if m.role == 'user'), '')
+        lines = [json.dumps({'type': 'session', 'id': session_id,
+                             'timestamp': now_iso, 'cwd': str(self.base_path),
+                             'name': _truncated(first_user)})]
+        prev: Optional[str] = None
+        for i, message in enumerate(messages):
+            entry = {'type': 'message', 'id': uuid.uuid4().hex[:8],
+                     'parentId': prev, 'timestamp': now_iso,
+                     'message': {'role': message.role, 'content': message.content,
+                                 'timestamp': int(time.time() * 1000)}}
+            lines.append(json.dumps(entry))
+            prev = entry['id']
+        path = self.base_path / 'sessions' / f'{int(time.time())}_{session_id}.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('\n'.join(lines) + '\n')
+        return session_id
 
     def _unsupported(self, operation: str):
         return UnsupportedOperation(
@@ -1160,6 +1247,46 @@ class OpencodeAgent(SqliteAgent):
         finally:
             conn.close()
         return len(targets)
+
+    def create_session(self, messages: List[Message]) -> str:
+        session_id = f"ses_{uuid.uuid4().hex[:24]}"
+        now_ms = int(time.time() * 1000)
+        first_user = next((m.content for m in messages if m.role == 'user'), '')
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+        except sqlite3.Error as exc:
+            raise AgentError(f"{self.name}: cannot open {self.db_path} ({exc})")
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='session'")
+            if cursor.fetchone() is None:
+                raise AgentError(f"{self.name}: no session table in {self.db_path}")
+            project_id = f"prt_{uuid.uuid4().hex[:12]}"
+            cursor.execute('''
+                INSERT INTO session (id, project_id, parent_id, slug, directory, title,
+                    version, time_created, time_updated, cost,
+                    tokens_input, tokens_output, tokens_reasoning,
+                    tokens_cache_read, tokens_cache_write)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (session_id, project_id, None, session_id, str(self.base_path),
+                  _truncated(first_user or 'ctools session'), '0',
+                  now_ms, now_ms, 0.0, 0, 0, 0, 0, 0))
+            for i, message in enumerate(messages):
+                msg_id = f"msg_{session_id}_{i}"
+                data = json.dumps({'role': message.role, 'content': message.content})
+                part = json.dumps({'type': 'text', 'text': message.content})
+                cursor.execute(
+                    'INSERT INTO message (id, session_id, time_created, time_updated, data)'
+                    ' VALUES (?, ?, ?, ?, ?)',
+                    (msg_id, session_id, now_ms + i, now_ms + i, data))
+                cursor.execute(
+                    'INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)'
+                    ' VALUES (?, ?, ?, ?, ?, ?)',
+                    (f"part_{msg_id}", msg_id, session_id, now_ms + i, now_ms + i, part))
+            conn.commit()
+        finally:
+            conn.close()
+        return session_id
 
 
 class KiloAgent(OpencodeAgent):
@@ -1965,3 +2092,48 @@ def agent_names() -> List[str]:
 def installed() -> List[Agent]:
     """Agents whose storage is actually present on this machine."""
     return [a for a in REGISTRY.values() if a.exists()]
+
+
+# --- Resume commands ---
+#
+# Each value is a template with a ``{id}`` placeholder filled with the session
+# id.  These are the flags the tools actually document; override per-machine in
+# ~/.config/ctools/resume-commands.json ({"agent": "command {id}"}).
+
+RESUME_COMMANDS: Dict[str, str] = {
+    'claude-code': 'claude --resume {id}',
+    'claude': 'claude --resume {id}',
+    'opencode': 'opencode -s {id}',
+    'kilo': 'kilo -s {id}',
+    'codex': 'codex resume {id}',
+    'pi': 'pi --session {id}',
+    'goose': 'goose session resume {id}',
+    'hermes': 'hermes resume {id}',
+    'cline': 'cline --resume {id}',
+    'omp': 'omp resume {id}',
+    'freebuff': 'freebuff --resume {id}',
+}
+
+
+def _resume_override() -> Dict[str, str]:
+    path = Path.home() / '.config' / 'ctools' / 'resume-commands.json'
+    if path.exists():
+        try:
+            data = json.loads(path.read_text())
+            if isinstance(data, dict):
+                return {k: str(v) for k, v in data.items()}
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {}
+
+
+def get_resume_command(agent_name: str, session_id: str) -> Optional[str]:
+    """The command to resume `session_id` under `agent_name`, or None.
+
+    A per-machine override (see :data:`RESUME_COMMANDS`) wins over the built-in
+    table.
+    """
+    template = _resume_override().get(agent_name) or RESUME_COMMANDS.get(agent_name)
+    if not template:
+        return None
+    return template.format(id=session_id)

@@ -18,12 +18,14 @@ from ctools.agents import (
     AgentError, SessionNotFound, UnsupportedOperation,
     REGISTRY as AGENTS,
     get_agent, agent_names, installed,
+    RESUME_COMMANDS, get_resume_command,
 )
 
 __all__ = [
     'Agent', 'Session', 'Message', 'Match', 'AGENTS',
     'AgentError', 'SessionNotFound', 'UnsupportedOperation',
     'get_agent', 'agent_names', 'installed',
+    'RESUME_COMMANDS', 'get_resume_command',
     'format_size', 'format_datetime', 'get_formatter',
     'OutputFormatter', 'JsonFormatter', 'XmlFormatter', 'MarkdownFormatter',
 ]

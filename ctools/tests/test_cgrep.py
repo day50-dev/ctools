@@ -1,13 +1,37 @@
+import io
 import json
 import sqlite3
 import pytest
 from pathlib import Path
 from typer.testing import CliRunner
+from ctools import cgrep
 from ctools.cgrep import app, grep_session, parse_path_pattern
 from ctools.agents import (REGISTRY as AGENTS, SessionNotFound,
-                           GooseAgent, OpencodeAgent, PiAgent)
+                            GooseAgent, OpencodeAgent, PiAgent)
 
 runner = CliRunner()
+
+
+_captured = io.StringIO()
+
+
+@pytest.fixture(autouse=True)
+def _capture_cgrep_stream(monkeypatch):
+    """Route cgrep's streaming output into a buffer CliRunner can read.
+
+    cgrep writes default-format matches to the real stdout so they appear
+    line-by-line as found; CliRunner captures stdout separately, so tests
+    point the module-level stream at a buffer. Read it with _captured.
+    """
+    _captured.truncate(0)
+    _captured.seek(0)
+    monkeypatch.setattr(cgrep, "_stream", _captured)
+    yield _captured
+
+
+def _out(result) -> str:
+    """Combined stdout: CliRunner's captured stdout plus cgrep's streamed lines."""
+    return (result.stdout or "") + _captured.getvalue()
 
 
 # --- Helper to create test opencode DB ---
@@ -284,7 +308,7 @@ def test_cli_basic_search(tmp_path):
     try:
         result = runner.invoke(app, ["python", f"opencode/ses_test123"])
         assert result.exit_code == 0
-        assert "python" in result.stdout.lower()
+        assert "python" in _out(result).lower()
     finally:
         AGENTS['opencode'].base_path = original
 
@@ -324,7 +348,8 @@ def test_cli_invert(tmp_path):
     try:
         result = runner.invoke(app, ["-v", "python", f"opencode/ses_test123"])
         assert result.exit_code == 0
-        assert "python" not in result.stdout.lower() or "python" in result.stdout
+        out = _out(result)
+        assert "python" not in out.lower() or "python" in out
     finally:
         AGENTS['opencode'].base_path = original
 
@@ -340,7 +365,7 @@ def test_cli_default_prefixes_session_path(tmp_path):
     try:
         result = runner.invoke(app, ["python", f"opencode/ses_test123"])
         assert result.exit_code == 0
-        assert "opencode/ses_test123:3:user: Write some python code" in result.stdout
+        assert "opencode/ses_test123:3:user: Write some python code" in _out(result)
     finally:
         AGENTS['opencode'].base_path = original
 
@@ -354,8 +379,9 @@ def test_cli_no_filename_suppresses_prefix(tmp_path):
     try:
         result = runner.invoke(app, ["-h", "python", f"opencode/ses_test123"])
         assert result.exit_code == 0
-        assert "opencode/ses_test123:" not in result.stdout
-        assert "3:user: Write some python code" in result.stdout
+        out = _out(result)
+        assert "opencode/ses_test123:" not in out
+        assert "3:user: Write some python code" in out
     finally:
         AGENTS['opencode'].base_path = original
 
@@ -369,7 +395,7 @@ def test_cli_with_filename_forces_prefix(tmp_path):
     try:
         result = runner.invoke(app, ["-h", "-H", "python", f"opencode/ses_test123"])
         assert result.exit_code == 0
-        assert "opencode/ses_test123:3:user: Write some python code" in result.stdout
+        assert "opencode/ses_test123:3:user: Write some python code" in _out(result)
     finally:
         AGENTS['opencode'].base_path = original
 
@@ -383,8 +409,9 @@ def test_cli_context_lines_are_numbered(tmp_path):
     try:
         result = runner.invoke(app, ["-C1", "python", f"opencode/ses_test123"])
         assert result.exit_code == 0
-        assert "opencode/ses_test123-2-assistant: Hi there! How can I help?" in result.stdout
-        assert "opencode/ses_test123:3:user: Write some python code" in result.stdout
+        out = _out(result)
+        assert "opencode/ses_test123-2-assistant: Hi there! How can I help?" in out
+        assert "opencode/ses_test123:3:user: Write some python code" in out
     finally:
         AGENTS['opencode'].base_path = original
 
@@ -414,6 +441,69 @@ def _with_opencode_db(tmp_path, func):
         return func()
     finally:
         AGENTS['opencode'].base_path = original
+
+
+def _with_registry(tmp_path, monkeypatch, only=("opencode",)):
+    """Point only the named agents at tmp_path and every other agent at a
+    non-existent directory, so all-agents searches cover exactly those agents."""
+    for name, agent in AGENTS.items():
+        if name in only:
+            agent.base_path = tmp_path
+        else:
+            agent.base_path = tmp_path / f"__missing__{name}"
+    monkeypatch.setattr("ctools.cgrep._all_agents",
+                        lambda: [(AGENTS[n], '*') for n in only])
+
+
+# --- all-agents (no path) tests ---
+
+def test_all_agents_omitted_paths_searches_everything(tmp_path, monkeypatch):
+    """cgrep with no path arg searches every installed agent."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    result = runner.invoke(app, ["python"])
+    assert result.exit_code == 0
+    out = _out(result)
+    assert "python" in out.lower()
+    assert "opencode/ses_test123" in out
+
+
+def test_all_agents_star_path_searches_everything(tmp_path, monkeypatch):
+    """An explicit '*' path is the same as omitting paths."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    result = runner.invoke(app, ["python", "*"])
+    assert result.exit_code == 0
+    assert "opencode/ses_test123" in _out(result)
+
+
+def test_all_agents_flag_searches_everything(tmp_path, monkeypatch):
+    """-a / --all is equivalent to omitting paths."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    result = runner.invoke(app, ["-a", "python"])
+    assert result.exit_code == 0
+    assert "opencode/ses_test123" in _out(result)
+
+
+def test_all_agents_no_match_exit_one(tmp_path, monkeypatch):
+    """With no path arg and no matches, exit status is 1."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    result = runner.invoke(app, ["zzzz_no_such_thing"])
+    assert result.exit_code == 1
+    assert "No matches" in _out(result)
+
+
+def test_all_agents_respects_exclude(tmp_path, monkeypatch):
+    """--exclude still applies when searching all agents."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    result = runner.invoke(app, ["python", "--exclude", "opencode/ses_test123"])
+    assert result.exit_code == 1
+    out = _out(result)
+    assert "No matches" in out
+    assert out.strip() == "No matches found"
 
 
 def test_cli_quiet_exit_status_only(tmp_path):
@@ -494,7 +584,7 @@ def test_cli_line_regexp(tmp_path):
 
         exact = runner.invoke(app, ["-x", "user: Hello world", "opencode/ses_test123"])
         assert exact.exit_code == 0
-        assert "opencode/ses_test123:1:user: Hello world" in exact.stdout
+        assert "opencode/ses_test123:1:user: Hello world" in _out(exact)
 
     _with_opencode_db(tmp_path, run)
 
@@ -506,7 +596,7 @@ def test_cli_only_matching(tmp_path):
     def run():
         result = runner.invoke(app, ["-o", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
-        lines = [l for l in result.stdout.splitlines() if l]
+        lines = [l for l in _out(result).splitlines() if l]
         assert lines == [
             "opencode/ses_test123:3:python",
             "opencode/ses_test123:4:python",
@@ -536,7 +626,7 @@ def test_cli_fixed_strings(tmp_path):
         # As a regex, '.' matches the 'l' in hello.
         regex = runner.invoke(app, ["h.llo", "opencode/ses_test123"])
         assert regex.exit_code == 0
-        assert "print('hello')" in regex.stdout
+        assert "print('hello')" in _out(regex)
 
         # As a fixed string, 'h.llo' is not present.
         fixed = runner.invoke(app, ["-F", "h.llo", "opencode/ses_test123"])
@@ -558,7 +648,7 @@ def test_cli_extended_regexp_is_default(tmp_path):
     def run():
         result = runner.invoke(app, ["-E", "Wri[te]+ some python", "opencode/ses_test123"])
         assert result.exit_code == 0
-        assert "opencode/ses_test123:3:user: Write some python code" in result.stdout
+        assert "opencode/ses_test123:3:user: Write some python code" in _out(result)
 
     _with_opencode_db(tmp_path, run)
 
@@ -573,7 +663,7 @@ def test_cli_include_exclude_globs(tmp_path):
 
         included = runner.invoke(app, ["--include", "opencode/ses_test*", "python", "opencode/ses_test123"])
         assert included.exit_code == 0
-        assert "opencode/ses_test123" in included.stdout
+        assert "opencode/ses_test123" in _out(included)
 
     _with_opencode_db(tmp_path, run)
 
@@ -610,7 +700,9 @@ def test_cli_no_match(tmp_path):
     try:
         result = runner.invoke(app, ["nonexistent_xyz", f"opencode/ses_test123"])
         assert result.exit_code == 1
-        assert "No matches" in result.stdout
+        out = _out(result)
+        assert "No matches" in out
+        assert out.strip() == "No matches found"
     finally:
         AGENTS['opencode'].base_path = original
 
@@ -794,7 +886,7 @@ def test_cli_search_pi(tmp_path):
     try:
         result = runner.invoke(app, ["thing", "pi/*"])
         assert result.exit_code == 0
-        assert 'user: what is this thing' in result.stdout
+        assert 'user: what is this thing' in _out(result)
     finally:
         AGENTS['pi'].base_path = original
 
