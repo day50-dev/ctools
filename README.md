@@ -3,9 +3,12 @@
 <a href=https://pypi.org/project/ctxttools><img src=https://badge.fury.io/py/ctxttools.svg/></a>
 </p>
 
-# ctools
+------
 
-**Two things you can't do any other way.**
+Grep through your conversation history in Claude Desktop, Claude Code, Codex, Pi, Hermes, Goose, Kilo, Hermes, FreeBuff, Cline, and omp.
+
+Copy your conversation from one to another. Start in one program, continue in another. using the normal resume syntax.
+
 
 ### 1. `cgrep` — find it in your past conversations
 
