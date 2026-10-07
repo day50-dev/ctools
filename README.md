@@ -5,6 +5,8 @@
 
 Memory tools for LLM conversations: GNU tools for the history your agents leave behind.
 
+**Works with the agents you already use:** Claude Desktop, Claude Code, Opencode, Kilo, Codex, Pi, Goose, Hermes, Cline, omp (oh-my-pi), and Freebuff (Codebuff).
+
 **Have you ever wanted to grep through your Claude Code history?**
 
 Not the tab you have open — the whole thing. Every session you ever had, sitting on disk as plain files. Months of "how did I fix that last time?" answered with one regex:
@@ -108,12 +110,17 @@ Found:
   AGENT         DESCRIPTION                 PATH
   claude-code   Claude Code CLI             ~/.claude/projects/
   opencode      Opencode CLI                ~/.local/share/opencode/opencode.db
+  kilo          Kilo CLI                    ~/.local/share/kilo/kilo.db
 
 Not Found:
   claude        Claude Desktop (Anthropic)  ~/.config/Claude/conversations/
   codex         OpenAI Codex CLI            ~/.codex/sessions/
   pi            Pi Coding Agent             ~/.pi/agent/sessions/
   goose         Goose AI agent              ~/.local/share/goose/sessions/sessions.db
+  hermes        Hermes agent                ~/.hermes/state.db
+  cline         Cline (cline.bot)           ~/.cline/data/tasks/
+  omp           omp (oh-my-pi)              ~/.omp/agent/sessions/
+  freebuff      Freebuff (Codebuff)         ~/.config/freebuff/projects/
 ```
 
 That alone should be convincing. But there's more.
@@ -478,9 +485,14 @@ The filter script can be anything that speaks JSON-RPC on stdio: a regex script,
 | claude | JSON |
 | claude-code | JSONL |
 | opencode | SQLite |
+| kilo | SQLite (opencode fork, same schema) |
 | codex | JSONL |
 | pi | JSONL |
 | goose | SQLite |
+| hermes | SQLite (`~/.hermes/state.db`, `$HERMES_HOME`) |
+| cline | JSON (`~/.cline/data/tasks/`) |
+| omp | JSONL (`~/.omp/agent/sessions/`, tree journal) |
+| freebuff | JSON (`~/.config/<codebuff>/projects/`) |
 
 Run `cdir` to see which endpoints are found on your system and where they store data.
 

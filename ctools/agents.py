@@ -160,6 +160,22 @@ def epoch_ms(ms) -> Optional[datetime]:
         return None
 
 
+def epoch_seconds(sec) -> Optional[datetime]:
+    """Convert seconds-since-epoch to a naive local datetime."""
+    if not sec:
+        return None
+    try:
+        return datetime.fromtimestamp(float(sec))
+    except (ValueError, TypeError, OSError):
+        return None
+
+
+def _truncated(text: str, limit: int = 80) -> str:
+    """Collapse `text` to a single line and cap it at `limit` characters."""
+    line = ' '.join(text.split())
+    return line[:limit]
+
+
 def file_metadata(path: Path) -> Tuple[datetime, datetime, int]:
     """Return (ctime, mtime, size) for a file."""
     st = path.stat()
@@ -1146,6 +1162,25 @@ class OpencodeAgent(SqliteAgent):
         return len(targets)
 
 
+class KiloAgent(OpencodeAgent):
+    """Kilo: an Opencode fork that keeps the same SQLite schema.
+
+    Only the database location and identity differ -- the ``session`` /
+    ``message`` / ``part`` tables are byte-for-byte opencode's, so every read
+    and write is inherited unchanged.
+    """
+
+    name = 'kilo'
+    description = 'Kilo CLI'
+    display_name = 'Kilo'
+    db_name = 'kilo.db'
+    files_read = 'kilo.db'
+
+    @classmethod
+    def default_base_path(cls) -> Path:
+        return Path.home() / '.local/share/kilo'
+
+
 class GooseAgent(SqliteAgent):
     """Goose: a SQLite session index, with a legacy one-JSONL-per-session mode.
 
@@ -1297,15 +1332,603 @@ class GooseAgent(SqliteAgent):
         return out
 
 
+class HermesAgent(SqliteAgent):
+    """Hermes: one SQLite database (``state.db``) with sessions / messages tables.
+
+    Message text lives directly in ``messages.content`` -- either a plain
+    string or a ``\\x00json:``-prefixed JSON blob for multimodal turns.  Only
+    the primary home (``HERMES_HOME`` or ``~/.hermes``) is read; per-profile
+    databases under ``profiles/`` are a separate store.
+    """
+
+    name = 'hermes'
+    description = 'Hermes agent'
+    display_name = 'Hermes'
+    db_name = 'state.db'
+    files_read = 'state.db'
+    _CONTENT_JSON_PREFIX = '\x00json:'
+
+    @classmethod
+    def default_base_path(cls) -> Path:
+        root = os.environ.get('HERMES_HOME')
+        if root and os.path.isabs(root):
+            return Path(root)
+        return Path.home() / '.hermes'
+
+    def _decode_content(self, content) -> str:
+        if content is None:
+            return ''
+        if isinstance(content, str) and content.startswith(self._CONTENT_JSON_PREFIX):
+            payload = content[len(self._CONTENT_JSON_PREFIX):]
+            try:
+                return text_of(json.loads(payload))
+            except (json.JSONDecodeError, TypeError):
+                return payload
+        if isinstance(content, str):
+            return content
+        return text_of(content)
+
+    def sessions(self) -> List[Session]:
+        conn = self.connect()
+        if conn is None:
+            return []
+        sessions = []
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, title, display_name, started_at, last_activity_at,
+                       ended_at, input_tokens, output_tokens, model, cwd,
+                       parent_session_id, message_count
+                FROM sessions
+                WHERE COALESCE(hidden, 0) = 0
+                ORDER BY COALESCE(last_activity_at, ended_at, started_at) DESC
+            ''')
+            for row in cursor.fetchall():
+                (session_id, title, display_name, created, activity, ended,
+                 tokens_in, tokens_out, model, cwd, parent_id, msg_count) = row
+                sessions.append(Session(
+                    id=session_id,
+                    name=title or display_name or session_id[:8],
+                    ctime=epoch_seconds(created),
+                    mtime=epoch_seconds(activity or ended),
+                    size=(tokens_in or 0) + (tokens_out or 0),
+                    path=cwd or str(self.db_path),
+                    model=model,
+                    message_count=msg_count,
+                    parent_id=parent_id,
+                ))
+        except sqlite3.Error:
+            return []
+        finally:
+            conn.close()
+        return sessions
+
+    def token_usage(self, session_id: str) -> Optional[Dict[str, int]]:
+        conn = self.connect()
+        if conn is None:
+            return None
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT input_tokens, output_tokens, reasoning_tokens FROM sessions WHERE id = ?',
+                (session_id,))
+            row = cursor.fetchone()
+        except sqlite3.Error:
+            return None
+        finally:
+            conn.close()
+        if not row:
+            return None
+        tokens_input, tokens_output, tokens_reasoning = row
+        return {
+            'total': (tokens_input or 0) + (tokens_output or 0) + (tokens_reasoning or 0),
+            'input': tokens_input or 0,
+            'output': tokens_output or 0,
+        }
+
+    def _rows(self, session_id: str) -> List[Tuple[str, str]]:
+        """Return (role, text) for a session's live messages, in order."""
+        conn = self.connect()
+        if conn is None:
+            raise SessionNotFound(self.name, session_id)
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT role, content FROM messages
+                WHERE session_id = ? AND COALESCE(active, 1) = 1
+                ORDER BY timestamp, id
+            ''', (session_id,))
+            rows = [(role, self._decode_content(content))
+                    for role, content in cursor.fetchall()]
+            rows = [(role, text) for role, text in rows if text]
+            if not rows:
+                cursor.execute('SELECT 1 FROM sessions WHERE id = ?', (session_id,))
+                if cursor.fetchone() is None:
+                    raise SessionNotFound(self.name, session_id)
+            return rows
+        except sqlite3.Error:
+            raise SessionNotFound(self.name, session_id)
+        finally:
+            conn.close()
+
+    def raw_messages(self, session_id: str) -> List[Message]:
+        return [Message(role=role, content=text) for role, text in self._rows(session_id)]
+
+    def messages(self, session_id: str) -> List[Message]:
+        return [m for m in self.raw_messages(session_id) if m.role in CONVERSATION_ROLES]
+
+
+class ClineAgent(Agent):
+    """Cline (cline.bot): one directory per task under ``~/.cline/data/tasks/``.
+
+    The conversation lives in ``api_conversation_history.json`` as a list of
+    ``{role, content}`` pairs, where each ``content`` is a JSON-encoded list of
+    content blocks.  Newer installs (and the Roo Code fork) also keep a
+    ``history_item.json`` with a title and token counts, so that is preferred
+    when present.
+    """
+
+    name = 'cline'
+    description = 'Cline (cline.bot)'
+    display_name = 'Cline'
+    storage_format = 'json'
+    files_read = 'data/tasks/'
+
+    @classmethod
+    def default_base_path(cls) -> Path:
+        return Path.home() / '.cline'
+
+    def tasks_root(self) -> Path:
+        return self.base_path / 'data' / 'tasks'
+
+    def task_dirs(self) -> List[Path]:
+        root = self.tasks_root()
+        if not root.exists():
+            return []
+        return sorted(p for p in root.iterdir() if p.is_dir())
+
+    def _task_dir(self, session_id: str) -> Path:
+        return self.tasks_root() / session_id
+
+    def _read_history(self, task_dir: Path) -> List[Message]:
+        path = task_dir / 'api_conversation_history.json'
+        if not path.exists():
+            return []
+        try:
+            raw = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return []
+        if not isinstance(raw, list):
+            return []
+        out = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            role = item.get('role', '')
+            content = item.get('content', '')
+            if isinstance(content, str) and content:
+                try:
+                    blocks = json.loads(content)
+                except json.JSONDecodeError:
+                    blocks = content
+                text = text_of(blocks)
+            else:
+                text = text_of(content)
+            if text:
+                out.append(Message(role=role, content=text))
+        return out
+
+    def _read_meta(self, task_dir: Path) -> Dict[str, object]:
+        meta: Dict[str, object] = {'name': None, 'model': None, 'tokens': 0,
+                                   'path': None, 'ts': None}
+        hist = task_dir / 'history_item.json'
+        if hist.exists():
+            try:
+                h = json.loads(hist.read_text())
+                meta['name'] = h.get('task')
+                meta['model'] = h.get('model')
+                meta['tokens'] = (h.get('tokensIn') or 0) + (h.get('tokensOut') or 0)
+                meta['path'] = h.get('workspace')
+                meta['ts'] = h.get('ts')
+            except (OSError, json.JSONDecodeError):
+                pass
+        tm = task_dir / 'task_metadata.json'
+        if tm.exists():
+            try:
+                m = json.loads(tm.read_text())
+                usage = m.get('model_usage') or []
+                if usage and isinstance(usage, list) and isinstance(usage[0], dict):
+                    if not meta['model']:
+                        meta['model'] = usage[0].get('model_id')
+                if m.get('files_in_context'):
+                    pass
+            except (OSError, json.JSONDecodeError):
+                pass
+        ui = task_dir / 'ui_messages.json'
+        if ui.exists():
+            try:
+                u = json.loads(ui.read_text())
+                if isinstance(u, list):
+                    stamps = [x.get('ts') for x in u
+                              if isinstance(x, dict) and isinstance(x.get('ts'), (int, float))]
+                    if stamps:
+                        if not meta['ts']:
+                            meta['ts'] = min(stamps)
+                        if not meta['path']:
+                            for x in u:
+                                if isinstance(x, dict):
+                                    cwd = x.get('cwd') or (x.get('modelInfo') or {}).get('cwd')
+                                    if cwd:
+                                        meta['path'] = cwd
+                                        break
+            except (OSError, json.JSONDecodeError):
+                pass
+        return meta
+
+    def sessions(self) -> List[Session]:
+        sessions = []
+        for task_dir in self.task_dirs():
+            session_id = task_dir.name
+            messages = self._read_history(task_dir)
+            meta = self._read_meta(task_dir)
+            first_user = next((m.content for m in messages if m.role == 'user'), '')
+            name = str(meta['name']) if meta['name'] else _truncated(first_user or session_id[:8])
+            try:
+                ctime, mtime, _ = file_metadata(task_dir / 'api_conversation_history.json')
+            except OSError:
+                ctime = mtime = None
+            ts = meta['ts']
+            if ts:
+                created = epoch_ms(ts)
+                if created:
+                    ctime = mtime = created
+            sessions.append(Session(
+                id=session_id,
+                name=str(name)[:80],
+                ctime=ctime,
+                mtime=mtime,
+                size=int(meta['tokens'] or 0),
+                path=meta['path'] or str(task_dir),
+                model=meta['model'],
+                message_count=len(messages),
+                parent_id=None,
+            ))
+        return sessions
+
+    def messages(self, session_id: str) -> List[Message]:
+        task_dir = self._task_dir(session_id)
+        if not task_dir.is_dir():
+            raise SessionNotFound(self.name, session_id)
+        return [m for m in self._read_history(task_dir) if m.role in CONVERSATION_ROLES]
+
+    def raw_messages(self, session_id: str) -> List[Message]:
+        task_dir = self._task_dir(session_id)
+        if not task_dir.is_dir():
+            raise SessionNotFound(self.name, session_id)
+        return self._read_history(task_dir)
+
+
+class OmpAgent(Agent):
+    """omp (oh-my-pi): JSONL session journals under ``~/.omp/agent/sessions/``.
+
+    Each file is a version-3 journal: an optional fixed-width ``title`` record,
+    a ``session`` header, then tree entries keyed by ``id`` / ``parentId``.
+    The conversation is the ancestor chain from the leaf (the last entry in
+    file order) back to the root.
+    """
+
+    name = 'omp'
+    description = 'omp (oh-my-pi)'
+    display_name = 'omp'
+    storage_format = 'jsonl'
+    session_pattern = 'agent/sessions/**/*.jsonl'
+    files_read = 'agent/sessions/'
+
+    @classmethod
+    def default_base_path(cls) -> Path:
+        root = os.environ.get('OMP_HOME')
+        if root and os.path.isabs(root):
+            return Path(root)
+        return Path.home() / '.omp'
+
+    def session_files(self) -> List[Path]:
+        root = self.base_path / 'agent' / 'sessions'
+        if not root.exists():
+            return []
+        return sorted(root.rglob('*.jsonl'))
+
+    def _entry(self, obj: dict) -> Optional[Dict[str, object]]:
+        entry_id = obj.get('id')
+        parent = obj.get('parentId')
+        if isinstance(entry_id, str) and entry_id and \
+                (parent is None or isinstance(parent, str)):
+            return {'id': entry_id, 'parentId': parent,
+                    'type': obj.get('type', ''), 'message': obj.get('message')}
+        return None
+
+    def _parse(self, path: Path) -> Dict[str, object]:
+        title = None
+        header: Dict[str, object] = {}
+        entries: List[Dict[str, object]] = []
+        for line in read_json_lines(path):
+            t = line.get('type')
+            if t == 'title':
+                if line.get('v') == 1 and isinstance(line.get('title'), str):
+                    title = line['title']
+                continue
+            if t == 'session':
+                header = line
+                continue
+            entry = self._entry(line)
+            if entry is not None:
+                entries.append(entry)
+        return {'title': title, 'header': header, 'entries': entries}
+
+    def _main_path(self, entries: List[Dict[str, object]]) -> List[Dict[str, object]]:
+        by_id: Dict[str, Dict[str, object]] = {}
+        for entry in entries:
+            by_id.setdefault(str(entry['id']), entry)
+        if not entries:
+            return []
+        path: List[Dict[str, object]] = []
+        current: Optional[Dict[str, object]] = entries[-1]
+        seen = set()
+        while current is not None:
+            eid = str(current['id'])
+            if eid in seen:
+                break
+            seen.add(eid)
+            path.append(current)
+            parent = current.get('parentId')
+            current = by_id.get(str(parent)) if parent else None
+        path.reverse()
+        return path
+
+    @staticmethod
+    def _message_role(entry: Dict[str, object]) -> Optional[str]:
+        message = entry.get('message')
+        if not isinstance(message, dict):
+            return None
+        role = message.get('role')
+        return role if isinstance(role, str) else None
+
+    @staticmethod
+    def _message_text(entry: Dict[str, object]) -> str:
+        message = entry.get('message')
+        if not isinstance(message, dict):
+            return ''
+        content = message.get('content')
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return text_of(content)
+        return ''
+
+    @staticmethod
+    def _message_total_tokens(entry: Dict[str, object]) -> int:
+        message = entry.get('message')
+        if not isinstance(message, dict):
+            return 0
+        usage = message.get('usage')
+        if isinstance(usage, dict) and isinstance(usage.get('totalTokens'), (int, float)):
+            return int(usage['totalTokens'])
+        return 0
+
+    def sessions(self) -> List[Session]:
+        sessions = []
+        for path in self.session_files():
+            try:
+                parsed = self._parse(path)
+            except OSError:
+                continue
+            header = parsed['header']
+            if not header:
+                continue
+            entry_id = header.get('id') or path.stem
+            entries = parsed['entries']
+            conversation = [e for e in self._main_path(entries)
+                            if e.get('type') == 'message']
+            first_user = next((self._message_text(e) for e in conversation
+                               if self._message_role(e) == 'user'), '')
+            model = None
+            for e in conversation:
+                if self._message_role(e) == 'assistant':
+                    msg = e.get('message')
+                    if isinstance(msg, dict) and isinstance(msg.get('model'), str):
+                        model = msg['model']
+            sessions.append(Session(
+                id=str(entry_id),
+                name=_truncated(str(parsed['title'] or header.get('title') or first_user)),
+                ctime=parse_timestamp(header.get('timestamp')),
+                mtime=parse_timestamp(header.get('timestamp')),
+                size=sum(self._message_total_tokens(e) for e in conversation),
+                path=header.get('cwd') or str(path),
+                model=model,
+                message_count=len(conversation),
+                parent_id=None,
+            ))
+        return sessions
+
+    def _conversation(self, path: Path) -> List[Message]:
+        entries = self._parse(path)['entries']
+        out = []
+        for e in self._main_path(entries):
+            if e.get('type') != 'message':
+                continue
+            role = self._message_role(e)
+            text = self._message_text(e)
+            if role and text:
+                out.append(Message(role=role, content=text))
+        return out
+
+    def raw_messages(self, session_id: str) -> List[Message]:
+        for path in self.session_files():
+            header = self._parse(path)['header']
+            if header and str(header.get('id')) == session_id:
+                return self._conversation(path)
+        raise SessionNotFound(self.name, session_id)
+
+    def messages(self, session_id: str) -> List[Message]:
+        return [m for m in self.raw_messages(session_id) if m.role in CONVERSATION_ROLES]
+
+
+class FreebuffAgent(Agent):
+    """Freebuff / Codebuff (freebuff.com): one directory per chat under
+    ``~/.config/<codebuff>/projects/<project>/chats/<chat>/``.
+
+    Each chat holds ``chat-meta.json`` (title, counts) and
+    ``chat-messages.json`` (a list of ``{variant, content, blocks}``).  The
+    config directory is discovered by name first, then by the
+    ``codebuff-metadata.json`` marker so rebranded installs are still found.
+    """
+
+    name = 'freebuff'
+    description = 'Freebuff (Codebuff)'
+    display_name = 'Freebuff'
+    storage_format = 'json'
+    files_read = 'projects/'
+    _MARKER = 'codebuff-metadata.json'
+
+    @classmethod
+    def default_base_path(cls) -> Path:
+        override = os.environ.get('FREEBUFF_CONFIG_DIR')
+        if override and os.path.isabs(override):
+            return Path(override)
+        config_root = Path.home() / '.config'
+        for name in ('freebuff', 'codebuff'):
+            candidate = config_root / name
+            if (candidate / cls._MARKER).exists() or (candidate / 'projects').is_dir():
+                return candidate
+        try:
+            entries = list(config_root.iterdir())
+        except OSError:
+            entries = []
+        for candidate in sorted(entries):
+            try:
+                if (candidate / cls._MARKER).is_file():
+                    return candidate
+            except OSError:
+                continue
+        return config_root / 'freebuff'
+
+    def chat_dirs(self) -> List[Path]:
+        root = self.base_path / 'projects'
+        if not root.exists():
+            return []
+        return sorted(root.glob('*/chats/*'))
+
+    def _chat_dir(self, session_id: str) -> Optional[Path]:
+        for chat_dir in self.chat_dirs():
+            if chat_dir.name == session_id:
+                return chat_dir
+        return None
+
+    @staticmethod
+    def _block_text(blocks) -> str:
+        parts: List[str] = []
+        for block in blocks or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get('type') == 'text' and block.get('textType') != 'reasoning':
+                content = block.get('content')
+                if isinstance(content, str) and content.strip():
+                    parts.append(content)
+            elif block.get('type') == 'agent':
+                nested = FreebuffAgent._block_text(block.get('blocks'))
+                if nested:
+                    parts.append(nested)
+        return '\n'.join(parts)
+
+    def _read_messages(self, chat_dir: Path) -> List[Message]:
+        path = chat_dir / 'chat-messages.json'
+        if not path.exists():
+            return []
+        try:
+            raw = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return []
+        if not isinstance(raw, list):
+            return []
+        out = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            variant = item.get('variant')
+            if variant == 'ai':
+                role = 'assistant'
+            elif variant == 'user':
+                role = 'user'
+            else:
+                continue
+            content = item.get('content')
+            text = content if isinstance(content, str) else ''
+            if not text.strip():
+                text = self._block_text(item.get('blocks'))
+            if text.strip():
+                out.append(Message(role=role, content=text))
+        return out
+
+    def sessions(self) -> List[Session]:
+        sessions = []
+        for chat_dir in self.chat_dirs():
+            session_id = chat_dir.name
+            meta: Dict[str, object] = {}
+            meta_path = chat_dir / 'chat-meta.json'
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text())
+                except (OSError, json.JSONDecodeError):
+                    meta = {}
+            messages = self._read_messages(chat_dir)
+            title = meta.get('firstPrompt') if isinstance(meta, dict) else None
+            first_user = next((m.content for m in messages if m.role == 'user'), '')
+            name = title or first_user or session_id[:8]
+            ctime, mtime, _size = file_metadata(chat_dir)
+            mtime_ms = meta.get('messagesMtimeMs') if isinstance(meta, dict) else None
+            if mtime_ms:
+                parsed_mtime = epoch_ms(mtime_ms)
+                if parsed_mtime:
+                    mtime = parsed_mtime
+            message_count = meta.get('messageCount') if isinstance(meta, dict) else None
+            size = meta.get('messagesSize') if isinstance(meta, dict) else None
+            sessions.append(Session(
+                id=session_id,
+                name=_truncated(str(name)),
+                ctime=ctime,
+                mtime=mtime,
+                size=int(size) if isinstance(size, (int, float)) else 0,
+                path=str(chat_dir),
+                model=None,
+                message_count=int(message_count) if isinstance(message_count, (int, float))
+                else len(messages),
+                parent_id=None,
+            ))
+        return sessions
+
+    def raw_messages(self, session_id: str) -> List[Message]:
+        chat_dir = self._chat_dir(session_id)
+        if chat_dir is None:
+            raise SessionNotFound(self.name, session_id)
+        return self._read_messages(chat_dir)
+
+    def messages(self, session_id: str) -> List[Message]:
+        return [m for m in self.raw_messages(session_id) if m.role in CONVERSATION_ROLES]
+
+
 # --- Registry ---
 
 AGENT_CLASSES = (
     ClaudeDesktopAgent,
     ClaudeCodeAgent,
     OpencodeAgent,
+    KiloAgent,
     CodexAgent,
     PiAgent,
     GooseAgent,
+    HermesAgent,
+    ClineAgent,
+    OmpAgent,
+    FreebuffAgent,
 )
 
 REGISTRY: Dict[str, Agent] = {cls.name: cls() for cls in AGENT_CLASSES}

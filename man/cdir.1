@@ -153,12 +153,17 @@ Found:
   AGENT         DESCRIPTION                 PATH
   claude-code   Claude Code CLI             ~/.claude/projects/
   opencode      Opencode CLI                ~/.local/share/opencode/opencode.db
+  kilo          Kilo CLI                    ~/.local/share/kilo/kilo.db
 
 Not Found:
   claude        Claude Desktop (Anthropic)  ~/.config/Claude/conversations/
   codex         OpenAI Codex CLI            ~/.codex/sessions/
   pi            Pi Coding Agent             ~/.pi/agent/sessions/
   goose         Goose AI agent              ~/.local/share/goose/sessions/sessions.db
+  hermes        Hermes agent                ~/.hermes/state.db
+  cline         Cline (cline.bot)           ~/.cline/data/tasks/
+  omp           omp (oh-my-pi)              ~/.omp/agent/sessions/
+  freebuff      Freebuff (Codebuff)         ~/.config/freebuff/projects/
 .fi
 .RE
 .PP
@@ -275,6 +280,9 @@ Hi there!
 .I ~/.local/share/opencode/opencode.db
 OpenCode SQLite database.
 .TP
+.I ~/.local/share/kilo/kilo.db
+Kilo SQLite database (an OpenCode fork with the same schema).
+.TP
 .I ~/.claude/projects/**/*.jsonl
 Claude Code session files.
 .TP
@@ -286,8 +294,26 @@ Goose AI agent SQLite session index (legacy per-session
 .B .jsonl
 files in the same directory are also read).
 .TP
+.I ~/.hermes/state.db
+Hermes SQLite database
+.B ($HERMES_HOME
+if set), sessions and messages tables.
+.TP
 .I ~/Library/Application Support/Claude-3p/
 Claude Desktop session directory.
+.TP
+.I ~/.cline/data/tasks/*/
+Cline task directories; the conversation lives in
+.I api_conversation_history.json
+in each directory.
+.TP
+.I ~/.omp/agent/sessions/**/*.jsonl
+omp (oh-my-pi) JSONL session journals; each file is a tree of entries.
+.TP
+.I ~/.config/freebuff/projects/*/chats/*/
+Freebuff / Codebuff chat directories; the conversation lives in
+.I chat-messages.json
+in each directory.
 .SH SEE ALSO
 .BR ccopy (1),
 .BR cgrep (1),
