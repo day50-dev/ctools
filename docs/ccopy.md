@@ -80,5 +80,7 @@ ccopy --export-json opencode/ses_abc | ccopy --import-json codex
 
 - To extract **concepts** (constraints, preferences, goals) from a session into
   files, use [cextract](cextract.md).
+- To read a conversation (locally or on a remote host) without copying it,
+  use [ccat](ccat.md).
 - To search conversation content, use [cgrep](cgrep.md).
 - To list sessions, use [cdir](cdir.md).

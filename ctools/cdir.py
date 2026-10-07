@@ -358,63 +358,58 @@ def _list_all_sessions(sort, reverse, formatter, fields,
     print(f"\n  {len(body_rows)} session(s)")
 
 
-@app.command()
-def main(
-    ctx: typer.Context,
-    path: Optional[str] = typer.Argument(None, help="Agent or agent/session_id"),
-    by_time: bool = typer.Option(False, "--time", "-t", callback=_sort_callback('time'), help="Sort by modification time"),
-    by_size: bool = typer.Option(False, "--size", "-S", "-s", callback=_sort_callback('size'), help="Sort by size"),
-    by_ctime: bool = typer.Option(False, "--ctime", "-u", callback=_sort_callback('ctime'), help="Sort by creation time"),
-    reverse: bool = typer.Option(False, "--reverse", "-r", help="Reverse sort order"),
-    recursive: bool = typer.Option(False, "--recursive", "-R", help="Show agent name, recurse all agents if no path given"),
-    long_format: bool = typer.Option(False, "--long", "-l", help="Show details: modified, size, messages, path"),
-    one_line: bool = typer.Option(False, "--one-line", "-1", help="Print one session ID per line, with no header"),
-    color: str = typer.Option("auto", "--color", help="Colorize output: never, auto, or always"),
-    fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md, or default"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Select output fields (comma-separated). Use 'help' to list available fields."),
-    version: bool = version_option("cdir"),
-):
+def _show_specific_sessions(refs: List[str], sort: str, reverse: bool,
+                            formatter, fields, long_format: bool,
+                            one_line: bool, color: bool) -> None:
+    """Render a unified row listing for a set of exact `agent/session_id`
+    references (ls file1 file2 semantics). Sessions that don't exist are
+    reported and skipped.
     """
-    List agents and their conversation sessions.
+    rows: List[Session] = []
+    for ref in refs:
+        agent_name, session_id = parse_ref(ref)
+        agent = require_installed(agent_name)
+        with reporting():
+            s = agent.session(session_id)
+        if s is None:
+            console.print(f"[yellow]No such session: {ref}[/yellow]")
+            continue
+        rows.append(s)
 
-    Without arguments, lists all known agents.
-    With an agent name, lists sessions for that agent.
-    With agent/session_id, exports that session.
-    With -R, shows agent name and recurse all agents if no path given.
-    With -l, shows full details (modified, size, message count, path).
-    With -o, selects the output fields shown (see 'cdir -o help').
-    With -1, prints one session ID per line (no header, no tree).
-    Sort flags are ls-style: -t by time, -S by size, -u by creation time,
-    and when several are given the last one wins (-tS == -S).
-    """
-    if color not in ('never', 'auto', 'always'):
-        raise typer.BadParameter("must be one of: never, auto, always", param_hint="--color")
-
-    fields = _resolve_fields(output)
-    sort = _resolve_sort(ctx, by_time, by_size, by_ctime)
-    use_color = _use_color(color)
-
-    formatter = None
-    if fmt != "default":
-        try:
-            formatter = get_formatter(fmt)
-        except ValueError as e:
-            console.print(f"[red]{e}[/red]")
-            raise typer.Exit(1)
-
-    if path is None:
-        if recursive:
-            _list_all_sessions(sort, reverse, formatter, fields,
-                               one_line=one_line, color=use_color)
-        else:
-            _list_agents(formatter)
+    if not rows:
+        console.print("[yellow]No sessions found[/yellow]")
         return
 
+    if one_line:
+        for s in rows:
+            print(s.id)
+        return
+
+    if formatter:
+        print(formatter.format_sessions(rows))
+        return
+
+    rfields = fields if fields is not None else (LONG_FIELDS if long_format else DEFAULT_FIELDS)
+    key = _sort_key(sort)
+    rows.sort(key=key, reverse=not reverse)
+    body_rows = [(True, _session_values(s, rfields)) for s in rows]
+    _render_table(body_rows, rfields, color=color)
+    print(f"\n  {len(rows)} session(s)")
+
+
+def _handle_one_ref(path: str, sort: str, reverse: bool, formatter, fields,
+                    long_format: bool, one_line: bool, recursive: bool,
+                    color: bool) -> None:
+    """Dispatch a single `agent[/session_id]` reference.
+
+    A bare agent name (or agent glob) lists/filters sessions; an exact
+    `agent/session_id` exports that one session.
+    """
     agent_name, session_id = parse_ref(path)
     agent = require_installed(agent_name)
 
     # Glob pattern in the session part: filter sessions by id, name, or path.
-    _is_glob = any(c in (session_id or "") for c in "*?[" )
+    _is_glob = any(c in (session_id or "") for c in "*?[")
 
     if session_id and not _is_glob:
         _export_session(agent, session_id, formatter)
@@ -439,7 +434,92 @@ def main(
 
     _print_sessions(sessions, agent.name if recursive else None,
                     sort, reverse, formatter, long_format, fields,
-                    one_line=one_line, color=use_color)
+                    one_line=one_line, color=color)
+
+
+@app.command()
+def main(
+    ctx: typer.Context,
+    paths: Optional[List[str]] = typer.Argument(None, help="One or more agent or agent/session_id references"),
+    by_time: bool = typer.Option(False, "--time", "-t", callback=_sort_callback('time'), help="Sort by modification time"),
+    by_size: bool = typer.Option(False, "--size", "-S", "-s", callback=_sort_callback('size'), help="Sort by size"),
+    by_ctime: bool = typer.Option(False, "--ctime", "-u", callback=_sort_callback('ctime'), help="Sort by creation time"),
+    reverse: bool = typer.Option(False, "--reverse", "-r", help="Reverse sort order"),
+    recursive: bool = typer.Option(False, "--recursive", "-R", help="Show agent name, recurse all agents if no path given"),
+    long_format: bool = typer.Option(False, "--long", "-l", help="Show details: modified, size, messages, path"),
+    one_line: bool = typer.Option(False, "--one-line", "-1", help="Print one session ID per line, with no header"),
+    color: str = typer.Option("auto", "--color", help="Colorize output: never, auto, or always"),
+    fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md, or default"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Select output fields (comma-separated). Use 'help' to list available fields."),
+    version: bool = version_option("cdir"),
+):
+    """
+    List agents and their conversation sessions.
+
+    Accepts one or more `agent` or `agent/session_id` references.
+
+    With no arguments, lists all known agents.
+    With an agent name, lists sessions for that agent.
+    With agent/session_id, exports that session.
+    With many arguments, each is handled in turn (export the exact ids, list
+    the bare agents, filter the globs).
+    With -R and no arguments, recurses all agents.
+    With -l, shows full details (modified, size, message count, path).
+    With -o, selects the output fields shown (see 'cdir -o help').
+    With -1, prints one session ID per line (no header, no tree).
+    Sort flags are ls-style: -t by time, -S by size, -u by creation time,
+    and when several are given the last one wins (-tS == -S).
+    """
+    if color not in ('never', 'auto', 'always'):
+        raise typer.BadParameter("must be one of: never, auto, always", param_hint="--color")
+
+    fields = _resolve_fields(output)
+    sort = _resolve_sort(ctx, by_time, by_size, by_ctime)
+    use_color = _use_color(color)
+
+    formatter = None
+    if fmt != "default":
+        try:
+            formatter = get_formatter(fmt)
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+
+    if not paths:
+        if recursive:
+            _list_all_sessions(sort, reverse, formatter, fields,
+                               one_line=one_line, color=use_color)
+        else:
+            _list_agents(formatter)
+        return
+
+    def _is_exact(ref: str) -> bool:
+        _, sid = parse_ref(ref)
+        return bool(sid) and not any(c in sid for c in "*?[")
+
+    exact = [p for p in paths if _is_exact(p)]
+    rest = [p for p in paths if not _is_exact(p)]
+
+    # One bare exact id keeps the export behaviour (cdir opencode/ses_abc).
+    # Many references (the cgrep -l | xargs cdir -l case) list them as rows.
+    if exact and not rest:
+        if len(exact) == 1:
+            _handle_one_ref(exact[0], sort, reverse, formatter, fields,
+                            long_format, one_line, recursive, use_color)
+        else:
+            _show_specific_sessions(exact, sort, reverse, formatter, fields,
+                                    long_format, one_line, use_color)
+        return
+
+    if exact:
+        _show_specific_sessions(exact, sort, reverse, formatter, fields,
+                                long_format, one_line, use_color)
+
+    for i, path in enumerate(rest):
+        if i and not (one_line or formatter):
+            print()
+        _handle_one_ref(path, sort, reverse, formatter, fields, long_format,
+                        one_line, recursive, use_color)
 
 
 if __name__ == "__main__":

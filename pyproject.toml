@@ -22,6 +22,7 @@ dev = ["pytest>=7.0.0"]
 [project.scripts]
 cdir = "ctools.cdir:app"
 cgrep = "ctools.cgrep:app"
+ccat = "ctools.ccat:app"
 ccopy = "ctools.ccopy:app"
 cextract = "ctools.cextract:app"
 cdu = "ctools.cdu:app"

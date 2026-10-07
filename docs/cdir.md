@@ -42,6 +42,23 @@ A reference with no wildcards (`cdir opencode/ses_abc123`) is still exported as
 JSON; only a pattern with `*`, `?`, or `[` switches to filtering. Combine with
 `-l`, `-S`, `-1`, etc. as usual.
 
+## Multiple sessions
+
+`cdir` accepts as many references as you like, so it is the end of a `cgrep -l`
+pipeline. A single bare `agent/session_id` is still exported as JSON; give it
+**two or more** and they are listed as rows (ls `file1 file2` semantics), sorted
+like a normal listing:
+
+```sh
+$ cgrep -l ctool opencode | xargs cdir -l
+  ID                              NAME                                        MODIFIED              SIZE      MSGS  PATH
+  ses_01c4fec15ffe0MR2Qar0uwMMtm  Path info in cdir/opencode schema          2026-08-08 17:08  299.0 KB    182  /home/chris/day50/ctools
+  ses_02164d598ffebCfT1o8mLU6U7e  New project website ideas from md files    2026-08-07 17:46  119.5 KB     50  /home/chris/day50/day50.dev
+```
+
+Globs, bare agent names, and exact ids may be mixed in one call. An id that
+isn't found is reported and skipped; the rest still list.
+
 ## One-line output
 
 `-1` prints bare session IDs, one per line — shell-script friendly, no header, no

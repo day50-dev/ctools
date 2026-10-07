@@ -36,7 +36,7 @@ Resume it with:
 
 Your work travels with you. The source is never touched, so it's a true copy. And when the destination is on another machine, it's just `ccopy opencode/ses_abc123 ssh://chris@remote/codex` — it pulls the agent's storage over your normal ssh (the remote only needs `sshd` and `tar`, not ctools).
 
-ctools is a set of GNU-style tools for the history your coding agents leave behind. These two are the headline; the rest (`cdir` to list sessions, `cextract` to move concepts, `cconnect` to pipe them live, `cdu` to count tokens, `crm` to prune) are in service of them.
+ctools is a set of GNU-style tools for the history your coding agents leave behind. These two are the headline; the rest (`cdir` to list sessions, `ccat` to read them, `cextract` to move concepts, `cconnect` to pipe them live, `cdu` to count tokens, `crm` to prune) are in service of them.
 
 **Works with the agents you already use:** Claude Desktop, Claude Code, Opencode, Kilo, Codex, Pi, Goose, Hermes, Cline, omp (oh-my-pi), and Freebuff (Codebuff).
 
@@ -46,13 +46,14 @@ ctools is a set of GNU-style tools for the history your coding agents leave behi
 |------|--------------|------|
 | `cgrep` | Search conversation content (grep across every agent) | [docs/cgrep.md](docs/cgrep.md) |
 | `cdir` | List sessions (ls for your history) | [docs/cdir.md](docs/cdir.md) |
+| `ccat` | Print one or more conversations (cat for your history) | [docs/ccat.md](docs/ccat.md) |
 | `ccopy` | Copy a whole conversation from one agent to a new session in another | [docs/ccopy.md](docs/ccopy.md) |
 | `cextract` | Extract concepts from a session into files, and inject them back | [docs/cextract.md](docs/cextract.md) |
 | `cconnect` | Live concept pipelines between sessions | [docs/cconnect.md](docs/cconnect.md) |
 | `cdu` | Token usage per session (du for context windows) | [docs/cdu.md](docs/cdu.md) |
 | `crm` | Remove concepts from a session (mdel) | [docs/crm.md](docs/crm.md) |
 
-Every tool takes `--version` and `--verbose` (structured logging). Each tool's full flag reference, output formats, and examples live in its `docs/` page — the table above is just the 30-second version.
+Every tool takes `--version`. The session-mover tools (`ccopy`, `cextract`, `cconnect`, `crm`) also take `--verbose` for structured logging. Each tool's full flag reference, output formats, and examples live in its `docs/` page — the table above is just the 30-second version.
 
 ## How it works
 

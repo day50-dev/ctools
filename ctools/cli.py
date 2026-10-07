@@ -143,6 +143,7 @@ def reporting():
 _COMMANDS = {
     "cdir": "ctools.cdir:app",
     "cgrep": "ctools.cgrep:app",
+    "ccat": "ctools.ccat:app",
     "ccopy": "ctools.ccopy:app",
     "cextract": "ctools.cextract:app",
     "cconnect": "ctools.cconnect:app",

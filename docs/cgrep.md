@@ -58,3 +58,22 @@ opencode/ses_def456:4:user: import sqlite3
 `-h` drops the prefix (single-session look), `-H` forces it back on. Context lines
 use grep's `-` separator instead of `:`. Sessions are separated by `--`, as in
 grep.
+
+## Piping
+
+`-l` prints one `agent/session_id` per line, which is exactly what `cdir` and
+`ccat` accept as arguments. Pipe it to list the matches or dump them:
+
+```sh
+cgrep -l ctool opencode | xargs cdir -l   # the matching sessions, as a table
+cgrep -l ssl  opencode   | xargs ccat      # the matching conversations, full
+```
+
+Both `cdir` and `ccat` take many session references at once, so the pipeline works
+regardless of how many sessions match.
+
+## Related
+
+- To list your sessions without searching, use [cdir](cdir.md).
+- To read a conversation, use [ccat](ccat.md).
+- To move a conversation to another agent, use [ccopy](ccopy.md).

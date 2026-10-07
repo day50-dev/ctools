@@ -792,6 +792,68 @@ def test_cli_one_line_with_glob(tmp_path):
     assert 'ses_abc123' not in result.stdout
 
 
+def test_cli_multiple_exact_ids_list_rows(tmp_path):
+    """Two bare exact ids are listed as rows (ls semantics), not exported."""
+    _make_opencode_db_glob(tmp_path)
+    result = _run_opencode_cli(
+        tmp_path, ["opencode/ses_abc123", "opencode/ses_llcat1"])
+    assert result.exit_code == 0
+    assert 'ses_abc123' in result.stdout
+    assert 'ses_llcat1' in result.stdout
+    assert '"role"' not in result.stdout
+    assert '2 session(s)' in result.stdout
+
+
+def test_cli_multiple_exact_ids_with_long(tmp_path):
+    """-l with multiple exact ids shows the long row fields."""
+    _make_opencode_db_glob(tmp_path)
+    result = _run_opencode_cli(
+        tmp_path, ["-l", "opencode/ses_abc123", "opencode/ses_llcat1"])
+    assert result.exit_code == 0
+    for col in ('MODIFIED', 'SIZE', 'MSGS', 'PATH'):
+        assert col in result.stdout
+
+
+def test_cli_multiple_exact_ids_one_line(tmp_path):
+    """-1 with multiple exact ids prints one id per line."""
+    _make_opencode_db_glob(tmp_path)
+    result = _run_opencode_cli(
+        tmp_path, ["-1", "opencode/ses_abc123", "opencode/ses_llcat1"])
+    assert result.exit_code == 0
+    lines = [l for l in result.stdout.split() if l]
+    assert set(lines) == {'ses_abc123', 'ses_llcat1'}
+
+
+def test_cli_multiple_exact_ids_bad_id_reported(tmp_path):
+    """A bad id among good ones is reported; the good ones still list."""
+    _make_opencode_db_glob(tmp_path)
+    result = _run_opencode_cli(
+        tmp_path, ["opencode/ses_abc123", "opencode/ses_bogus"])
+    assert result.exit_code == 0
+    assert 'No such session: opencode/ses_bogus' in result.stdout
+    assert 'ses_abc123' in result.stdout
+
+
+def test_cli_multiple_exact_ids_sorted(tmp_path):
+    """Multiple exact ids are sorted like a normal listing (by mtime)."""
+    _make_opencode_db_glob(tmp_path)
+    # ses_def456 (time_updated 1705405400000) is newer than ses_abc123 (1705403400000).
+    result = _run_opencode_cli(
+        tmp_path, ["opencode/ses_abc123", "opencode/ses_def456"])
+    assert result.exit_code == 0
+    assert result.stdout.index('ses_def456') < result.stdout.index('ses_abc123')
+
+
+def test_cli_mixed_glob_and_exact(tmp_path):
+    """A glob and an exact id together: exact listed as a row, glob filtered."""
+    _make_opencode_db_glob(tmp_path)
+    result = _run_opencode_cli(
+        tmp_path, ["opencode/*llcat*", "opencode/ses_abc123"])
+    assert result.exit_code == 0
+    assert 'ses_llcat1' in result.stdout      # from the glob
+    assert 'ses_abc123' in result.stdout      # the exact id
+
+
 def _make_opencode_db_two_ctimes(tmp_path):
     """Create an opencode.db where mtime order and ctime order disagree."""
     db_path = tmp_path / 'opencode.db'

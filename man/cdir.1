@@ -17,7 +17,7 @@ cdir \- list agents and sessions from LLM context windows
 .RB [ \-f
 .IR format ]
 .RB [ \-\-version ]
-.RI [ path ]
+.RI [ path ] ...
 .SH DESCRIPTION
 .B cdir
 (context directory) lists agents and their conversation sessions,
@@ -147,6 +147,12 @@ If the session part contains a glob pattern (\fB*\fR, \fB?\fR, or \fB[\fR), cdir
 filters sessions instead of exporting: the pattern is matched, case-insensitively,
 against the session id, name (one-line description), and working directory, and
 sessions matching any are listed. A reference with no wildcards is still exported.
+.PP
+Give more than one \fIpath\fR and cdir lists them as rows (ls \fBfile1 file2\fR
+semantics) instead of exporting: a single bare \fBagent/session_id\fR is exported,
+two or more are listed, sorted like a normal listing. Globs, bare agent names, and
+exact ids may be mixed. A missing id is reported and skipped. This makes cdir the
+end of a \fBcgrep -l | xargs cdir\fR pipeline.
 .SH FILTERING
 Put a glob in the session part to filter sessions by id, name, or working
 directory (any match is shown, case-insensitive):

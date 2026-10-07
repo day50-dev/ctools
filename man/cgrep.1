@@ -61,6 +61,8 @@ options suppress and restore the session prefix.
 .TP
 .BR \-l ", " \-\-files\-with\-matches
 List only session IDs that contain matches, not the matches themselves.
+One \fIagent/session_id\fR per line — pipe it to \fBcdir\fR or \fBccat\fR to list
+or dump the matches (\fBcgrep -l PATTERN AGENT | xargs cdir -l\fR).
 .TP
 .BR \-L ", " \-\-files\-without\-match
 List only session IDs that do NOT contain matches.
@@ -309,6 +311,8 @@ No matches found.
 An error occurred (invalid pattern, unknown agent, missing session data).
 An error takes precedence over a match.
 .SH SEE ALSO
-.BR cdir (1)
+.BR cdir (1),
+.BR ccat (1),
+.BR ccopy (1)
 .SH AUTHORS
 Gab n' Go project.
