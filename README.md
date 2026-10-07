@@ -20,9 +20,7 @@ opencode/ses_000d460f:34:assistant: Found it. Root cause: `_check_host` (graflex
 
 No agent argument? It searches **every installed agent at once** — Claude Code, Opencode, Kilo, Codex, Pi, Goose, Hermes, Cline, omp, and Freebuff, all in one pass. That last line is the root-cause analysis you wrote six months ago and would never have found again.
 
-It really is grep: matches print as `session:line:text`, context lines use `-`, the flags are the ones you already know (`-i -c -o -w -x -F -l -m -h -H -A/-B/-C --include/--exclude`), and the exit codes are scriptable — `0` match, `1` none, `2` bad pattern. `cgrep` is the big one; everything else is in service of it.
-
-Its companion is `cdir`, `ls` for the same history — documented up-front too:
+Its companion is `cdir`, `ls` for the same history:
 
 ```shell
 $ cdir opencode
@@ -34,107 +32,29 @@ $ cdir opencode
   ses_08b74487fffeTmQzA810dE9WRV    Add -f option to override SSL errors
 ```
 
-Now I can easily resume those sessions.
+Extracted from [Gab n' Go](https://github.com/day50-dev/gabngo). Named after [GNU mtools](https://www.gnu.org/software/mtools/), which does the same thing for DOS floppies because your context window is about the size of a DOS-floppy. The flag habits are GNU's too — `--version`, `-1`, `-S`, `-u`, and the rest behave the way you'd expect.
 
-Extracted from [Gab n' Go](https://github.com/day50-dev/gabngo). Named after [GNU mtools](https://www.gnu.org/software/mtools/), which does the same thing for DOS floppies because your context window is about the size of a DOS-floppy. Maybe we can use that for inspiration. The flag habits are GNU's too — `--version`, `-1`, `-S`, `-u`, and the rest behave the way you'd expect.
+## Tools
 
-### cdir
+| Tool | What it does | Docs |
+|------|--------------|------|
+| `cgrep` | Search conversation content (grep across every agent) | [docs/cgrep.md](docs/cgrep.md) |
+| `cdir` | List sessions (ls for your history) | [docs/cdir.md](docs/cdir.md) |
+| `ccopy` | Copy concepts between sessions and files; `--into` copies a whole conversation to a new session | [docs/ccopy.md](docs/ccopy.md) |
+| `cconnect` | Live concept pipelines between sessions | [docs/cconnect.md](docs/cconnect.md) |
+| `cdu` | Token usage per session (du for context windows) | [docs/cdu.md](docs/cdu.md) |
+| `crm` | Remove concepts from a session (mdel) | [docs/crm.md](docs/crm.md) |
 
-Lists sessions (endpoints). Think `ls` for your conversation history. Subagents appear indented under their parent with tree connectors.
+Every tool takes `--version` and `--verbose` (structured logging). Each tool's full flag reference, output formats, and examples live in its `docs/` page — the table above is just the 30-second version.
 
-```sh
-cdir                        # list all known agents
-cdir opencode/              # sessions for opencode (name only)
-cdir -l opencode/           # sessions with modified date, size, message count, path
-cdir -S opencode/           # sessions biggest first (ls -S); -t sorts by time
-cdir -u opencode/           # sessions newest first by creation time (ctime)
-cdir -1 opencode/           # one session ID per line, no header
-cdir claude-code/           # sessions for claude code
-cdir pi/                    # sessions for pi coding agent
-cdir -R                     # all agents, recursive
-cdir opencode/ses_abc123    # export a session as JSON
-```
-
-Sort flags are `ls`-style: `-t` by time (default), `-S` by size, `-u` by creation time, and when you give several the last one wins (`cdir -St opencode/` is the same as `cdir -S opencode/`). Add `-r` to reverse.
-
-`-1` prints bare session IDs, one per line — shell-script friendly, no header, no tree:
-
-```sh
-$ cdir -1 opencode/
-ses_08b4ab356ffeQvmBXnu1oj4Gqe
-ses_08b74487fffeTmQzA810dE9WRV
-```
-
-`--color` controls ANSI bold on the header: `auto` (default, on only when stdout is a terminal), `always`, `never`.
-
-Long format adds a header and shows the modified date, size, message count, and source path at the end of each row:
-
-```sh
-$ cdir -l opencode/
-  Source: /home/chris/.local/share/opencode/opencode.db
-
-  ID                                NAME                          MODIFIED              SIZE    MSGS  PATH
-  ses_08b4ab356ffeQvmBXnu1oj4Gqe    Add -l option to cdir ...     2026-08-08 16:33   53.7 KB     23  /home/chris/day50/ctools
-```
-
-`PATH` is the session's working directory (where the conversation's code lives), not the storage file.
-
-`-o` selects which columns to print, ps-style. Pass `cdir -o help` for the full field reference:
-
-```sh
-cdir -o help                     # document all available fields
-cdir -o id,name,mtime opencode/  # only those columns
-cdir -o id,model,path opencode/  # reorder columns any way you like
-```
-
-Available fields for `-o`:
-
-| Field | Label | Meaning |
-|-------|-------|---------|
-| `id` | `ID` | Session identifier |
-| `name` | `NAME` | Session title (or ID prefix when no title is set) |
-| `ctime` | `CREATED` | Creation / start time |
-| `mtime` | `MODIFIED` | Last modification time |
-| `size` | `SIZE` | Size: token count for opencode, bytes for file-based agents |
-| `msgs` | `MSGS` | Number of messages in the session |
-| `model` | `MODEL` | Model used for the session |
-| `path` | `PATH` | Session working directory (where the conversation's code lives) |
-| `parent` | `PARENT` | Parent session ID (present on subagent sessions) |
-
-Default fields are `id,name`; `-l` expands to `id,name,mtime,size,msgs,path`. Only the last-modified date is shown — the creation date is suppressed.
-
-Output shows Found/Not Found with actual paths:
-
-```
-Found:
-  AGENT         DESCRIPTION                 PATH
-  claude-code   Claude Code CLI             ~/.claude/projects/
-  opencode      Opencode CLI                ~/.local/share/opencode/opencode.db
-  kilo          Kilo CLI                    ~/.local/share/kilo/kilo.db
-
-Not Found:
-  claude        Claude Desktop (Anthropic)  ~/.config/Claude/conversations/
-  codex         OpenAI Codex CLI            ~/.codex/sessions/
-  pi            Pi Coding Agent             ~/.pi/agent/sessions/
-  goose         Goose AI agent              ~/.local/share/goose/sessions/sessions.db
-  hermes        Hermes agent                ~/.hermes/state.db
-  cline         Cline (cline.bot)           ~/.cline/data/tasks/
-  omp           omp (oh-my-pi)              ~/.omp/agent/sessions/
-  freebuff      Freebuff (Codebuff)         ~/.config/freebuff/projects/
-```
-
-That alone should be convincing. But there's more.
-
-
-## The Architecture
+## How it works
 
 ctools is a substrate for moving memory between context windows. Cross-platform, agent-agnostic, designed like a bus.
 
 Two stages: **extraction** and **filtering**.
 
-A **strategy** extracts concepts from a conversation. It defines what counts as a concept and how to find it: regex patterns, LLM extraction, whatever. Different strategies produce different ontologies from the same conversation, because context is contestable.
-
-A **filter** selects which extracted concepts reach a destination. It's a binary classifier: pass through or filter out. One concept list can fan out to many destinations, each with its own filter. A coding agent gets coding preferences, a security agent gets security constraints, a PM agent gets goals, all from the same source.
+- A **strategy** extracts concepts from a conversation. It defines what counts as a concept and how to find it: regex patterns, LLM extraction, whatever. Different strategies produce different ontologies from the same conversation, because context is contestable.
+- A **filter** selects which extracted concepts reach a destination. It's a binary classifier: pass through or filter out. One concept list can fan out to many destinations, each with its own filter. A coding agent gets coding preferences, a security agent gets security constraints, a PM agent gets goals, all from the same source.
 
 ```mermaid
 graph LR
@@ -148,48 +68,17 @@ graph LR
     FC --> DEST_C["destination C"]
 ```
 
-Context windows are endpoints: opencode, Claude Code, Codex, Pi. They all speak different protocols, but they all consume the same packets.
+Context windows are endpoints: opencode, Claude Code, Codex, Pi. They all speak different protocols, but they all consume the same packets. See [ccopy](docs/ccopy.md) for the concept packet format, strategies, and the filter (JSON-RPC) protocol.
 
-```mermaid
-graph TB
-    subgraph Endpoints
-        OC[opencode]
-        CC[Claude Code]
-        CX[Codex]
-        PI[Pi]
-    end
-
-    subgraph "Concept Directory (Bus)"
-        P1["pkt 1<br/>constraint"]
-        P2["pkt 2<br/>preference"]
-        P3["pkt 3<br/>goal"]
-    end
-
-    subgraph Strategies
-        SA["Strategy A"]
-        SB["Strategy B"]
-    end
-
-    OC -->|"extract"| SA
-    CC -->|"extract"| SB
-    SA -->|"packets"| P1
-    SA -->|"packets"| P2
-    SB -->|"packets"| P3
-    P1 -->|"inject"| CC
-    P2 -->|"inject"| CX
-    P3 -->|"inject"| OC
-```
-
-## The Problem
+## The problem
 
 You talk to LLMs all day. Over weeks, you build up a set of constraints, preferences, and goals. These live in your conversations as system messages. They are valuable. They are also trapped.
 
-Say you have been working with opencode for a month. You have refined your coding style through dozens of sessions. Now you start a new Claude Code project and you want those same preferences. You could copy them by hand. Or you could use ctools.
+Say you have been working with opencode for a month. You have refined your coding style through dozens of sessions. Now you start a new Claude Code project and you want those same preferences. You could copy them by hand. Or you could use ctools:
 
 ```sh
-ccopy @opencode/ses_abc123                     # dump concepts to stdout (for testing)
-ccopy @opencode/ses_abc123 concepts/           # extract concepts to bus
-ccopy concepts/ @claude-code/ses_xyz           # inject into new session
+ccopy @opencode/ses_abc123 concepts/     # extract concepts to the bus
+ccopy concepts/ @claude-code/ses_xyz     # inject into a new session
 ```
 
 Or skip the bus entirely:
@@ -200,298 +89,7 @@ ccopy @opencode/ses_abc123 @claude-code/ses_xyz
 
 Your memory travels with you.
 
-| GNU mtools | ctools | Does what |
-|------------|--------|-----------|
-| `mdir` | `cdir` | List sessions |
-| `mcopy` | `ccopy` | Copy concepts |
-| `mdu` | `cdu` | Token usage |
-| `mtype` | `cgrep` | Search content |
-| - | `cconnect` | Live pipelines |
-| `mdel` | `crm` | Concept remove |
-
-## Tools
-
-### ccopy
-
-Move packets between endpoints. The `@` prefix marks a session (endpoint). Plain paths are concept directories (the bus).
-
-```sh
-ccopy @opencode/ses_abc                        # dump to stdout (JSON)
-ccopy @opencode/ses_abc concepts/              # extract packets to bus
-ccopy concepts/ @opencode/ses_abc               # inject packets from bus
-ccopy @opencode/ses_abc @claude-code/ses_xyz   # endpoint to endpoint
-ccopy --into claude-code @opencode/ses_abc     # whole conversation -> NEW claude-code session
-ccopy -s my-strategy.json @opencode/ses_abc concepts/  # custom extraction
-ccopy -F my-filter.json @opencode/ses_abc concepts/    # filter concepts
-ccopy -v @opencode/ses_abc concepts/            # verbose logging
-```
-
-`--into AGENT` copies a session's **entire conversation** into a brand-new session in another agent. The source is never touched, so it's a true copy (not a move):
-
-```sh
-$ ccopy --into codex @opencode/ses_abc
-Copied 42 message(s) from opencode/ses_abc to a new codex session: 1a2b3c
-Resume it with:
-  codex resume 1a2b3c
-```
-
-Each concept file is a packet with filterable headers:
-
-```json
-{
-  "type": "constraint",
-  "description": "C coding standard",
-  "short": "Use C17 standard",
-  "medium": "Always compile with -std=c17 and enforce strict pointer checking",
-  "long": "All C code must target the C17 standard. Use -std=c17 -Wall -Wextra..."
-}
-```
-
-Strategies define how conversations are parsed into packets. Ontology is contestable, so different strategies produce different chunkings:
-
-```json
-{
-  "host": "http://localhost:11434",
-  "model": "qwen2.5:3b",
-  "api_key": null,
-  "prompt": "Extract the key concepts from this conversation..."
-}
-```
-
-Filters select which packets move through the bus. You write a script, ctools calls it. See [filterlib](#filterlib).
-
-### Strategies
-
-Strategies are named configurations stored in `~/.config/ctools/strategies/`. Each file is a strategy:
-
-```sh
-~/.config/ctools/strategies/
-├── default.json
-├── gemma4.json
-└── project-xyz.json
-```
-
-Lookup order when you pass `-s name`:
-1. If name contains `/` or starts with `.`, use as file path
-2. Check current directory for `name.json`
-3. Check `~/.config/ctools/strategies/name.json`
-
-Current directory has precedence. Project-specific strategies can live alongside your code.
-
-```json
-{
-  "host": "http://localhost:11434",
-  "model": "qwen2.5:3b",
-  "api_key": null,
-  "prompt": "Extract the key concepts from this conversation..."
-}
-```
-
-
-### cconnect
-
-Connect context windows via live concept pipelines. Exposes concepts from one session as a toolcall in another session's context. Polls the source and re-injects concepts on each cycle.
-
-Strategy extracts, filter selects per destination:
-
-```sh
-cconnect @opencode/ses_abc @claude-code/ses_xyz           # live pipeline (5s default)
-cconnect -p 2 @opencode/ses_abc @claude-code/ses_xyz     # poll every 2s
-cconnect -c 1 @opencode/ses_abc @claude-code/ses_xyz     # one-shot
-cconnect -c 10 -p 1 @opencode/ses_abc @claude-code/ses_xyz  # 10 cycles, 1s apart
-cconnect -s my-strategy.json @opencode/ses_abc @claude-code/ses_xyz  # custom extraction
-cconnect -f my-filter.json @opencode/ses_abc @claude-code/ses_xyz    # filter for destination
-```
-
-One-to-many pipeline:
-
-```json
-{
-  "source": "@opencode/ses_abc",
-  "strategy": "strategy.json",
-  "tool_name": "context_from_source",
-  "count": 0,
-  "poll_interval": 5,
-  "destinations": [
-    { "session": "@claude-code/ses_xyz", "filter": "coding.json" },
-    { "session": "@opencode/ses_123", "filter": "security.json" },
-    { "session": "@codex/ses_456", "filter": "goals.json" }
-  ]
-}
-```
-
-```sh
-cconnect --pipeline pipeline.json
-```
-
-Flags: `-c/--count` number of cycles (0=infinity, default), `-p/--poll-interval` seconds between cycles (default 5.0), `-v/--verbose` structured logging.
-
-Filter configuration:
-
-Filters are JSON-RPC 2.0 subprocesses. The filter script reads a request on stdin and writes a response on stdout.
-
-```json
-{
-  "command": "./my-filter.py",
-  "method": "classify",
-  "timeout": 30
-}
-```
-
-See [filterlib](#filterlib) below.
-
-### Observability
-
-Every tool supports `--verbose` / `-v` for structured logging via [structlog](https://github.com/hynek/structlog). Logs go to stderr as JSON lines, pipe to `jq` for debugging.
-
-```sh
-cconnect -v @opencode/ses_abc @claude-code/ses_xyz
-LOGLEVEL=DEBUG cconnect @opencode/ses_abc @claude-code/ses_xyz
-ccopy -v @opencode/ses_abc concepts/
-```
-
-Verbose output shows every pipeline stage:
-
-```
-{"event": "concepts_extracted", "source": "@opencode/ses_abc", "count": 12, "types": {"preference": 5, "constraint": 3, "goal": 4}, "elapsed_ms": 42}
-{"event": "concept_filtered", "reason": "type_excluded", "type": "observation", "short": " noticed the build is slow"}
-{"event": "filter_applied", "config": "coding.json", "input_count": 12, "output_count": 8, "dropped": 4}
-{"event": "inject_complete", "destination": "@claude-code/ses_xyz", "count": 8, "elapsed_ms": 15}
-{"event": "cycle_complete", "source": "@opencode/ses_abc", "destination": "@claude-code/ses_xyz", "injected": 8}
-```
-
-Without `-v`, tools are quiet. Only errors and final results print to the terminal. The `LOGLEVEL` env var overrides: `DEBUG`, `INFO`, `WARNING`, `ERROR`.
-
-For filter debugging, filterlib logs every subprocess call and result:
-
-```sh
-LOGLEVEL=DEBUG cconnect -f my-filter.json @opencode/ses_abc @claude-code/ses_xyz 2>&1 | jq '.event == "filter_timeout"'
-```
-
-### cgrep
-
-Searches conversation content across every session you have. Regex in, matches out. Works across all agents — this is the tool the whole suite is named for.
-
-With no path argument (or `*`, or `-a`) it searches **every installed agent** at once. Name a path to narrow to one agent, one session, or a glob:
-
-```sh
-cgrep "pattern"                           # every installed agent
-cgrep -a "error"                          # same, explicit flag
-cgrep -i "error" "claude-code/"           # only one agent
-cgrep "def " "opencode/" "claude-code/"   # multiple named agents
-cgrep -c "import" "opencode/"             # count per session
-cgrep -C 2 "exception" "claude-code/"     # context lines
-cgrep -h "TODO" "opencode/ses_abc123"     # drop the session path prefix
-cgrep -o -w "foo" "opencode/"             # whole-word hits, matched text only
-cgrep -q "needle" "opencode/"             # exit code only, like grep -q
-cgrep -m 3 "retry" "opencode/"            # stop after 3 hits per session
-cgrep -F "[ERROR]" "opencode/"            # fixed string, no regex
-cgrep --include "ses_abc*" "err" "opencode/"  # only matching session IDs
-```
-
-Flags: `-l` list files, `-L` sessions without matches, `-c` count, `-v` invert, `-i` case-insensitive, `-A/-B/-C` context, `-h`/`-H` filename prefix, `-q` quiet (exit code only), `-m N` max matches per session, `-o` only the matched text, `-w` whole word, `-x` whole line, `-E` extended/POSIX regex (default), `-F` fixed string, `--include`/`--exclude` session ID globs, `-a`/`--all` search every installed agent.
-
-Exit status is grep's: `0` if a match was found, `1` if none, `2` on error (bad pattern, missing agent) — errors beat matches. `-q` prints nothing and still reports the status.
-
-Output is grep-shaped: every line is prefixed with the session it came from, so hits stay locatable:
-
-```sh
-$ cgrep "import" "opencode/*"
-opencode/ses_abc123:17:user: from pathlib import Path
-opencode/ses_abc123-18-assistant: That should work.
---
-opencode/ses_def456:4:user: import sqlite3
-```
-
-`-h` drops the prefix (single-session look), `-H` forces it back on. Context lines use grep's `-` separator instead of `:`.
-
-### cdu
-
-Token usage. Like `du` but for context windows. Uses tiktoken for accurate counts.
-
-```sh
-cdu                           # total across all agents
-cdu opencode/                 # sessions by token count
-cdu opencode/ses_abc123       # breakdown by role
-cdu --json opencode/          # machine-readable
-```
-
-For opencode, it reads actual input/output tokens from the database. For other agents, it counts with tiktoken from the conversation content.
-
-### crm
-
-Remove concepts from sessions. Surgically removes concept-containing sections from agent sessions. Concept JSON files are NOT deleted, only the relevant sections from the context.
-
-```sh
-crm @opencode/ses_abc concept.json                    # remove concept from session
-crm @opencode/ses_abc concept1.json concept2.json     # remove multiple concepts
-crm -a sliding --size 3 @opencode/ses_abc concept.json  # sliding window
-crm -s my-strategy.json @opencode/ses_abc concept.json  # use strategy for detection
-crm -i -v @opencode/ses_abc concept.json              # interactive + verbose
-```
-
-Use case: You used `ccopy` to "pop" concepts out of a session. Now you want to scalpel remove them from the original context because they're throwing off the session. The concept JSON stays intact, so you can run it with a different strategy or on a different session later.
-
-Algorithms:
-
-- `divide` (default): Divide and conquer. Checks the whole context, then halves recursively until finding the smallest unit containing the concept. Removes that unit.
-- `sliding`: Sliding window. Moves linearly through the conversation and snips out places where the concept exists. `--size` controls window width (default 5).
-
-Detection: Without `--strategy`, uses simple string matching. With `--strategy`, uses the LLM to determine if a message contains the concept.
-
-Flags: `-i` interactive (confirm each removal), `-v` verbose (show what's being removed).
-
-### filterlib
-
-Binary classifier for filtering concepts. `filter(in_str) -> True` passes through, `False` filters out. Default on error is `True`.
-
-Filters are JSON-RPC 2.0 subprocesses. You write a script in any language, ctools calls it over stdio.
-
-**Protocol:**
-
-```
-stdin:  {"jsonrpc":"2.0","id":1,"method":"classify","params":{"content":"..."}}
-stdout: {"jsonrpc":"2.0","id":1,"result":true}
-```
-
-`result: true` = pass through. `result: false` = filter out.
-
-**Example filter script (Python):**
-
-```python
-#!/usr/bin/env python3
-import json, sys
-
-req = json.loads(sys.stdin.readline())
-content = req["params"]["content"].lower()
-
-# Filter out anything that looks like a password
-has_secret = any(w in content for w in ["password", "secret", "token", "api_key"])
-print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": not has_secret}))
-```
-
-**Config file:**
-
-```json
-{"command": "./my-filter.py", "method": "classify", "timeout": 30}
-```
-
-**Python API:**
-
-```python
-from ctools.filterlib import JSONRPCFilter, load_filter
-
-f = JSONRPCFilter("./my-filter.py")
-f.filter("password: secret123")  # False
-f.filter("hello world")          # True
-
-# Load from config file
-f = load_filter("filter.json")
-```
-
-The filter script can be anything that speaks JSON-RPC on stdio: a regex script, an LLM classifier, a network call, whatever. The subprocess is the abstraction.
-
-## Supported Endpoints
+## Supported endpoints
 
 | Agent | Storage |
 |-------|---------|
@@ -509,12 +107,7 @@ The filter script can be anything that speaks JSON-RPC on stdio: a regex script,
 
 Run `cdir` to see which endpoints are found on your system and where they store data.
 
-Every endpoint is one class in `ctools/agents.py`. The base `Agent` defines the
-whole interface the tools use — `sessions()`, `messages()`, `raw_messages()`,
-`lines()`, `inject_system()`, `inject_toolcall()`, `remove_messages()` — and the
-storage-shaped subclasses (`JsonAgent`, `JsonlAgent`, `SqliteAgent`) implement
-most of it. Adding an endpoint means writing one subclass and adding it to
-`AGENT_CLASSES`; no command changes.
+Every endpoint is one class in `ctools/agents.py`. The base `Agent` defines the whole interface the tools use — `sessions()`, `messages()`, `raw_messages()`, `lines()`, `inject_system()`, `inject_toolcall()`, `remove_messages()`, `create_session()` — and the storage-shaped subclasses (`JsonAgent`, `JsonlAgent`, `SqliteAgent`) implement most of it. Adding an endpoint means writing one subclass and adding it to `AGENT_CLASSES`; no command changes.
 
 ```python
 from ctools.agents import JsonlAgent, Session
@@ -532,10 +125,9 @@ class MyAgent(JsonlAgent):
         ...
 ```
 
-Anything the storage cannot do — pi's session trees cannot be rewritten in
-place — raises `UnsupportedOperation` instead of being silently skipped.
+Anything the storage cannot do — pi's session trees cannot be rewritten in place — raises `UnsupportedOperation` instead of being silently skipped.
 
-## MCP Server
+## MCP server
 
 There is an MCP server for use from Claude, opencode, Cursor, or anything else that speaks MCP.
 
