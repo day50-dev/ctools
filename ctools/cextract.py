@@ -88,7 +88,7 @@ def parse_args(args: List[str]) -> Tuple[List[str], List[str]]:
     """Split arguments into session refs (@agent/id) and file paths.
 
     A leading ``@`` marks a session; anything else is a concept file path.
-    (Copy a whole conversation into a new agent session with ``--into``.)
+    (To copy a whole conversation into a new agent session, use ``ccopy``.)
     """
     sessions = []
     files = []

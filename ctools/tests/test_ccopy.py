@@ -2,7 +2,7 @@ import json
 import sqlite3
 import pytest
 from typer.testing import CliRunner
-from ctools.ccopy import app, copy_conversation
+from ctools.ccopy import app
 from ctools.lib import AGENTS
 
 runner = CliRunner()

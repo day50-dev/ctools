@@ -46,7 +46,7 @@ cconnect --pipeline pipeline.json
 
 Filters are JSON-RPC 2.0 subprocesses. The filter script reads a request on stdin
 and writes a response on stdout. See
-[filterlib](ccopy.md#filterlib) for the protocol and examples.
+[filterlib](cextract.md#filterlib) for the protocol and examples.
 
 ```json
 {
@@ -65,7 +65,7 @@ pipe to `jq` for debugging.
 ```sh
 cconnect -v @opencode/ses_abc @claude-code/ses_xyz
 LOGLEVEL=DEBUG cconnect @opencode/ses_abc @claude-code/ses_xyz
-ccopy -v @opencode/ses_abc concepts/
+cextract -v @opencode/ses_abc concepts/
 ```
 
 Verbose output shows every pipeline stage:

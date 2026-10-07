@@ -15,18 +15,9 @@ cextract -v @opencode/ses_abc concepts/            # verbose logging
 
 ## Copying a whole conversation
 
-`--into AGENT` copies a session's **entire conversation** into a brand-new session
-in another agent. The source is never touched, so it's a true copy (not a move):
-
-```sh
-$ cextract --into codex @opencode/ses_abc
-Copied 42 message(s) from opencode/ses_abc to a new codex session: 1a2b3c
-Resume it with:
-  codex resume 1a2b3c
-```
-
-Only agents that support session creation work as destinations (claude-code,
-opencode, kilo, codex, pi). The others refuse with a clean error.
+To copy a session's **entire conversation** into a new session in another agent,
+use [ccopy](ccopy.md). The source is never touched, so it's a true copy (not a
+move).
 
 ## Concept files
 

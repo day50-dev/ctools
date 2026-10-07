@@ -14,7 +14,7 @@ crm -i -v @opencode/ses_abc concept.json              # interactive + verbose
 
 ## Use case
 
-You used `ccopy` to "pop" concepts out of a session. Now you want to scalpel
+You used `cextract` to "pop" concepts out of a session. Now you want to scalpel
 remove them from the original context because they're throwing off the session.
 The concept JSON stays intact, so you can run it with a different strategy or on
 a different session later.
