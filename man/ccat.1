@@ -1,0 +1,131 @@
+.TH CCAT 1 "2024-01-15" "ctools" "User Commands"
+.SH NAME
+ccat \- cat for LLM context windows
+.SH SYNOPSIS
+.B ccat
+.RB [ \-t ]
+.RB [ \-\-color
+.IR never | auto | always ]
+.RB [ \-\-version ]
+.I "agent/session_id"
+...
+.SH DESCRIPTION
+.B ccat
+(cat for context windows) prints one or more conversations, the way
+.BR cat (1)
+prints a file.
+.B cdir
+lists sessions and
+.BR cgrep
+finds them;
+.B ccat
+shows the actual conversation.
+.PP
+By default each conversation is printed as a JSON list of
+.BR {"role", "content"}
+objects (one array per session) \(em the same shape
+.BR ccopy
+uses on the wire. JSON is the first transportable format for a conversation, so
+it is what
+.B ccat
+hands you and what you pipe onward: to
+.BR jq ,
+to another tool, or back into a session with
+.BR "ccopy \-\-import-json" .
+Pass
+.B \-t
+(\fB--text\fR) for a readable transcript instead: a short role label in a fixed
+column, followed by the message content.
+.SH OPTIONS
+.TP
+.BR \-t ", " \-\-text
+Print a readable transcript instead of the default JSON.
+.TP
+.BR \-\-color " MODE"
+Colorize the \fB--text\fR transcript.
+.IR MODE
+is
+.BR never ", " auto ", or " always
+(default
+.BR auto ).
+.TP
+.B \-\-version
+Print version information and exit.
+.SH ARGUMENTS
+.TP
+.I agent/session_id
+A session to print, as
+.I agent/session_id
+(e.g.
+.IR opencode/ses_abc123 ).
+Give as many as you like; they print in order, separated by a blank line.
+.TP
+.I ssh://[user@]host[:port]/agent/session_id
+A session on a remote host.
+.B ccat
+pulls the agent's storage over ssh and reads it locally, so the remote only
+needs
+.B sshd
+and
+.BR tar .
+.SH EXAMPLES
+Print one conversation (JSON by default):
+.PP
+.RS
+.nf
+$ ccat opencode/ses_abc123
+[
+  {"role": "user", "content": "do a git diff to v0.16.10 ... i broke toolcalling"}
+]
+.fi
+.RE
+.PP
+Print it as a readable transcript:
+.PP
+.RS
+.nf
+$ ccat --text opencode/ses_abc123
+    you        do a git diff to v0.16.10 ... i broke toolcalling somehow
+    assistant  Let me look at the broader context around tool calling...
+.fi
+.RE
+.PP
+Pipe the JSON onward:
+.PP
+.RS
+.nf
+$ ccat opencode/ses_abc123 | jq .
+.fi
+.RE
+.PP
+Print every session that
+.BR cgrep
+matched:
+.PP
+.RS
+.nf
+$ cgrep -l llcat opencode | xargs ccat          # as JSON
+$ cgrep -l llcat opencode | xargs ccat --text   # as a transcript
+.fi
+.RE
+.PP
+Read a conversation from another host:
+.PP
+.RS
+.nf
+$ ccat ssh://chris@remote/opencode/ses_abc123
+.fi
+.RE
+.SH EXIT STATUS
+.TP
+.B 0
+At least one session was printed.
+.TP
+.B 1
+No session could be printed (bad id, unknown or uninstalled agent, no args).
+.SH SEE ALSO
+.BR cdir (1),
+.BR cgrep (1),
+.BR ccopy (1)
+.SH AUTHORS
+ctools project.

@@ -6,12 +6,17 @@ Print a conversation's messages, the way `cat` prints a file. Where cdir
 lists the sessions and ccopy moves them, ccat shows you the actual
 conversation, one or more at a time.
 
+By default the output is a JSON list of {role, content} objects (one array per
+session), so it is importable and pipeable: feed it to jq, to another tool, or
+back into a session. Use --text for a human-readable transcript instead.
+
 Usage:
-    ccat opencode/ses_abc123                 # show one conversation
-    ccat opencode/ses_a opencode/ses_b       # show several, in order
-    ccat --json opencode/ses_abc            # machine-readable JSON
-    ccat ssh://chris@remote/opencode/ses_a   # show a conversation on another host
-    cgrep -l ctool opencode | xargs ccat     # dump every matching conversation
+    ccat opencode/ses_abc123                 # print one conversation as JSON
+    ccat opencode/ses_a opencode/ses_b       # several, each a JSON array
+    ccat --text opencode/ses_abc            # human-readable transcript
+    ccat ssh://chris@remote/opencode/ses_a  # a conversation on another host
+    ccat opencode/ses_abc | jq .            # it is JSON, so pipe it anywhere
+    cgrep -l ctool opencode | xargs ccat    # dump every matching conversation
 
 The source is never touched. A remote source is fetched the same way ccopy
 does (the agent's storage is pulled over ssh and read locally), so the
@@ -131,24 +136,27 @@ def main(
     refs: Optional[List[str]] = typer.Argument(None,
         help="One or more sessions to print (agent/session_id, or "
              "ssh://[user@]host[:port]/agent/session_id)"),
-    json_out: bool = typer.Option(False, "--json", "-j",
-        help="Print the conversation as a JSON list of {role, content} objects"),
+    text_out: bool = typer.Option(False, "--text", "-t",
+        help="Print a human-readable transcript instead of JSON"),
     color: str = typer.Option("auto", "--color",
-        help="Colorize the transcript: never, auto, or always"),
+        help="Colorize the --text transcript: never, auto, or always"),
     version: bool = version_option("ccat"),
 ):
     """
     Print one or more conversations, like cat.
 
-    `ccat AGENT/SESSION` shows the session's messages as a readable transcript.
-    Pass several sessions and they are printed in order, separated by a blank
-    line. A remote source (ssh://...) is fetched over ssh first, so it works
-    exactly like the local case. The source is never modified.
+    `ccat AGENT/SESSION` prints the session's messages. The default output is a
+    JSON list of {role, content} objects (one array per session), so it can be
+    imported or piped to another tool. Pass --text for a readable transcript
+    instead. Several sessions print in order, separated by a blank line. A
+    remote source (ssh://...) is fetched over ssh first. The source is never
+    modified.
 
     Examples:
         ccat opencode/ses_abc123
         ccat opencode/ses_a opencode/ses_b
-        ccat --json opencode/ses_abc
+        ccat --text opencode/ses_abc
+        ccat opencode/ses_abc | jq .
         ccat ssh://chris@remote/opencode/ses_a
     """
     if color not in ('never', 'auto', 'always'):
@@ -168,12 +176,12 @@ def main(
         if error:
             console.print(f"[yellow]{error}[/yellow]")
             continue
-        if i and not json_out:
-            print()  # blank line between consecutive transcripts
-        if json_out:
-            _render_json(records)
-        else:
+        if i:
+            print()  # blank line between consecutive sessions
+        if text_out:
             _render_transcript(records, color=use_color)
+        else:
+            _render_json(records)
         printed_any = True
 
     # cat exits non-zero only when nothing could be read; a single bad ref

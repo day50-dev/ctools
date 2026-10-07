@@ -5,18 +5,27 @@ sessions and `cgrep` finds them; `ccat` prints the actual conversation, one or
 more at a time.
 
 ```sh
-ccat opencode/ses_abc123                 # show one conversation
-ccat opencode/ses_a opencode/ses_b       # show several, in order
-ccat --json opencode/ses_abc            # machine-readable JSON
-ccat ssh://chris@remote/opencode/ses_a  # show a conversation on another host
+ccat opencode/ses_abc123                 # print one conversation as JSON
+ccat opencode/ses_a opencode/ses_b       # several, each a JSON array
+ccat --text opencode/ses_abc            # a human-readable transcript
+ccat opencode/ses_abc | jq .            # it is JSON, so pipe it anywhere
+ccat ssh://chris@remote/opencode/ses_a  # a conversation on another host
 ```
 
-By default each message is a readable transcript: a dimmed role label in a
-fixed column, then the content. `--json` prints the raw conversation as a JSON
-list of `{"role", "content"}` objects (the same shape `ccopy` uses on the wire).
+By default `ccat` prints the conversation as a JSON list of `{"role", "content"}`
+objects (one array per session) — the same shape `ccopy` uses on the wire. JSON is
+the first transportable format for a conversation, so it is what `ccat` hands you
+and what you pipe onward: to `jq`, to another tool, or straight back into a
+session with `ccopy --import-json`. Use `--text` for a readable transcript instead
+(a dimmed role label in a fixed column, then the content):
 
 ```sh
 $ ccat opencode/ses_abc123
+[
+  {"role": "user", "content": "do a git diff to v0.16.10 ... i broke toolcalling"}
+]
+
+$ ccat --text opencode/ses_abc123
     you        do a git diff to v0.16.10 ... i broke toolcalling somehow
     assistant  Let me look at the broader context around tool calling...
 ```
@@ -28,7 +37,8 @@ you give them, separated by a blank line. This is what makes `ccat` the end of
 a `cgrep -l` pipeline:
 
 ```sh
-$ cgrep -l llcat opencode | xargs ccat
+$ cgrep -l llcat opencode | xargs ccat            # every match, as JSON
+$ cgrep -l llcat opencode | xargs ccat --text     # or as a readable transcript
 ```
 
 A reference that can't be read (a bad id, an uninstalled agent) is reported and

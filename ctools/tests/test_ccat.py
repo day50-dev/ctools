@@ -113,10 +113,20 @@ DEFAULT_CONV = [
 ]
 
 
-def test_ccat_single_session(tmp_path):
-    """ccat agent/session prints a readable transcript."""
+def test_ccat_single_session_json_default(tmp_path):
+    """The default output is a JSON list of {role, content} (transportable)."""
     _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
     result = _run_ccat(tmp_path, ["opencode/ses_a"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert data[0] == {"role": "user", "content": "Write a fibonacci function"}
+    assert data[1]["role"] == "assistant"
+
+
+def test_ccat_single_session_text(tmp_path):
+    """--text prints a readable transcript with role labels."""
+    _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
+    result = _run_ccat(tmp_path, ["--text", "opencode/ses_a"])
     assert result.exit_code == 0
     assert "Write a fibonacci function" in result.stdout
     assert "fibonacci function: def fib" in result.stdout
@@ -125,23 +135,14 @@ def test_ccat_single_session(tmp_path):
     assert "assistant" in result.stdout
 
 
-def test_ccat_single_session_json(tmp_path):
-    """ccat --json prints a JSON list of {role, content}."""
-    _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
-    result = _run_ccat(tmp_path, ["--json", "opencode/ses_a"])
-    assert result.exit_code == 0
-    data = json.loads(result.stdout)
-    assert data[0] == {"role": "user", "content": "Write a fibonacci function"}
-    assert data[1]["role"] == "assistant"
-
-
-def test_ccat_multiple_sessions(tmp_path):
-    """Two sessions are printed in order, separated by a blank line."""
+def test_ccat_multiple_sessions_text(tmp_path):
+    """--text: two sessions in order, separated by a blank line."""
     _make_opencode_conv_db(tmp_path, "ses_a",
                            [("user", "AAA first"), ("assistant", "resp A")])
     _conv(tmp_path, "ses_b", [("user", "BBB second"), ("assistant", "resp B")])
     result = _run_ccat(tmp_path,
-                       ["--color", "never", "opencode/ses_a", "opencode/ses_b"])
+                       ["--text", "--color", "never", "opencode/ses_a",
+                        "opencode/ses_b"])
     assert result.exit_code == 0
     # AAA comes before BBB (order preserved)
     assert result.stdout.index("AAA first") < result.stdout.index("BBB second")
@@ -150,12 +151,12 @@ def test_ccat_multiple_sessions(tmp_path):
 
 
 def test_ccat_multiple_sessions_json(tmp_path):
-    """--json with two sessions prints two JSON arrays in order."""
+    """Default (JSON) with two sessions prints two JSON arrays in order."""
     _make_opencode_conv_db(tmp_path, "ses_a",
                            [("user", "AAA first"), ("assistant", "resp A")])
     _conv(tmp_path, "ses_b", [("user", "BBB second"), ("assistant", "resp B")])
     result = _run_ccat(tmp_path,
-                       ["--json", "opencode/ses_a", "opencode/ses_b"])
+                       ["opencode/ses_a", "opencode/ses_b"])
     assert result.exit_code == 0
     # Parse the two concatenated JSON arrays.
     decoder = json.JSONDecoder()
@@ -223,16 +224,16 @@ def test_ccat_not_installed(tmp_path):
 
 
 def test_ccat_color_never_has_no_ansi(tmp_path):
-    """--color never produces no ANSI escape codes."""
+    """--text with --color never produces no ANSI escape codes."""
     _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
-    result = _run_ccat(tmp_path, ["--color", "never", "opencode/ses_a"])
+    result = _run_ccat(tmp_path, ["--text", "--color", "never", "opencode/ses_a"])
     assert "\x1b[" not in result.stdout
 
 
 def test_ccat_transcript_role_alignment(tmp_path):
     """Role labels sit in a fixed column; content follows two spaces."""
     _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
-    result = _run_ccat(tmp_path, ["--color", "never", "opencode/ses_a"])
+    result = _run_ccat(tmp_path, ["--text", "--color", "never", "opencode/ses_a"])
     lines = result.stdout.splitlines()
     # Every transcript line starts with 4 spaces + a role label + 2 spaces.
     for line in lines:
