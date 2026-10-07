@@ -8,6 +8,14 @@ ccopy \- copy a conversation from one agent to a new session in another
 .RB [ \-\-version ]
 .I source
 .I destination
+.br
+.B ccopy
+.B \-\-export-json
+.I agent/session_id
+.br
+.B ccopy
+.B \-\-import-json
+.I agent
 .SH DESCRIPTION
 .B ccopy
 (context copy) copies an entire conversation from a source session into a
@@ -27,6 +35,18 @@ Show what would happen without writing anything.
 .BR \-v ", " \-\-verbose
 Structured logging to stderr.
 .TP
+.BI \-\-export-json " agent/session_id"
+Print the session's conversation as a JSON list of
+.BR {"role", "content"}
+objects on stdout, and exit. This is the raw wire format; it is also what ccopy
+runs over ssh on a remote source.
+.TP
+.BI \-\-import-json " agent"
+Read a conversation JSON from stdin, create a new session in
+.IR agent ,
+and print the new session id on stdout. This is the raw wire format; it is also
+what ccopy runs over ssh on a remote destination.
+.TP
 .B \-\-version
 Print version information and exit.
 .SH ARGUMENTS
@@ -35,14 +55,48 @@ Print version information and exit.
 The source session, as
 .I agent/session_id
 (e.g.
-.IR opencode/ses_abc123 ).
+.IR opencode/ses_abc123 ),
+or
+.I ssh://[user@]host[:port]/agent/session_id
+for a session on a remote host.
 .TP
 .I destination
 A bare agent name (e.g.
-.IR claude-code ). A new session is created in that agent.
+.IR claude-code ),
+or
+.I ssh://[user@]host[:port]/agent
+for a remote host. A new session is created in that agent.
 .PP
 Only agents that support session creation work as destinations
 (claude-code, opencode, kilo, codex, pi). The others refuse with a clean error.
+.SH "CROSS-HOST"
+Either side may be remote, addressed as
+.IR ssh://[user@]host[:port]/path .
+ccopy runs over your normal ssh setup (keys,
+.I ~/.ssh/config
+, jump hosts). The remote host needs ctxttools installed
+(
+.BR "pip install" " ctxttools ).
+.PP
+The transport is plain ssh plus JSON on stdin/stdout:
+.PP
+.RS
+.nf
+ssh chris@remote 'ccopy --export-json opencode/ses_abc' | ccopy --import-json codex
+.fi
+.RE
+.PP
+Because non-interactive ssh often has a minimal PATH, ccopy retries a failed
+.I ccopy
+lookup as
+.IR "python -m ctools.cli run ccopy"
+, run from the checkout directory
+($CTOOLS_DIR, or the current directory). The remote therefore only needs the
+package importable by some
+.I python
+reachable over ssh — a venv or a checkout — not necessarily a
+.I ccopy
+on the ssh PATH.
 .SH EXAMPLES
 Copy an opencode session to a new Claude Code session:
 .PP
@@ -61,6 +115,17 @@ Preview without writing:
 .nf
 $ ccopy opencode/ses_abc123 codex --dry-run
 Would copy 42 message(s) from opencode/ses_abc123 to a new codex session.
+.fi
+.RE
+.PP
+Copy a conversation to a remote host:
+.PP
+.RS
+.nf
+$ ccopy opencode/ses_abc123 ssh://chris@remote/codex
+Copied 42 message(s) from opencode/ses_abc123 to a new codex session on chris@remote: 1a2b3c
+Resume it on chris@remote with:
+  codex resume 1a2b3c
 .fi
 .RE
 .SH EXIT STATUS

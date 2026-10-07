@@ -8,7 +8,8 @@ same way.
 """
 
 from contextlib import contextmanager
-from typing import Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
 
 import typer
 from rich.console import Console
@@ -41,6 +42,62 @@ def parse_ref(ref: str) -> Tuple[str, Optional[str]]:
     """
     parts = ref.lstrip('@').strip('/').split('/', 1)
     return parts[0], (parts[1] if len(parts) > 1 else None)
+
+
+@dataclass
+class Remote:
+    """A remote host addressed as ``ssh://[user@]host[:port]/path``."""
+
+    host: str
+    user: Optional[str] = None
+    port: Optional[int] = None
+    path: str = ""
+
+    @property
+    def target(self) -> str:
+        return f"{self.user}@{self.host}" if self.user else self.host
+
+    def ssh_command(self, command: str) -> List[str]:
+        """argv for ``ssh`` running `command` on the host.
+
+        ``-T`` disables tty allocation so the remote command's stdout stays
+        clean for capture.
+        """
+        args = ["ssh", "-T"]
+        if self.port is not None:
+            args += ["-p", str(self.port)]
+        return args + [self.target, command]
+
+    def __str__(self) -> str:
+        auth = f"{self.user}@" if self.user else ""
+        port = f":{self.port}" if self.port is not None else ""
+        return f"ssh://{auth}{self.host}{port}"
+
+
+def parse_remote_ref(ref: str) -> Tuple[Optional[Remote], str]:
+    """Split a reference into ``(remote, local_ref)``.
+
+    A reference of the form ``ssh://[user@]host[:port]/path`` yields
+    ``(Remote, path)``; anything else is local and yields ``(None, ref)``.
+    """
+    if not ref.startswith("ssh://"):
+        return None, ref
+    rest = ref[len("ssh://"):]
+    head, _, path = rest.partition("/")
+    if not head:
+        raise ValueError(f"no host in {ref}")
+    user: Optional[str] = None
+    host = head
+    if "@" in head:
+        user, _, host = head.partition("@")
+    port: Optional[int] = None
+    if ":" in host:
+        maybe_host, _, maybe_port = host.partition(":")
+        if maybe_port.isdigit():
+            host, port = maybe_host, int(maybe_port)
+    if not host:
+        raise ValueError(f"no host in {ref}")
+    return Remote(host=host, user=user or None, port=port, path=path), path
 
 
 def require_agent(name: str) -> Agent:
@@ -81,3 +138,53 @@ def reporting():
     except AgentError as exc:
         console.print(f"[yellow]{exc}[/yellow]")
         raise typer.Exit(1)
+
+
+_COMMANDS = {
+    "cdir": "ctools.cdir:app",
+    "cgrep": "ctools.cgrep:app",
+    "ccopy": "ctools.ccopy:app",
+    "cextract": "ctools.cextract:app",
+    "cconnect": "ctools.cconnect:app",
+    "cdu": "ctools.cdu:app",
+    "crm": "ctools.crm:app",
+}
+
+
+def run_command(name: str, argv: List[str]) -> None:
+    """Invoke a ctools command by name with `argv`.
+
+    Backs ``python -m ctools.cli run NAME ARGS...``, the fallback a remote
+    host uses when ``ccopy`` (or friends) is installed for python but missing
+    from the non-interactive ssh PATH.
+    """
+    entry = _COMMANDS.get(name)
+    if entry is None:
+        print(f"unknown command: {name} (known: {', '.join(sorted(_COMMANDS))})")
+        raise typer.Exit(2)
+    module_name, attr = entry.split(":")
+    import importlib
+    app = getattr(importlib.import_module(module_name), attr)
+    app(args=argv, prog_name=name, standalone_mode=False)
+
+
+def _main() -> None:
+    import sys
+    argv = sys.argv[1:]
+    if not argv:
+        print("usage: python -m ctools.cli run <command> [args...]")
+        sys.exit(2)
+    if argv[0] != "run":
+        print("usage: python -m ctools.cli run <command> [args...]")
+        sys.exit(2)
+    name, rest = argv[1], argv[2:]
+    try:
+        run_command(name, rest)
+    except typer.Exit as e:
+        sys.exit(e.exit_code)
+    except SystemExit as e:
+        sys.exit(e.code if isinstance(e.code, int) else 1)
+
+
+if __name__ == "__main__":
+    _main()
