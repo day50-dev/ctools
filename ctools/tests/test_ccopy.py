@@ -272,146 +272,157 @@ def test_pipe_roundtrip(tmp_path):
 
 
 # --- Remote transport (ssh mocked) ---
-
-class FakeSSH:
-    """Stands in for subprocess.run, recording commands and returning canned output."""
-
-    def __init__(self, stdout="", stderr="", returncode=0):
-        self.stdout = stdout
-        self.stderr = stderr
-        self.returncode = returncode
-        self.calls = []
-
-    def __call__(self, cmd, **kwargs):
-        self.calls.append({"cmd": cmd, "input": kwargs.get("input")})
-
-        class P:
-            pass
-        p = P()
-        p.returncode = self.returncode
-        p.stdout = self.stdout
-        p.stderr = self.stderr
-        return p
+# --- Remote transport (pulled storage, ssh mocked) ---
 
 
-def test_remote_destination(tmp_path, monkeypatch):
-    """ccopy local/ses ssh://user@remote/agent: ssh runs --import-json, gets the new id."""
+def _mock_transport(monkeypatch, remote_home: "object"):
+    """Patch ccopy's transport so "ssh to remote" becomes a local file move.
+
+    _pull copies `<remote_home>/<agent-dir>/<storage>` into dest_base as
+    `<agent-dir>/<storage>`; _push copies it back. This exercises the whole
+    flow (pull -> local agent -> push) with no real network.
+    """
+    import ctools.ccopy as ccopy
+
+    def fake_pull(remote, agent, dest_base):
+        rel = ccopy._remote_storage_rel(agent)
+        src = remote_home / rel
+        assert src.exists(), f"mock remote is missing {src}"
+        dst = dest_base / rel
+        if dst.is_file():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+        import shutil as _sh
+        if src.is_dir():
+            _sh.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(src.read_bytes())
+
+    def fake_push(remote, agent, base):
+        rel = ccopy._remote_storage_rel(agent)
+        src = base / rel
+        assert src.exists()
+        dst = remote_home / rel
+        import shutil as _sh
+        if src.is_dir():
+            _sh.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(src.read_bytes())
+
+    monkeypatch.setattr(ccopy, "_pull", fake_pull)
+    monkeypatch.setattr(ccopy, "_push", fake_push)
+
+
+def test_remote_destination_pulls_and_pushes(tmp_path, monkeypatch):
+    """ccopy local/ses ssh://host/agent: pull remote storage, create the
+    session against the local mirror, push it back."""
     _make_opencode_conversation_db(tmp_path, "ses_src")
+    remote_home = tmp_path / "remote"
+    (remote_home / ".local" / "share" / "opencode").mkdir(parents=True)
+    # The remote has its own (empty-ish) opencode db; the push must land there.
+    _make_opencode_conversation_db(remote_home / ".local" / "share" / "opencode",
+                                   "ses_remote_existing")
     original = AGENTS["opencode"].base_path
     AGENTS["opencode"].base_path = tmp_path
-    fake = FakeSSH(stdout="ses_remote_new123\n")
-    monkeypatch.setattr("ctools.ccopy.subprocess.run", fake)
+    _mock_transport(monkeypatch, remote_home)
     try:
-        result = runner.invoke(app, ["opencode/ses_src", "ssh://chris@remote/codex"])
+        result = runner.invoke(app, ["opencode/ses_src", "ssh://chris@remote/opencode"])
         assert result.exit_code == 0, result.output
         assert "on chris@remote" in result.stdout
-        assert "ses_remote_new123" in result.stdout
-        # Exactly one ssh call: the import, with the conversation JSON piped in.
-        assert len(fake.calls) == 1
-        call = fake.calls[0]
-        assert call["cmd"] == ["ssh", "-T", "chris@remote", "ccopy --import-json codex"]
-        records = json.loads(call["input"])
-        assert records[0]["role"] == "user"
+        # The new session now exists in the REMOTE db (the pushed mirror).
+        import sqlite3
+        conn = sqlite3.connect(str(remote_home / ".local" / "share" / "opencode" / "opencode.db"))
+        ids = [r[0] for r in conn.execute("SELECT id FROM session")]
+        conn.close()
+        assert "ses_remote_existing" in ids
+        new_id = result.stdout.strip().split()[-1]
+        assert new_id in ids
     finally:
         AGENTS["opencode"].base_path = original
 
 
-def test_remote_source(tmp_path, monkeypatch):
-    """ccopy ssh://user@remote/agent/ses local-agent: ssh runs --export-json."""
-    _make_opencode_conversation_db(tmp_path, "ses_src")
+def test_remote_source_pulls_conversation(tmp_path, monkeypatch):
+    """ccopy ssh://host/agent/ses local-agent: pull remote storage, read the
+    conversation locally, create it in the local destination."""
+    remote_home = tmp_path / "remote"
+    (remote_home / ".local" / "share" / "opencode").mkdir(parents=True)
+    _make_opencode_conversation_db(remote_home / ".local" / "share" / "opencode",
+                                   "ses_pulled")
+    _make_opencode_conversation_db(tmp_path, "ses_dummy")
     original = AGENTS["opencode"].base_path
     AGENTS["opencode"].base_path = tmp_path
-    records = [{"role": "user", "content": "pulled across the wire"}]
-    fake = FakeSSH(stdout=json.dumps(records))
-    monkeypatch.setattr("ctools.ccopy.subprocess.run", fake)
+    _mock_transport(monkeypatch, remote_home)
     try:
-        result = runner.invoke(app, ["ssh://chris@remote/opencode/ses_src", "opencode"])
+        result = runner.invoke(app, ["ssh://chris@remote/opencode/ses_pulled", "opencode"])
         assert result.exit_code == 0, result.output
-        assert "from opencode/ses_src on chris@remote" in result.stdout
-        assert len(fake.calls) == 1
-        assert fake.calls[0]["cmd"] == \
-            ["ssh", "-T", "chris@remote", "ccopy --export-json opencode/ses_src"]
-        # The new local session holds the pulled conversation.
-        new_id = result.stdout.split("session:")[-1].strip().split()[0]
-        assert AGENTS["opencode"].messages(new_id)[0].content == records[0]["content"]
+        assert "from opencode/ses_pulled on chris@remote" in result.stdout
+        new_id = result.stdout.strip().split()[-1]
+        msgs = AGENTS["opencode"].messages(new_id)
+        assert msgs[0].content == "Write a fibonacci function"
     finally:
         AGENTS["opencode"].base_path = original
 
 
-def test_remote_failure_reports_hint(tmp_path, monkeypatch):
-    """A failing ssh (e.g. ctxttools missing on the remote) is reported with a hint."""
-    _make_opencode_conversation_db(tmp_path, "ses_src")
+def test_remote_source_missing_session_is_error(tmp_path, monkeypatch):
+    """A remote source whose session doesn't exist is a clean error."""
+    remote_home = tmp_path / "remote"
+    (remote_home / ".local" / "share" / "opencode").mkdir(parents=True)
+    _make_opencode_conversation_db(remote_home / ".local" / "share" / "opencode",
+                                   "ses_pulled")
+    _make_opencode_conversation_db(tmp_path, "ses_dummy")
     original = AGENTS["opencode"].base_path
     AGENTS["opencode"].base_path = tmp_path
-    # First call: `ccopy` not found. Second call (the python -m fallback) also
-    # fails, so the error path reports both attempts.
-    fake = FakeSSH(stderr="/bin/sh: 1: ccopy: not found\n", returncode=127)
-    monkeypatch.setattr("ctools.ccopy.subprocess.run", fake)
+    _mock_transport(monkeypatch, remote_home)
     try:
-        result = runner.invoke(app, ["opencode/ses_src", "ssh://chris@remote/codex"])
+        result = runner.invoke(app, ["ssh://chris@remote/opencode/ses_absent", "opencode"])
         assert result.exit_code == 1
-        assert "ccopy: not found" in result.stdout
-        # After the fallback is exhausted, the hint about installing ctxttools shows.
-        assert "pip install ctxttools" in result.stdout
+        assert "No conversation" in result.stdout
     finally:
         AGENTS["opencode"].base_path = original
 
 
-def test_remote_fallback_to_python_m(tmp_path, monkeypatch):
-    """When `ccopy` is missing on the remote ssh PATH, retry via `python -m ctools.cli`."""
+def test_dry_run_remote_makes_no_transport_calls(tmp_path, monkeypatch):
+    """With a local source, --dry-run counts locally and never pulls or pushes."""
     _make_opencode_conversation_db(tmp_path, "ses_src")
     original = AGENTS["opencode"].base_path
     AGENTS["opencode"].base_path = tmp_path
+    import ctools.ccopy as ccopy
 
-    calls = []
+    def boom(*a, **kw):
+        raise AssertionError("transport should not run for a dry run")
 
-    class P:
-        pass
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        p = P()
-        if "python -m ctools.cli" in cmd[-1]:
-            p.returncode = 0
-            p.stdout = "ses_via_fallback\n"
-            p.stderr = ""
-        else:
-            p.returncode = 127
-            p.stdout = ""
-            p.stderr = "/bin/sh: 1: ccopy: not found\n"
-        return p
-
-    monkeypatch.setattr("ctools.ccopy.subprocess.run", fake_run)
-    try:
-        result = runner.invoke(app, ["opencode/ses_src", "ssh://chris@remote/codex"])
-        assert result.exit_code == 0, result.output
-        assert "ses_via_fallback" in result.stdout
-        assert len(calls) == 2
-        # The fallback cd's to $CTOOLS_DIR and runs via python -m, quoting the
-        # whole ccopy command so the remote shell sees it as one unit.
-        assert "CTOOLS_DIR" in calls[1][-1]
-        assert "python -m ctools.cli run 'ccopy --import-json codex'" in calls[1][-1]
-    finally:
-        AGENTS["opencode"].base_path = original
-
-
-def test_dry_run_local_source_remote_destination_makes_no_ssh_calls(tmp_path, monkeypatch):
-    """With a local source, --dry-run counts locally and never touches ssh."""
-    _make_opencode_conversation_db(tmp_path, "ses_src")
-    original = AGENTS["opencode"].base_path
-    AGENTS["opencode"].base_path = tmp_path
-    fake = FakeSSH()
-    monkeypatch.setattr("ctools.ccopy.subprocess.run", fake)
+    monkeypatch.setattr(ccopy, "_pull", boom)
+    monkeypatch.setattr(ccopy, "_push", boom)
     try:
         result = runner.invoke(app, ["opencode/ses_src", "ssh://chris@remote/codex",
                                      "--dry-run"])
         assert result.exit_code == 0
         assert "Would copy" in result.stdout
-        assert fake.calls == []
     finally:
         AGENTS["opencode"].base_path = original
 
 
+def test_storage_relative():
+    """storage_relative() yields the $HOME-relative path a remote pull/push
+    must target."""
+    from ctools.agents import get_agent
+    assert get_agent("opencode").storage_relative() == \
+        ".local/share/opencode/opencode.db"
+    assert get_agent("pi").storage_relative() == ".pi/agent/sessions"
+    assert get_agent("claude-code").storage_relative() == ".claude/projects"
+    assert get_agent("codex").storage_relative() == ".codex/sessions"
+    assert get_agent("kilo").storage_relative() == ".local/share/kilo/kilo.db"
+
+
+def test_remote_storage_rel_anchors_at_home():
+    """The remote tar path is relative to $HOME (the agent dir is the anchor)."""
+    import ctools.ccopy as ccopy
+    from ctools.agents import get_agent
+    assert ccopy._remote_storage_rel(get_agent("opencode")) == \
+        ".local/share/opencode/opencode.db"
+    assert ccopy._remote_storage_rel(get_agent("pi")) == ".pi/agent/sessions"
+    assert ccopy._remote_storage_rel(get_agent("claude-code")) == ".claude/projects"
 # --- Live ssh roundtrip (skipped unless `ssh localhost` works) ---
 
 def _ssh_localhost_available() -> bool:

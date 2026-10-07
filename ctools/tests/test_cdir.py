@@ -680,6 +680,118 @@ def test_cli_sort_last_flag_wins_time_then_size(tmp_path):
     assert result.stdout.index('ses_big') < result.stdout.index('ses_small')
 
 
+def _make_opencode_db_glob(tmp_path):
+    """Create an opencode.db with three sessions for glob testing."""
+    db_path = tmp_path / 'opencode.db'
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE session (
+            id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, slug TEXT,
+            directory TEXT, title TEXT, version TEXT, share_url TEXT,
+            summary_additions INTEGER, summary_deletions INTEGER,
+            summary_files INTEGER, summary_diffs TEXT, revert TEXT,
+            permission TEXT, time_created INTEGER, time_updated INTEGER,
+            time_compacting INTEGER, time_archived INTEGER, workspace_id TEXT,
+            path TEXT, agent TEXT, model TEXT, cost REAL,
+            tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER,
+            tokens_cache_read INTEGER, tokens_cache_write INTEGER, metadata TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE message (
+            id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT
+        )
+    ''')
+    cursor.execute("""INSERT INTO session (id, title, time_created, time_updated,
+        tokens_input, tokens_output, model, directory)
+        VALUES ('ses_llcat1', 'llcat JSON export', 1705312200000, 1705316700000,
+        100, 200, 'gpt-4', '/home/user/llcat')""")
+    cursor.execute("""INSERT INTO session (id, title, time_created, time_updated,
+        tokens_input, tokens_output, model, directory)
+        VALUES ('ses_abc123', 'Python Help', 1705398000000, 1705403400000,
+        800, 1200, 'claude-3', '/home/user/project')""")
+    cursor.execute("""INSERT INTO session (id, title, time_created, time_updated,
+        tokens_input, tokens_output, model, directory)
+        VALUES ('ses_def456', 'llcat debug', 1705400000000, 1705405400000,
+        500, 600, 'gpt-4', '/home/user/other')""")
+    cursor.execute("""INSERT INTO message (id, session_id, role, content)
+        VALUES ('msg1', 'ses_llcat1', 'user', 'hello')""")
+    cursor.execute("""INSERT INTO message (id, session_id, role, content)
+        VALUES ('msg2', 'ses_abc123', 'user', 'python help please')""")
+    conn.commit()
+    conn.close()
+
+
+def test_cli_glob_matches_name(tmp_path):
+    """A glob in the session part filters sessions whose name matches."""
+    _make_opencode_db_glob(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["opencode/*llcat*"])
+    assert result.exit_code == 0
+    assert 'ses_llcat1' in result.stdout
+    assert 'ses_def456' in result.stdout
+    assert 'ses_abc123' not in result.stdout
+
+
+def test_cli_glob_matches_path(tmp_path):
+    """A glob matches the session working directory (path) too.
+
+    ses_llcat1 has path='/home/user/llcat'; the pattern '*/llcat' matches the
+    path but not the name 'llcat JSON export' (which doesn't start with '/').
+    """
+    _make_opencode_db_glob(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["opencode/*/llcat"])
+    # Only ses_llcat1's path '/home/user/llcat' matches '*/llcat';
+    # its name 'llcat JSON export' does not, so this proves path matching.
+    assert 'ses_llcat1' in result.stdout
+    assert 'ses_def456' not in result.stdout
+    assert 'ses_abc123' not in result.stdout
+
+
+def test_cli_glob_matches_id(tmp_path):
+    """A glob matches the session id itself."""
+    _make_opencode_db_glob(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["opencode/ses_abc*"])
+    assert result.exit_code == 0
+    assert 'ses_abc123' in result.stdout
+    assert 'ses_llcat1' not in result.stdout
+
+
+def test_cli_glob_no_match(tmp_path):
+    """A glob that matches nothing prints 'No sessions matching'."""
+    _make_opencode_db_glob(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["opencode/*zzzqqq*"])
+    assert result.exit_code == 0
+    assert 'No sessions matching' in result.stdout
+
+
+def test_cli_glob_is_case_insensitive(tmp_path):
+    """Filtering matches case-insensitively."""
+    _make_opencode_db_glob(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["opencode/*LLCAT*"])
+    assert result.exit_code == 0
+    assert 'ses_llcat1' in result.stdout
+    assert 'ses_def456' in result.stdout
+
+
+def test_cli_exact_id_not_treated_as_glob(tmp_path):
+    """A plain session id (no wildcards) is exported, not run through the
+    glob filter (which would print 'No sessions matching')."""
+    _make_opencode_db_glob(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["opencode/ses_abc123"])
+    assert 'No sessions matching' not in result.stdout
+
+
+def test_cli_one_line_with_glob(tmp_path):
+    """-1 with a glob prints matching session refs one per line."""
+    _make_opencode_db_glob(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["-1", "opencode/*llcat*"])
+    assert result.exit_code == 0
+    assert 'ses_llcat1' in result.stdout
+    assert 'ses_def456' in result.stdout
+    assert 'ses_abc123' not in result.stdout
+
+
 def _make_opencode_db_two_ctimes(tmp_path):
     """Create an opencode.db where mtime order and ctime order disagree."""
     db_path = tmp_path / 'opencode.db'

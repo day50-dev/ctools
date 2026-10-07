@@ -17,10 +17,14 @@ Usage:
 """
 
 import json
+import io
 import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
+from pathlib import Path
 from typing import List, Optional
 
 import typer
@@ -28,7 +32,7 @@ from rich.console import Console
 
 from ctools.agents import (
     Agent, Message, REGISTRY,
-    get_agent, get_resume_command,
+    get_agent, get_resume_command, SessionNotFound, UnsupportedOperation,
 )
 from ctools.cli import Remote, parse_ref, parse_remote_ref, version_option
 from ctools.log import configure_logging, get_logger
@@ -117,55 +121,135 @@ def _do_import(agent_name: str) -> None:
 
 
 # --- Remote transport ---
+#
+# Cross-host copies move the agent's *storage files*, not ctools. The far
+# side runs only plain ``tar`` over ssh: the agent's storage directory (or
+# single database) is tarred, streamed over, and unpacked into a local temp
+# directory that mirrors the remote layout. The conversation is then read or
+# written locally with the normal agent code, and changed files are pushed
+# back the same way. The remote host needs nothing but sshd and tar.
 
-def _run(argv: List[str], input_text: Optional[str]) -> subprocess.CompletedProcess:
+def _run(argv: List[str], input_text: Optional[str] = None) -> subprocess.CompletedProcess:
     return subprocess.run(argv, input=input_text, capture_output=True, text=True)
 
-
-def _fail_remote(remote: Remote, proc: subprocess.CompletedProcess) -> None:
-    console.print(f"[red]ssh to {remote} failed (exit {proc.returncode})[/red]")
-    if proc.stderr.strip():
-        print(proc.stderr.rstrip())
-    console.print("[dim]The remote host needs ctxttools installed "
-                  "(pip install ctxttools), or its bin directory on the "
-                  "non-interactive ssh PATH.[/dim]")
-    raise typer.Exit(1)
-
-
-def run_remote(remote: Remote, command: str, input_text: Optional[str] = None) -> str:
-    """Run `command` on `remote` over ssh and return its stdout.
-
-    Uses the caller's normal ssh setup (keys, ~/.ssh/config, jump hosts). The
-    remote host must have ctxttools installed, since `command` is a ctools
-    invocation. Because non-interactive ssh often has a minimal PATH, a failed
-    lookup of `ccopy` is retried as `python -m ctools.cli run ccopy ...` so an
-    install that is on the remote python path but not on the ssh PATH still works.
-    """
+def _ssh(remote: Remote, command: str, input_text: Optional[str] = None) -> str:
+    """Run `command` on `remote` and return its stdout; fail with the
+    remote's stderr if the command errors."""
     if shutil.which("ssh") is None:
         console.print("[red]ssh is not installed; cannot reach "
                       f"{remote}[/red]")
         raise typer.Exit(1)
     proc = _run(remote.ssh_command(command), input_text)
-    if proc.returncode != 0 and "not found" in proc.stderr:
-        # `ccopy` not on the remote ssh PATH. Retry from the source tree so a
-        # host that has ctxttools checked out (but no venv on the ssh PATH)
-        # still serves it.
-        module_cmd = _fallback_python_command(command)
-        proc = _run(remote.ssh_command(module_cmd), input_text)
     if proc.returncode != 0:
-        _fail_remote(remote, proc)
+        console.print(f"[red]ssh to {remote} failed (exit {proc.returncode})[/red]")
+        if proc.stderr.strip():
+            print(proc.stderr.rstrip())
+        console.print("[dim]The remote needs only sshd and a POSIX tar; "
+                      "nothing ctools-related runs on it.[/dim]")
+        raise typer.Exit(1)
     return proc.stdout
 
 
-def _fallback_python_command(command: str) -> str:
-    """A remote-safe command that runs `command` from the ctxtools source tree.
+def _remote_storage_rel(agent: Agent) -> str:
+    """The storage path on the remote host, relative to $HOME.
 
-    Runs `python -m ctools.cli run ccopy ...` from $CTOOLS_DIR (or the current
-    directory), which puts the package on sys.path without needing a venv on
-    the non-interactive ssh PATH.
+    For the standard installs this is e.g. ``.local/share/opencode/opencode.db``
+    or ``.pi/agent/sessions``.
     """
-    argv = shlex.quote(" ".join(command.split()))
-    return f"cd ${{CTOOLS_DIR:-.}} && python -m ctools.cli run {argv}"
+    return agent.storage_relative()
+
+
+def _pull(remote: Remote, agent: Agent, dest_base: Path) -> None:
+    """Fetch `agent`'s storage from `remote` into `dest_base`.
+
+    Piped over ssh: the far side runs only ``tar -cf -``; we untar into
+    `dest_base`, which then mirrors the remote layout
+    (``dest_base/<agent-dir>/<storage>``).
+    """
+    rel = _remote_storage_rel(agent)
+    local_tar = "tar -cf - -C ~ " + shlex.quote(rel)
+    proc = subprocess.Popen(
+        remote.ssh_command(local_tar), stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE)
+    tar_stdout, tar_stderr = proc.communicate()
+    if proc.returncode != 0:
+        console.print(f"[red]could not pull {agent.name} storage from {remote} "
+                      f"(exit {proc.returncode})[/red]")
+        if tar_stderr.decode(errors='replace').strip():
+            print(tar_stderr.decode(errors='replace').rstrip())
+        raise typer.Exit(1)
+    with tarfile.open(fileobj=io.BytesIO(tar_stdout)) as tar:
+        tar.extractall(dest_base)
+
+
+def _push(remote: Remote, agent: Agent, base: Path) -> None:
+    """Push `base`/<agent-dir>/<storage> back to `remote`, overwriting the
+    remote's storage in place. Piped: local ``tar -cf -`` -> ssh ``tar -xf -``.
+    """
+    rel = _remote_storage_rel(agent)
+    src = base / rel
+    if not src.exists():
+        console.print(f"[red]nothing to push: {src}[/red]")
+        raise typer.Exit(1)
+    remote_tar = f"tar -xf - -C ~ {shlex.quote(rel)}"
+    local_tar = subprocess.Popen(
+        ["tar", "-cf", "-", "-C", str(base), rel],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    remote_proc = subprocess.Popen(
+        remote.ssh_command(remote_tar), stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    # Stream the local tarball into the remote tar's stdin.
+    try:
+        def _copy():
+            while True:
+                chunk = local_tar.stdout.read(1 << 20)
+                if not chunk:
+                    break
+                remote_proc.stdin.write(chunk)
+        _copy()
+    except (BrokenPipeError, OSError):
+        pass
+    finally:
+        remote_proc.stdin.close()
+    local_tar.stdout.close()
+    local_tar.wait()
+    remote_proc.wait()
+    if local_tar.returncode != 0 or remote_proc.returncode != 0:
+        code = local_tar.returncode or remote_proc.returncode
+        console.print(f"[red]could not push {agent.name} storage to {remote} "
+                      f"(exit {code})[/red]")
+        raise typer.Exit(1)
+
+
+def _local_agent(agent: Agent, base: Path) -> Agent:
+    """A fresh instance of `agent`'s class pointed at the local mirror.
+
+    `base` is a stand-in for the remote $HOME; the agent's own base_path is
+    the home-relative storage root beneath it.
+    """
+    root = agent.home_relative_storage()
+    return type(agent)(Path(base) / root)
+
+
+def _remote_destination(remote: Remote, dest: Agent,
+                        records: List[dict]) -> str:
+    """Create a new session in `dest` on `remote`: pull its storage, create
+    the session against the local mirror, push the storage back. Return the
+    new session id."""
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        _pull(remote, dest, base)
+        mirror = _local_agent(dest, base)
+        if not mirror.source.exists():
+            console.print(f"[yellow]{dest.name} is not set up on {remote.target} "
+                          f"(no storage at {dest.default_base_path()})[/yellow]")
+            raise typer.Exit(1)
+        try:
+            new_id = import_conversation(mirror, records)
+        except UnsupportedOperation:
+            raise typer.Exit(1)
+        _push(remote, dest, base)
+    return new_id
 
 
 # --- Main copy flow ---
@@ -202,7 +286,9 @@ def main(
     The source session is never modified. The destination agent receives a fresh
     session holding the copied conversation, and ccopy prints how to resume it.
     Either side may be remote: address it as ssh://[user@]host[:port]/... and it
-    runs over your normal ssh setup (the remote host needs ctxttools installed).
+    runs over your normal ssh setup -- ccopy pulls the agent's storage files
+    over ssh, processes them locally, and pushes changes back, so the remote
+    host only needs sshd and tar.
 
     Examples:
         ccopy opencode/ses_abc claude-code
@@ -260,21 +346,25 @@ def main(
         console.print(f"[dim]Is {dst_agent.name} installed?[/dim]")
         raise typer.Exit(1)
 
-    # Fetch the conversation (read-only; over ssh when the source is remote).
+    # Fetch the conversation (read-only; pull the remote's storage files
+    # locally and read them with the normal agent code when the source is
+    # remote).
     if src_remote is None:
         records = export_conversation(src_agent, src_id)
         if not records:
             console.print(f"[yellow]No conversation in {src_name}/{src_id}[/yellow]")
             raise typer.Exit(1)
     else:
-        out = run_remote(src_remote, f"ccopy --export-json {shlex.quote(src_ref)}")
-        try:
-            records = _validate_records(json.loads(out))
-        except json.JSONDecodeError:
-            console.print(f"[red]Malformed JSON from {src_remote}[/red]")
-            raise typer.Exit(1)
+        with tempfile.TemporaryDirectory() as tmp:
+            _pull(src_remote, src_agent, Path(tmp))
+            probe = _local_agent(src_agent, Path(tmp))
+            try:
+                records = export_conversation(probe, src_id)
+            except SessionNotFound:
+                records = []
         if not records:
-            console.print(f"[yellow]No conversation in {src_name}/{src_id} on {src_remote.target}[/yellow]")
+            console.print(f"[yellow]No conversation in {src_name}/{src_id} on "
+                          f"{src_remote.target}[/yellow]")
             raise typer.Exit(1)
 
     src_desc = f"{src_name}/{src_id}" + (f" on {src_remote.target}" if src_remote else "")
@@ -292,24 +382,20 @@ def main(
             console.print(f"[dim]Resume command shape: {resume}[/dim]")
         return
 
-    # Import into a brand-new session (locally, or over ssh when the destination
-    # is remote).
+    # Import into a brand-new session: locally, or by pushing the updated
+    # storage back when the destination is remote.
     if dst_remote is None:
         new_id = import_conversation(dst_agent, records)
     else:
-        new_id = run_remote(dst_remote,
-                            f"ccopy --import-json {shlex.quote(dst_ref)}",
-                            input_text=json.dumps(records)).strip()
-        if not new_id:
-            console.print(f"[red]No session id returned from {dst_remote}[/red]")
-            raise typer.Exit(1)
+        new_id = _remote_destination(dst_remote, dst_agent, records)
 
     where = f" on {dst_remote.target}" if dst_remote else ""
     console.print(f"[green]Copied {len(records)} message(s) from {src_desc} "
                   f"to a new {dst_ref} session{where}: {new_id}[/green]")
     resume = get_resume_command(dst_ref, new_id)
     if resume:
-        console.print(f"[green]Resume it{' on ' + dst_remote.target if dst_remote else ''} with:[/green]")
+        suffix = f" on {dst_remote.target}" if dst_remote else ""
+        console.print(f"[green]Resume it{suffix} with:[/green]")
         console.print(f"  {resume}")
 
 

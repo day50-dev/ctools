@@ -154,9 +154,8 @@ _COMMANDS = {
 def run_command(name: str, argv: List[str]) -> None:
     """Invoke a ctools command by name with `argv`.
 
-    Backs ``python -m ctools.cli run NAME ARGS...``, the fallback a remote
-    host uses when ``ccopy`` (or friends) is installed for python but missing
-    from the non-interactive ssh PATH.
+    Backs ``python -m ctools.cli run NAME ARGS...`` — a handy way to run a
+    ctools command through a python interpreter directly.
     """
     entry = _COMMANDS.get(name)
     if entry is None:

@@ -34,7 +34,7 @@ Resume it with:
   claude-code --resume 1a2b3c
 ```
 
-Your work travels with you. The source is never touched, so it's a true copy. And when the destination is on another machine, it's just `ccopy opencode/ses_abc123 ssh://chris@remote/codex` — it runs over your normal ssh.
+Your work travels with you. The source is never touched, so it's a true copy. And when the destination is on another machine, it's just `ccopy opencode/ses_abc123 ssh://chris@remote/codex` — it pulls the agent's storage over your normal ssh (the remote only needs `sshd` and `tar`, not ctools).
 
 ctools is a set of GNU-style tools for the history your coding agents leave behind. These two are the headline; the rest (`cdir` to list sessions, `cextract` to move concepts, `cconnect` to pipe them live, `cdu` to count tokens, `crm` to prune) are in service of them.
 

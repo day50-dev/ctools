@@ -143,6 +143,22 @@ Agent name or agent/session_id path.
 Without argument, lists all known agents.
 With agent name (e.g., \fBopencode/\fR), lists sessions.
 With agent/session_id (e.g., \fBopencode/ses_abc123\fR), exports session.
+If the session part contains a glob pattern (\fB*\fR, \fB?\fR, or \fB[\fR), cdir
+filters sessions instead of exporting: the pattern is matched, case-insensitively,
+against the session id, name (one-line description), and working directory, and
+sessions matching any are listed. A reference with no wildcards is still exported.
+.SH FILTERING
+Put a glob in the session part to filter sessions by id, name, or working
+directory (any match is shown, case-insensitive):
+.PP
+.RS
+.nf
+$ cdir opencode/*llcat*
+  ID                                 NAME
+  ses_08b381916ffe9t5oIgzE6g45vb     Petsitter exportit llcat JSON export
+  ses_13263a5edffeFNJ7tidEfj90ze     Add Ollama transport option to llcat.py
+.fi
+.RE
 .SH EXAMPLES
 List all known agents:
 .PP

@@ -15,6 +15,7 @@ cdir claude-code/           # sessions for claude code
 cdir pi/                    # sessions for pi coding agent
 cdir -R                     # all agents, recursive
 cdir opencode/ses_abc123    # export a session as JSON
+cdir opencode/*llcat*       # filter: glob on session id, name, or working dir
 ```
 
 ## Sorting
@@ -22,6 +23,24 @@ cdir opencode/ses_abc123    # export a session as JSON
 Sort flags are `ls`-style: `-t` by time (default), `-S` by size, `-u` by creation
 time. When you give several, the last one wins (`cdir -St opencode/` is the same
 as `cdir -S opencode/`). Add `-r` to reverse.
+
+## Filtering sessions
+
+Put a glob in the session part of the reference to filter instead of export.
+The pattern is matched (case-insensitively) against the session **id**, the
+session **name** (the one-line description), and the session **working
+**directory** — a match on any of them is shown:
+
+```sh
+$ cdir opencode/*llcat*
+  ID                                 NAME
+  ses_08b381916ffe9t5oIgzE6g45vb     Petsitter exportit llcat JSON export
+  ses_13263a5edffeFNJ7tidEfj90ze     Add Ollama transport option to llcat.py
+```
+
+A reference with no wildcards (`cdir opencode/ses_abc123`) is still exported as
+JSON; only a pattern with `*`, `?`, or `[` switches to filtering. Combine with
+`-l`, `-S`, `-1`, etc. as usual.
 
 ## One-line output
 

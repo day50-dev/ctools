@@ -38,14 +38,12 @@ Structured logging to stderr.
 .BI \-\-export-json " agent/session_id"
 Print the session's conversation as a JSON list of
 .BR {"role", "content"}
-objects on stdout, and exit. This is the raw wire format; it is also what ccopy
-runs over ssh on a remote source.
+objects on stdout, and exit. A local-pipe convenience for scripting.
 .TP
 .BI \-\-import-json " agent"
 Read a conversation JSON from stdin, create a new session in
 .IR agent ,
-and print the new session id on stdout. This is the raw wire format; it is also
-what ccopy runs over ssh on a remote destination.
+and print the new session id on stdout. A local-pipe convenience for scripting.
 .TP
 .B \-\-version
 Print version information and exit.
@@ -74,29 +72,29 @@ Either side may be remote, addressed as
 .IR ssh://[user@]host[:port]/path .
 ccopy runs over your normal ssh setup (keys,
 .I ~/.ssh/config
-, jump hosts). The remote host needs ctxttools installed
-(
-.BR "pip install" " ctxttools ).
+, jump hosts).
 .PP
-The transport is plain ssh plus JSON on stdin/stdout:
+The remote host does
+.B not
+need ctxttools installed — only
+.B sshd
+and a POSIX
+.BR tar .
+ccopy pulls the remote agent's storage (its sessions directory or its
+database) over ssh with a plain
+tar pipe, unpacks it into a local scratch directory, reads or writes the
+conversation with the normal local agent code, and pushes any changed storage
+back the same way. The storage location is anchored at the remote's $HOME
+(the agent's default install root, e.g.
+.IR ~/.local/share/opencode ,
+.IR ~/.pi/agent ),
+so the remote just needs whatever agent it already runs. Locally this reduces to:
 .PP
 .RS
 .nf
-ssh chris@remote 'ccopy --export-json opencode/ses_abc' | ccopy --import-json codex
+ccopy --export-json opencode/ses_abc | ccopy --import-json codex
 .fi
 .RE
-.PP
-Because non-interactive ssh often has a minimal PATH, ccopy retries a failed
-.I ccopy
-lookup as
-.IR "python -m ctools.cli run ccopy"
-, run from the checkout directory
-($CTOOLS_DIR, or the current directory). The remote therefore only needs the
-package importable by some
-.I python
-reachable over ssh — a venv or a checkout — not necessarily a
-.I ccopy
-on the ssh PATH.
 .SH EXAMPLES
 Copy an opencode session to a new Claude Code session:
 .PP

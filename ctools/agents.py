@@ -241,6 +241,42 @@ class Agent:
         """The path we actually read sessions out of."""
         return self.base_path / self.files_read if self.files_read else self.base_path
 
+    @property
+    def storage_path(self) -> Path:
+        """The file (or directory) holding this agent's storage, under
+        `base_path`. For directory agents that is the sessions tree; for
+        sqlite agents the database."""
+        if self.files_read:
+            return self.base_path / self.files_read.rstrip('/')
+        if getattr(type(self), 'db_name', None):
+            return self.base_path / type(self).db_name
+        return self.base_path
+
+    def storage_relative(self) -> str:
+        """The agent's storage path, relative to $HOME, in the default
+        install location (posix style).
+
+        This is what cross-host ccopy pulls/pushes: e.g.
+        ``.local/share/opencode/opencode.db`` or ``.pi/agent/sessions``.
+        """
+        root = self.home_relative_storage()
+        if self.files_read:
+            return f"{root}/{self.files_read.rstrip('/')}"
+        if getattr(type(self), 'db_name', None):
+            return f"{root}/{type(self).db_name}"
+        return root
+
+    def home_relative_storage(self) -> str:
+        """The agent's base path as a path relative to $HOME, in the default
+        install location (e.g. ``.local/share/opencode``).
+
+        Cross-host ccopy anchors the remote tar at this, since storage is
+        always rooted at the user's home on the remote side.
+        """
+        import os as _os
+        home = _os.path.expanduser('~')
+        return _os.path.relpath(str(self.default_base_path()), home)
+
     def exists(self) -> bool:
         return self.base_path.exists()
 
@@ -1018,8 +1054,16 @@ class PiAgent(JsonlAgent):
         session_id = str(uuid.uuid4())
         now_iso = datetime.now().isoformat()
         first_user = next((m.content for m in messages if m.role == 'user'), '')
-        lines = [json.dumps({'type': 'session', 'id': session_id,
-                             'timestamp': now_iso, 'cwd': str(self.base_path),
+        # Pi only discovers sessions under per-cwd subdirectories of
+        # sessions/ (named `--<cwd-without-leading-slash>--`) and requires a
+        # version-3 header; a session dropped at the top level of sessions/
+        # is invisible to `pi --session` and `pi --resume`.
+        cwd = os.getcwd()
+        safe = f"--{cwd.lstrip('/').replace('/', '-')}--"
+        session_dir = self.base_path / 'sessions' / safe
+        session_dir.mkdir(parents=True, exist_ok=True)
+        lines = [json.dumps({'type': 'session', 'version': 3, 'id': session_id,
+                             'timestamp': now_iso, 'cwd': cwd,
                              'name': _truncated(first_user)})]
         prev: Optional[str] = None
         for i, message in enumerate(messages):
@@ -1029,8 +1073,7 @@ class PiAgent(JsonlAgent):
                                  'timestamp': int(time.time() * 1000)}}
             lines.append(json.dumps(entry))
             prev = entry['id']
-        path = self.base_path / 'sessions' / f'{int(time.time())}_{session_id}.jsonl'
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path = session_dir / f'{int(time.time())}_{session_id}.jsonl'
         path.write_text('\n'.join(lines) + '\n')
         return session_id
 

@@ -13,8 +13,10 @@ Usage:
     cdir -u codex/          # List codex sessions, oldest first (by creation)
     cdir -1 opencode/       # One session ID per line
     cdir codex/             # List sessions for codex
+    cdir opencode/*llcat*   # Filter sessions: glob on id, name, or path
 """
 
+import fnmatch
 import json
 import sys
 from datetime import datetime
@@ -107,6 +109,17 @@ def _print_field_help() -> None:
     print(f"Long format (-l) fields: {', '.join(LONG_FIELDS)}")
     print()
     print("Example: cdir -o id,name,mtime,path opencode/")
+
+
+def _matches_pattern(session: Session, pattern: str) -> bool:
+    """Return True if the glob pattern matches the session id, name, or path.
+
+    Matching is case-insensitive so a quick find is forgiving (llcat ~ LLMCat).
+    """
+    p = pattern.lower()
+    return (fnmatch.fnmatch(session.id.lower(), p)
+            or fnmatch.fnmatch((session.name or "").lower(), p)
+            or fnmatch.fnmatch((session.path or "").lower(), p))
 
 
 def _resolve_fields(output: Optional[str]) -> Optional[List[str]]:
@@ -400,15 +413,24 @@ def main(
     agent_name, session_id = parse_ref(path)
     agent = require_installed(agent_name)
 
-    if session_id:
+    # Glob pattern in the session part: filter sessions by id, name, or path.
+    _is_glob = any(c in (session_id or "") for c in "*?[" )
+
+    if session_id and not _is_glob:
         _export_session(agent, session_id, formatter)
         return
 
     with reporting():
         sessions = agent.sessions()
 
+    if session_id and _is_glob:
+        sessions = [s for s in sessions if _matches_pattern(s, session_id)]
+
     if not sessions:
-        console.print(f"[yellow]No sessions found for {agent.name}[/yellow]")
+        if session_id:
+            console.print(f"[yellow]No sessions matching {agent.name}/{session_id}[/yellow]")
+        else:
+            console.print(f"[yellow]No sessions found for {agent.name}[/yellow]")
         return
 
     if not formatter and not one_line:
