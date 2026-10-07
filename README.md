@@ -1,3 +1,8 @@
+<p align="center">
+<img width="500" alt="ctools" src="https://github.com/user-attachments/assets/ee781bbe-6364-44ed-be2d-72114f1e6d8a" /><br/>
+<a href=https://pypi.org/project/ctxttools><img src=https://badge.fury.io/py/ctxttools.svg/></a>
+</p>
+
 # ctools
 
 **Two things you can't do any other way.**
@@ -27,13 +32,6 @@ Resume it with:
 ```
 
 Your work travels with you. The source is never touched, so it's a true copy.
-
----
-
-<p align="center">
-<img width="400" alt="ctools" src="https://github.com/user-attachments/assets/ee781bbe-6364-44ed-be2d-72114f1e6d8a" /><br/>
-<a href=https://pypi.org/project/ctxttools><img src=https://badge.fury.io/py/ctxttools.svg/></a>
-</p>
 
 ctools is a set of GNU-style tools for the history your coding agents leave behind. These two are the headline; the rest (`cdir` to list sessions, `cextract` to move concepts, `cconnect` to pipe them live, `cdu` to count tokens, `crm` to prune) are in service of them.
 
