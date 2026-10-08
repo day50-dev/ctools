@@ -7,7 +7,7 @@
 
 Grep through your conversation history in Claude Desktop, Claude Code, Codex, Pi, Hermes, Goose, Kilo, Hermes, FreeBuff, Cline, and omp.
 
-Copy your conversation from one to another. Start in one program, continue in another. using the normal resume syntax.
+Copy your conversation from one to another. Start in one program, continue in another. using the applications normal system for resuming conversations.
 
 Here's an example:
 
