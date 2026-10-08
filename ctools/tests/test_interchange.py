@@ -292,6 +292,39 @@ def test_pi_from_common_roundtrip(tmp_path):
         AGENTS["pi"].base_path = original
 
 
+def test_pi_from_common_real_shape(tmp_path):
+    """Imported pi assistant messages carry the shape the TUI requires.
+
+    Regression: `pi --session` crashed with `Cannot read properties of
+    undefined (reading 'input')` because the TUI's footer reads
+    `message.usage.input` on assistant entries. An assistant message written
+    without a `usage` object (and with plain-string content) made the imported
+    session unloadable. Imported entries must be real-shaped.
+    """
+    _pi_session(tmp_path, "pi_snake")
+    original = AGENTS["pi"].base_path
+    AGENTS["pi"].base_path = tmp_path
+    try:
+        doc = AGENTS["pi"].to_common("pi_snake")
+        new_id = AGENTS["pi"].from_common(doc)
+        raw = {e.get('id'): e for e in
+               AGENTS["pi"].raw_records(new_id) if e.get('type') == 'message'}
+        bodies = [e['message'] for e in raw.values()]
+        # The conversation is user, assistant.
+        assert [b['role'] for b in bodies] == ['user', 'assistant']
+        user, assistant = bodies
+        # Content is a list of text blocks (the real pi shape), readable by
+        # text_of on the way back.
+        assert isinstance(user['content'], list)
+        assert isinstance(assistant['content'], list)
+        # The crash trigger: assistant entries MUST carry usage.input.
+        assert 'usage' in assistant
+        assert 'input' in assistant['usage']
+        assert assistant['usage']['input'] >= 0
+    finally:
+        AGENTS["pi"].base_path = original
+
+
 @pytest.mark.skipif(not _which("pi"), reason="pi CLI not installed")
 def test_pi_from_common_live_oracle(tmp_path, monkeypatch):
     """The written pi session loads via `pi --session <id>` (exit 0).

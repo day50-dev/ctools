@@ -1201,6 +1201,20 @@ class PiAgent(JsonlAgent):
             ))
         return sessions
 
+    def _pi_usage(self) -> Dict[str, object]:
+        """A zeroed pi token-usage block.
+
+        The pi TUI reads ``message.usage.input`` when rendering the footer's
+        session stats; an assistant entry written without a ``usage`` object
+        crashes ``pi --session`` with ``Cannot read properties of undefined
+        (reading 'input')``. Seed every assistant message with a full (zero)
+        usage block so imported sessions load cleanly.
+        """
+        return {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0,
+                'totalTokens': 0,
+                'cost': {'input': 0, 'output': 0, 'cacheRead': 0,
+                         'cacheWrite': 0, 'total': 0}}
+
     def create_session(self, messages: List[Message]) -> str:
         session_id = str(uuid.uuid4())
         now_iso = datetime.now().isoformat()
@@ -1218,10 +1232,17 @@ class PiAgent(JsonlAgent):
                              'name': _truncated(first_user)})]
         prev: Optional[str] = None
         for i, message in enumerate(messages):
+            # Write real-shaped pi messages so the TUI loads them. Content is a
+            # list of text blocks; assistant entries carry a usage block (the
+            # TUI's footer reads usage.input) plus a stop reason.
+            content = [{'type': 'text', 'text': message.content}]
+            body: Dict[str, object] = {'role': message.role, 'content': content,
+                                       'timestamp': int(time.time() * 1000)}
+            if message.role == 'assistant':
+                body['usage'] = self._pi_usage()
+                body['stopReason'] = 'stop'
             entry = {'type': 'message', 'id': uuid.uuid4().hex[:8],
-                     'parentId': prev, 'timestamp': now_iso,
-                     'message': {'role': message.role, 'content': message.content,
-                                 'timestamp': int(time.time() * 1000)}}
+                     'parentId': prev, 'timestamp': now_iso, 'message': body}
             lines.append(json.dumps(entry))
             prev = entry['id']
         path = session_dir / f'{int(time.time())}_{session_id}.jsonl'
