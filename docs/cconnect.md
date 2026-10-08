@@ -44,8 +44,30 @@ cconnect --pipeline pipeline.json
 
 ## Filter configuration
 
-Filters are JSON-RPC 2.0 subprocesses. The filter script reads a request on stdin
-and writes a response on stdout. See
+A filter selects which extracted concepts reach a destination. Two backends:
+
+**Decision model** — a small local classifier that scores each concept and
+passes it through when confident. The `endpoint` field selects how it is asked:
+`systemone` (default, Ollama's typed `/v1/systemone`, returns probabilities)
+or `chat` (any OpenAI-compatible `/v1/chat/completions` server, parses the
+model's lettered reply). This is the natural fit for per-destination routing:
+a coding destination gets a `coding` filter, a security destination gets a
+`security` filter, all from the same source.
+
+```json
+{
+  "type": "systemone",
+  "model": "nimble",
+  "mode": "choice",
+  "question_name": "category",
+  "instructions": "Which category does this concept belong to?",
+  "criteria": { "coding": "style rules", "security": "secrets, crypto, auth" },
+  "allowed": ["coding", "security"]
+}
+```
+
+**Subprocess** — a JSON-RPC 2.0 filter script (any language) that reads a
+request on stdin and writes a response on stdout. See
 [filterlib](cextract.md#filterlib) for the protocol and examples.
 
 ```json
@@ -55,6 +77,9 @@ and writes a response on stdout. See
   "timeout": 30
 }
 ```
+
+Both work in one-to-one pipelines (`-f`) and in pipeline destinations
+(`"filter": ...`). On any error a filter passes the concept through.
 
 ## Observability
 

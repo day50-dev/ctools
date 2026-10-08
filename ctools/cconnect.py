@@ -17,7 +17,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from ctools.agents import AgentError, REGISTRY as AGENTS, get_agent
+from ctools.agents import AgentError, get_agent
 from ctools.cextract import (
     _filter_concepts,
     concept_text,
@@ -195,7 +195,7 @@ def main(
     source: Optional[str] = typer.Argument(None, help="Source session (@agent/session_id)"),
     destination: Optional[str] = typer.Argument(None, help="Destination session (@agent/session_id)"),
     strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for extraction"),
-    filter_config: Optional[str] = typer.Option(None, "--filter", "-f", help="Filter JSON file"),
+    filter_config: Optional[str] = typer.Option(None, "--filter", "-f", help="Filter JSON file (built-in, JSON-RPC, or decision model)"),
     tool_name: str = typer.Option("context_from_source", "--tool-name", "-t", help="Name for the toolcall"),
     count: int = typer.Option(0, "--count", "-c", help="Number of cycles (0=infinity)"),
     poll_interval: float = typer.Option(5.0, "--poll-interval", "-p", help="Poll interval in seconds"),

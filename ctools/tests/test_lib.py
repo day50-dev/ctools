@@ -1,7 +1,6 @@
 import json
 import pytest
 from datetime import datetime
-from pathlib import Path
 from ctools.lib import (
     Session, Match, Message, AGENTS,
     JsonFormatter, XmlFormatter, MarkdownFormatter,

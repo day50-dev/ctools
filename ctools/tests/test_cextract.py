@@ -2,13 +2,12 @@ import json
 import sqlite3
 import pytest
 import typer
-from pathlib import Path
 from typer.testing import CliRunner
 from ctools.cextract import (
     app, parse_args, extract_concepts_from_messages,
     concepts_to_messages, read_concepts_from_file, write_concepts_to_file,
     concept_id, write_concept_individual, read_concepts_from_dir,
-    write_concepts_individual,
+    write_concepts_individual, _filter_concepts, _is_decision_filter,
 )
 from ctools.lib import Message, AGENTS
 
@@ -487,6 +486,65 @@ def test_strategy_extract_via_proxy():
         assert "type" in c
         assert c["type"] in ("constraint", "goal", "preference", "observation", "reference")
         assert "short" in c or "description" in c
+
+
+# --- Decision-model (systemone) filter tests ---
+
+
+def _decision_concepts():
+    return [
+        {"type": "constraint", "description": "crypto", "short": "Use AES-256, never MD5"},
+        {"type": "preference", "description": "style", "short": "Prefer tabs over spaces"},
+    ]
+
+
+def test_is_decision_filter_positive():
+    assert _is_decision_filter({"type": "systemone", "model": "m", "instructions": "q"})
+    assert _is_decision_filter({"model": "m", "instructions": "q"})
+
+
+def test_is_decision_filter_negative():
+    # plain dict filter or a jsonrpc command is not a decision filter
+    assert not _is_decision_filter({"prompt": "x", "types": ["goal"]})
+    assert not _is_decision_filter({"command": ["echo"], "model": "m"})
+    assert not _is_decision_filter({"type": "jsonrpc", "command": ["echo"], "model": "m"})
+
+
+def test_filter_concepts_decision_noul(monkeypatch):
+    import ctools.cextract as cx
+
+    monkeypatch.setattr(cx.SystemOneFilter, "filter", lambda self, t: "AES" in t)
+    cfg = {"type": "systemone", "model": "tev1", "instructions": "is it crypto?"}
+    kept = _filter_concepts(_decision_concepts(), cfg)
+    assert len(kept) == 1
+    assert kept[0]["description"] == "crypto"
+
+
+def test_filter_concepts_decision_choice(monkeypatch):
+    import ctools.cextract as cx
+
+    monkeypatch.setattr(cx.SystemOneFilter, "filter", lambda self, t: "tabs" in t)
+    cfg = {"type": "systemone", "model": "nimble", "instructions": "category?",
+           "mode": "choice", "allowed": ["coding"]}
+    kept = _filter_concepts(_decision_concepts(), cfg)
+    assert len(kept) == 1
+    assert kept[0]["description"] == "style"
+
+
+def test_filter_concepts_decision_incomplete_config(monkeypatch):
+    # A decision filter missing 'model' should not drop concepts.
+    import ctools.cextract as cx
+    monkeypatch.setattr(cx.SystemOneFilter, "filter", lambda self, t: True)
+    kept = _filter_concepts(_decision_concepts(), {"type": "systemone"})
+    assert len(kept) == 2
+
+
+def test_filter_concepts_dict_filter_still_works():
+    # Non-decision configs keep the old type/prompt behaviour.
+    cfg = {"types": ["constraint"]}
+    kept = _filter_concepts(_decision_concepts(), cfg)
+    assert len(kept) == 1
+    assert kept[0]["type"] == "constraint"
 
 
 def test_cli_version():

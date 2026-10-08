@@ -1,7 +1,6 @@
 import json
 import sqlite3
 import pytest
-from pathlib import Path
 from typer.testing import CliRunner
 from ctools.cdu import app, count_tokens, format_tokens, get_session_tokens
 from ctools.lib import AGENTS

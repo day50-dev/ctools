@@ -2,7 +2,6 @@ import io
 import json
 import sqlite3
 import pytest
-from pathlib import Path
 from typer.testing import CliRunner
 from ctools import cgrep
 from ctools.cgrep import app, grep_session, parse_path_pattern
@@ -306,7 +305,7 @@ def test_cli_basic_search(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["python", "opencode/ses_test123"])
         assert result.exit_code == 0
         assert "python" in _out(result).lower()
     finally:
@@ -319,7 +318,7 @@ def test_cli_list_files(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["-l", "python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["-l", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         assert "ses_test123" in result.stdout
     finally:
@@ -332,7 +331,7 @@ def test_cli_count(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["-c", "python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["-c", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         assert "ses_test123:" in result.stdout
         # Count should be at least 2
@@ -346,7 +345,7 @@ def test_cli_invert(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["-v", "python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["-v", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         out = _out(result)
         assert "python" not in out.lower() or "python" in out
@@ -363,7 +362,7 @@ def test_cli_default_prefixes_session_path(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["python", "opencode/ses_test123"])
         assert result.exit_code == 0
         assert "opencode/ses_test123:3:user: Write some python code" in _out(result)
     finally:
@@ -377,7 +376,7 @@ def test_cli_no_filename_suppresses_prefix(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["-h", "python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["-h", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         out = _out(result)
         assert "opencode/ses_test123:" not in out
@@ -393,7 +392,7 @@ def test_cli_with_filename_forces_prefix(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["-h", "-H", "python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["-h", "-H", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         assert "opencode/ses_test123:3:user: Write some python code" in _out(result)
     finally:
@@ -407,7 +406,7 @@ def test_cli_context_lines_are_numbered(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["-C1", "python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["-C1", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         out = _out(result)
         assert "opencode/ses_test123-2-assistant: Hi there! How can I help?" in out
@@ -423,7 +422,7 @@ def test_cli_count_no_filename(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["-h", "-c", "python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["-h", "-c", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         assert "ses_test123" not in result.stdout
         assert ":" not in result.stdout.strip()
@@ -686,7 +685,7 @@ def test_cli_context(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["-C", "1", "python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["-C", "1", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
     finally:
         AGENTS['opencode'].base_path = original
@@ -698,7 +697,7 @@ def test_cli_no_match(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["nonexistent_xyz", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["nonexistent_xyz", "opencode/ses_test123"])
         assert result.exit_code == 1
         out = _out(result)
         assert "No matches" in out
@@ -729,7 +728,7 @@ def test_cli_format_json_search(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["--format", "json", "python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["--format", "json", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         data = json.loads(result.stdout)
         assert len(data) >= 2
@@ -747,7 +746,7 @@ def test_cli_format_xml_search(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["--format", "xml", "python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["--format", "xml", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         assert '<?xml version="1.0"' in result.stdout
         assert '<matches>' in result.stdout
@@ -763,7 +762,7 @@ def test_cli_format_md_search(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["--format", "md", "python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["--format", "md", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         assert '### opencode/ses_test123' in result.stdout
     finally:
@@ -777,7 +776,7 @@ def test_cli_format_json_list_files(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["--format", "json", "-l", "python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["--format", "json", "-l", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         data = json.loads(result.stdout)
         assert len(data) == 1
@@ -793,7 +792,7 @@ def test_cli_format_json_count(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["--format", "json", "-c", "python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["--format", "json", "-c", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         data = json.loads(result.stdout)
         assert 'opencode/ses_test123' in data
@@ -809,7 +808,7 @@ def test_cli_format_xml_list_files(tmp_path):
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["--format", "xml", "-l", "python", f"opencode/ses_test123"])
+        result = runner.invoke(app, ["--format", "xml", "-l", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         assert '<?xml version="1.0"' in result.stdout
         assert '<files match="true">' in result.stdout

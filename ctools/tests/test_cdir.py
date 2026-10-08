@@ -1,7 +1,6 @@
 import json
 import sqlite3
 import pytest
-from pathlib import Path
 from typer.testing import CliRunner
 from datetime import datetime
 from ctools.cdir import app

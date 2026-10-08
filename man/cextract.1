@@ -7,6 +7,8 @@ cextract \- extract concepts from sessions into files
 .IR format ]
 .RB [ \-s
 .IR strategy ]
+.RB [ \-F
+.IR filter ]
 .RB [ \-\-version ]
 .I source
 .RI [ destination ]
@@ -39,6 +41,13 @@ Set output format: json, xml, or md.
 Use a custom chunking strategy for concept extraction.
 A strategy defines the LLM host, model, API key, and extraction prompt.
 Without this flag, cextract uses regex pattern matching on conversation messages.
+.TP
+.BR \-F ", " \-\-filter
+.I filter.json
+Select which extracted concepts are kept. The file can be a built-in
+filter (type/substring match), a JSON-RPC filter, or a decision-model
+filter that scores each concept with a local Ollama model.
+On any error a filter passes the concept through.
 .TP
 .B \-\-version
 Print version information and exit.
@@ -145,6 +154,70 @@ A strategy is a JSON file that defines how to extract concepts using an LLM:
 Different strategies can produce different concept chunkings.
 Ontology is inherently contestable depending on framing, so strategies
 allow users to define their own extraction approach.
+.SH FILTERS
+A filter selects which extracted concepts are kept.
+The config file can be a built-in filter, a JSON-RPC filter, or a
+decision-model filter.
+.PP
+Built-in (no server needed):
+.PP
+.RS
+.nf
+{ "types": ["constraint", "goal"], "exclude_types": ["reference"], "prompt": "ssl" }
+.fi
+.RE
+.PP
+Decision model: a small local classifier scores each concept and passes it
+through only when confident. The endpoint field selects how the model is
+asked:
+.PP
+.RS
+.nf
+systemone  (default)  Ollama's typed /v1/systemone endpoint. Sends the state
+                      and typed questions; returns a calibrated probability
+                      per option. No free text, nothing to parse. Requires a
+                      server with the typed endpoint (e.g. Ollama 0.40.x). noul mode gates on threshold.
+chat                    Any OpenAI-compatible /v1/chat/completions server
+                      (vLLM, older Ollama, any gateway). Renders the question
+                      as a lettered decision task and parses the model's
+                      letter. Works with models that follow instructions;
+                      raise max_tokens for thinking models.
+.fi
+.RE
+.PP
+.nf
+{ "type": "systemone", "model": "tev1", "endpoint": "systemone",
+  "instructions": "Is this concept about cryptography, secrets, or security?",
+  "threshold": 0.6 }
+
+{ "type": "systemone", "host": "http://vllm:8000", "model": "an-instruct-model",
+  "endpoint": "chat", "max_tokens": 2048, "api_key": "...",
+  "instructions": "Is this concept about cryptography, secrets, or security?" }
+.fi
+.PP
+A multi-way question routes concepts by category; the concept passes only
+when the model's choice is in the allowed list (the letter maps to a criteria
+key on the chat endpoint):
+.PP
+.RS
+.nf
+{
+  "type": "systemone",
+  "model": "nimble",
+  "mode": "choice",
+  "question_name": "category",
+  "instructions": "Which category does this concept belong to?",
+  "criteria": { "coding": "style rules", "security": "secrets, crypto" },
+  "allowed": ["coding", "security"]
+}
+.fi
+.RE
+.PP
+Extra fields: question_name (default relevant), max_tokens (chat, default
+2048), api_key (chat, sent as a Bearer token when set), and timeout seconds
+(default 30). A config with a model and no command is a decision-model filter
+even without an explicit type. On any error a filter passes the concept
+through.
 .SH CONCEPT FORMAT
 Concepts are JSON objects with these fields:
 .PP
@@ -226,6 +299,16 @@ Use a custom extraction strategy:
 .RS
 .nf
 $ cextract --strategy my-strategy.json @opencode/ses_abc123 concepts/
+.fi
+.RE
+.PP
+Filter concepts with a local decision model (keeps only the concepts the
+model scores as relevant at or above the threshold):
+.PP
+.RS
+.nf
+$ cextract --filter security.json @opencode/ses_abc123 concepts/
+Extracted 2 concepts to concepts/ (2 files)
 .fi
 .RE
 .SH FILES

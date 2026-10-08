@@ -28,6 +28,7 @@ from rich.console import Console
 
 from ctools.agents import Agent, Message
 from ctools.cli import reporting, require_session, version_option
+from ctools.filterlib import SystemOneFilter
 from ctools.log import configure_logging, get_logger
 from ctools.strategy import Strategy, DEFAULT_STRATEGY
 
@@ -51,10 +52,61 @@ def concept_text(concept: dict) -> str:
             or concept.get("long") or concept.get("description", ""))
 
 
+def _is_decision_filter(filter_config: dict) -> bool:
+    """True when the filter config names a decision model (not a JSON-RPC command)."""
+    if not isinstance(filter_config, dict):
+        return False
+    if filter_config.get("type") == "systemone":
+        return True
+    if filter_config.get("type") == "jsonrpc":
+        return False
+    return bool(filter_config.get("model")) and not filter_config.get("command")
+
+
+def _decision_filter(filter_config: dict):
+    """Build a SystemOneFilter from a decision-model filter config, or None."""
+    if not _is_decision_filter(filter_config):
+        return None
+    if not filter_config.get("model") or not filter_config.get("instructions"):
+        log.warning("decision_filter_incomplete", config=filter_config,
+                    reason="needs 'model' and 'instructions'")
+        return None
+    return SystemOneFilter(
+        host=filter_config.get("host", "http://localhost:11434"),
+        model=filter_config["model"],
+        instructions=filter_config["instructions"],
+        endpoint=filter_config.get("endpoint", "systemone"),
+        question_name=filter_config.get("question_name", "relevant"),
+        mode=filter_config.get("mode", "noul"),
+        threshold=filter_config.get("threshold", 0.6),
+        allowed=filter_config.get("allowed"),
+        criteria=filter_config.get("criteria"),
+        max_tokens=filter_config.get("max_tokens", 2048),
+        api_key=filter_config.get("api_key"),
+        timeout=filter_config.get("timeout", 30.0),
+    )
+
+
 def _filter_concepts(concepts: list, filter_config: dict) -> list:
-    """Filter concepts based on filter configuration."""
+    """Filter concepts based on filter configuration.
+
+    A decision-model config (one with a ``model`` and no ``command``) routes
+    each concept through a local decision model. Anything else uses the
+    built-in type/prompt filter.
+    """
     if not filter_config:
         return concepts
+
+    if _is_decision_filter(filter_config):
+        decision = _decision_filter(filter_config)
+        if decision is None:
+            return concepts
+        kept = []
+        for c in concepts:
+            text = concept_text(c)
+            if decision.filter(text):
+                kept.append(c)
+        return kept
 
     prompt = (filter_config.get("prompt") or "").lower()
     types = filter_config.get("types", [])
@@ -301,7 +353,7 @@ def main(
     args: List[str] = typer.Argument(..., help="Sources and destinations (@ for sessions)"),
     fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md"),
     strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for LLM-based extraction"),
-    filter_config: Optional[str] = typer.Option(None, "--filter", "-F", help="Filter JSON file"),
+    filter_config: Optional[str] = typer.Option(None, "--filter", "-F", help="Filter JSON file (built-in, JSON-RPC, or decision model)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     version: bool = version_option("cextract"),
 ):
@@ -321,6 +373,7 @@ def main(
         cextract @opencode/ses_abc @claude/ses_xyz
         cextract --strategy my-strategy.json @opencode/ses_abc concepts/
         cextract --filter my-filter.json @opencode/ses_abc concepts/
+        cextract --filter decision-model.json @opencode/ses_abc concepts/   # local classifier
     """
     configure_logging(verbose=verbose)
     sessions, files = parse_args(args)

@@ -84,6 +84,12 @@ Resume it with:
 
 Every tool takes `--version`. The session-mover tools (`ccopy`, `cextract`, `cconnect`, `crm`) also take `--verbose` for structured logging. Each tool's full flag reference, output formats, and examples live in its `docs/` page — the table above is just the 30-second version.
 
+## The problem
+
+You talk to LLMs all day. Over weeks, you build up a set of constraints, preferences, and goals. These live in your conversations as system messages. They are valuable. They are also trapped.
+
+Say you have been working with opencode for a month. You have refined your coding style through dozens of sessions. Now you start a new Claude Code project and you want those same preferences. You could copy them by hand. Or you could `cextract` them out and `cextract` them back in, or copy the whole conversation across with `ccopy`. Either way, your memory travels with you.
+
 ## How it works
 
 ctools is a substrate for moving memory between context windows. Cross-platform, agent-agnostic, designed like a bus.
@@ -92,6 +98,8 @@ Two stages: **extraction** and **filtering**.
 
 - A **strategy** extracts concepts from a conversation. It defines what counts as a concept and how to find it: regex patterns, LLM extraction, whatever. Different strategies produce different ontologies from the same conversation, because context is contestable.
 - A **filter** selects which extracted concepts reach a destination. It's a binary classifier: pass through or filter out. One concept list can fan out to many destinations, each with its own filter. A coding agent gets coding preferences, a security agent gets security constraints, a PM agent gets goals, all from the same source.
+
+A filter can be as simple as a type or substring match, or as smart as a **decision model** — a small local classifier that scores each concept and lets it through only when confident. Point a filter at a model and you get *semantic* filtering with no free text to parse: ask "is this concept about security?" and gate on the answer. The model is asked either through Ollama's typed `/v1/systemone` endpoint (calibrated probabilities, the home of decision-dedicated models) or through any OpenAI-compatible `/v1/chat/completions` server (portable, lettered decision-task prompt) — one `endpoint` field decides. See [cextract](docs/cextract.md) for the decision-model and JSON-RPC filter configs.
 
 ```mermaid
 graph LR
@@ -105,13 +113,7 @@ graph LR
     FC --> DEST_C["destination C"]
 ```
 
-Context windows are endpoints: opencode, Claude Code, Codex, Pi. They all speak different protocols, but they all consume the same packets. See [cextract](docs/cextract.md) for the concept packet format, strategies, and the filter (JSON-RPC) protocol.
-
-## The problem
-
-You talk to LLMs all day. Over weeks, you build up a set of constraints, preferences, and goals. These live in your conversations as system messages. They are valuable. They are also trapped.
-
-Say you have been working with opencode for a month. You have refined your coding style through dozens of sessions. Now you start a new Claude Code project and you want those same preferences. You could copy them by hand. Or you could `cextract` them out and `cextract` them back in, or copy the whole conversation across with `ccopy`. Either way, your memory travels with you.
+Context windows are endpoints: opencode, Claude Code, Codex, Pi. They all speak different protocols, but they all consume the same packets. See [cextract](docs/cextract.md) for the concept packet format, strategies, and the filter configs (decision model and JSON-RPC).
 
 ## Supported endpoints
 
@@ -192,7 +194,7 @@ from ctools.lib import get_formatter
 from ctools.cgrep import grep_session
 from ctools.cextract import extract_concepts_from_messages
 from ctools.cdu import count_tokens, get_session_tokens
-from ctools.filterlib import JSONRPCFilter, load_filter
+from ctools.filterlib import JSONRPCFilter, SystemOneFilter, load_filter
 from ctools.log import configure_logging, get_logger
 ```
 
@@ -216,6 +218,13 @@ from ctools.agents import OpencodeAgent
 
 agent = OpencodeAgent('/backup/opencode')
 ```
+
+## Where to go next
+
+- **Per-tool reference** — the [Tools](#tools) table above links to a `docs/` page for each command: every flag, output format, and a worked example.
+- **The interchange format** — how a conversation becomes a portable, lossless envelope and back, and why 2N agents compose into N² transfers. See [interchange](docs/interchange.md).
+- **Filtering with decision models** — the full decision-model and JSON-RPC filter configs, with live examples. See [cextract](docs/cextract.md#filters) and [cconnect](docs/cconnect.md#filter-configuration).
+- **Adding an endpoint** — one `Agent` subclass plus a line in `AGENT_CLASSES`. See [Supported endpoints](#supported-endpoints).
 
 ## Credits
 
