@@ -12,6 +12,8 @@
 
 It supports [Claude Desktop](https://claude.com/download), [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [Hermes](https://github.com/NousResearch/hermes-agent), [Goose](https://github.com/aaif-goose/goose), [Kilo](https://github.com/Kilo-Org/kilocode), [FreeBuff](https://github.com/CodebuffAI/freebuff), [Cline](https://github.com/cline/cline), and [omp](https://github.com/can1357/oh-my-pi).
 
+Your work travels with you. The source is never touched, so it's a true copy. And when the destination is on another machine, it's just `ccopy opencode/ses_abc123 ssh://chris@remote/codex`. It pulls the agent's storage over your normal ssh (the remote only needs `sshd` and `tar`, not ctools).
+
 Here's an example:
 
 > I look for mentions of snake game in opencode using cgrep
@@ -66,12 +68,6 @@ Copied 128 message(s) from opencode/ses_abc123 to a new claude-code session: 1a2
 Resume it with:
   claude-code --resume 1a2b3c
 ```
-
-Your work travels with you. The source is never touched, so it's a true copy. And when the destination is on another machine, it's just `ccopy opencode/ses_abc123 ssh://chris@remote/codex` — it pulls the agent's storage over your normal ssh (the remote only needs `sshd` and `tar`, not ctools).
-
-ctools is a set of GNU-style tools for the history your coding agents leave behind. These two are the headline; the rest (`cdir` to list sessions, `ccat` to read them, `cextract` to move concepts, `cconnect` to pipe them live, `cdu` to count tokens, `crm` to prune) are in service of them.
-
-**Works with the agents you already use:** Claude Desktop, Claude Code, Opencode, Kilo, Codex, Pi, Goose, Hermes, Cline, omp (oh-my-pi), and Freebuff (Codebuff).
 
 ## Tools
 
