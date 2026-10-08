@@ -41,19 +41,6 @@ Resume it with:
 
 As you can see, these are unix-friendly tools using simple paradigms that you are already familiar with.
 
-----
-
-### 1. `cgrep` — find it in your past conversations
-
-You already know the answer is in a session you had months ago. You just don't remember which one. `cgrep` searches **every session you ever had, across every agent you use**, with a plain regex:
-
-```shell
-$ cgrep -i "ssl"
-claude-code/a351eedf:142:assistant: … the TLS handshake fails with SSL wrong version number …
-opencode/ses_000d460f:16:user: ok graflex has an erorr in the check. i see this: … [[SSL: WRONG_VERSION_NUMBER] …
-opencode/ses_000d460f:34:assistant: Found it. Root cause: `_check_host` (graflex/__init__.py:128) tries `http`, and …
-```
-
 ## Tools
 
 | Tool | What it does | Docs |
