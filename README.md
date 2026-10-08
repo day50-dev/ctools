@@ -8,7 +8,7 @@
 </p>
 
 ------
-**ctools** is a suite of simple tools for navigating through the sessions in various agents. It allows you to search your history, transfer conversations, filter them, and even share them among hosts and users through ssh.
+**ctools** is a suite of simple tools for navigating through the sessions of various LLM agents and coding tools. It allows you to search your history, transfer conversations, filter them, and even share them among hosts and users through ssh.
 
 It supports [Claude Desktop](https://claude.com/download), [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [Hermes](https://github.com/NousResearch/hermes-agent), [Goose](https://github.com/aaif-goose/goose), [Kilo](https://github.com/Kilo-Org/kilocode), [FreeBuff](https://github.com/CodebuffAI/freebuff), [Cline](https://github.com/cline/cline), and [omp](https://github.com/can1357/oh-my-pi).
 
