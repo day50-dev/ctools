@@ -25,7 +25,7 @@ from typing import List, Optional
 import typer
 from rich.console import Console
 
-from ctools.agents import Agent, Session, REGISTRY as AGENTS
+from ctools.agents import Session, REGISTRY as AGENTS
 from ctools.cli import parse_ref, reporting, require_installed, version_option
 from ctools.lib import format_datetime, format_size, get_formatter
 
@@ -308,20 +308,6 @@ def _list_agents(formatter) -> None:
             print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path}/{files_read}")
 
 
-def _export_session(agent: Agent, session_id: str, formatter) -> None:
-    """Print one session's messages."""
-    with reporting():
-        messages = agent.messages(session_id)
-    if not messages:
-        console.print(f"[yellow]Session not found: {session_id}[/yellow]")
-        raise typer.Exit(1)
-
-    if formatter:
-        print(formatter.format_session_export(messages, session_id, agent.name))
-    else:
-        print(json.dumps([{'role': m.role, 'content': m.content} for m in messages], indent=2))
-
-
 def _list_all_sessions(sort, reverse, formatter, fields,
                        one_line=False, color=False) -> None:
     """List every installed agent's sessions, newest first, agent-prefixed."""
@@ -402,8 +388,9 @@ def _handle_one_ref(path: str, sort: str, reverse: bool, formatter, fields,
                     color: bool) -> None:
     """Dispatch a single `agent[/session_id]` reference.
 
-    A bare agent name (or agent glob) lists/filters sessions; an exact
-    `agent/session_id` exports that one session.
+    A bare agent name (or agent glob) lists/filters sessions. An exact
+    `agent/session_id` lists that one session as a row (ls file semantics;
+    main() routes exact refs here too). Session contents are ccat's job.
     """
     agent_name, session_id = parse_ref(path)
     agent = require_installed(agent_name)
@@ -412,7 +399,8 @@ def _handle_one_ref(path: str, sort: str, reverse: bool, formatter, fields,
     _is_glob = any(c in (session_id or "") for c in "*?[")
 
     if session_id and not _is_glob:
-        _export_session(agent, session_id, formatter)
+        _show_specific_sessions([path], sort, reverse, formatter, fields,
+                                long_format, one_line, color)
         return
 
     with reporting():
@@ -460,9 +448,9 @@ def main(
 
     With no arguments, lists all known agents.
     With an agent name, lists sessions for that agent.
-    With agent/session_id, exports that session.
-    With many arguments, each is handled in turn (export the exact ids, list
-    the bare agents, filter the globs).
+    With agent/session_id, shows that session's row (contents live in ccat).
+    With many arguments, each is handled in turn (list the exact ids as rows,
+    list the bare agents, filter the globs).
     With -R and no arguments, recurses all agents.
     With -l, shows full details (modified, size, message count, path).
     With -o, selects the output fields shown (see 'cdir -o help').
@@ -500,17 +488,8 @@ def main(
     exact = [p for p in paths if _is_exact(p)]
     rest = [p for p in paths if not _is_exact(p)]
 
-    # One bare exact id keeps the export behaviour (cdir opencode/ses_abc).
-    # Many references (the cgrep -l | xargs cdir -l case) list them as rows.
-    if exact and not rest:
-        if len(exact) == 1:
-            _handle_one_ref(exact[0], sort, reverse, formatter, fields,
-                            long_format, one_line, recursive, use_color)
-        else:
-            _show_specific_sessions(exact, sort, reverse, formatter, fields,
-                                    long_format, one_line, use_color)
-        return
-
+    # Exact agent/session references list as rows (ls file semantics),
+    # one or many.
     if exact:
         _show_specific_sessions(exact, sort, reverse, formatter, fields,
                                 long_format, one_line, use_color)

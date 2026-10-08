@@ -14,7 +14,7 @@ cdir -1 opencode/           # one session ID per line, no header
 cdir claude-code/           # sessions for claude code
 cdir pi/                    # sessions for pi coding agent
 cdir -R                     # all agents, recursive
-cdir opencode/ses_abc123    # export a session as JSON
+cdir opencode/ses_abc123    # show that session's row (contents: ccat)
 cdir opencode/*llcat*       # filter: glob on session id, name, or working dir
 ```
 
@@ -26,7 +26,7 @@ as `cdir -S opencode/`). Add `-r` to reverse.
 
 ## Filtering sessions
 
-Put a glob in the session part of the reference to filter instead of export.
+Put a glob in the session part of the reference to filter instead of list.
 The pattern is matched (case-insensitively) against the session **id**, the
 session **name** (the one-line description), and the session **working
 **directory** — a match on any of them is shown:
@@ -38,16 +38,16 @@ $ cdir opencode/*llcat*
   ses_13263a5edffeFNJ7tidEfj90ze     Add Ollama transport option to llcat.py
 ```
 
-A reference with no wildcards (`cdir opencode/ses_abc123`) is still exported as
-JSON; only a pattern with `*`, `?`, or `[` switches to filtering. Combine with
-`-l`, `-S`, `-1`, etc. as usual.
+A reference with no wildcards (`cdir opencode/ses_abc123`) lists that one
+session as a row; only a pattern with `*`, `?`, or `[` switches to filtering.
+Combine with `-l`, `-S`, `-1`, etc. as usual. To see the session's
+conversation, use `ccat opencode/ses_abc123`.
 
 ## Multiple sessions
 
 `cdir` accepts as many references as you like, so it is the end of a `cgrep -l`
-pipeline. A single bare `agent/session_id` is still exported as JSON; give it
-**two or more** and they are listed as rows (ls `file1 file2` semantics), sorted
-like a normal listing:
+pipeline. Exact `agent/session_id` references are listed as rows (ls
+`file1 file2` semantics), sorted like a normal listing — one or many:
 
 ```sh
 $ cgrep -l ctool opencode | xargs cdir -l

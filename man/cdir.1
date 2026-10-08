@@ -25,7 +25,7 @@ similar to DOS mtools but for LLM context windows.
 .PP
 The tool reads session metadata from agent storage directories
 and presents them in a human-readable or machine-parseable format.
-It can also export individual sessions as conversation JSON.
+Session contents are read with \fBccat\fP; cdir is the directory listing.
 .PP
 Without arguments, cdir lists all known agents and their storage paths.
 .SH OPTIONS
@@ -142,15 +142,14 @@ Print version information and exit.
 Agent name or agent/session_id path.
 Without argument, lists all known agents.
 With agent name (e.g., \fBopencode/\fR), lists sessions.
-With agent/session_id (e.g., \fBopencode/ses_abc123\fR), exports session.
+With agent/session_id (e.g., \fBopencode/ses_abc123\fR), lists that session's row.
 If the session part contains a glob pattern (\fB*\fR, \fB?\fR, or \fB[\fR), cdir
-filters sessions instead of exporting: the pattern is matched, case-insensitively,
+filters sessions instead: the pattern is matched, case-insensitively,
 against the session id, name (one-line description), and working directory, and
-sessions matching any are listed. A reference with no wildcards is still exported.
+sessions matching any are listed.
 .PP
-Give more than one \fIpath\fR and cdir lists them as rows (ls \fBfile1 file2\fR
-semantics) instead of exporting: a single bare \fBagent/session_id\fR is exported,
-two or more are listed, sorted like a normal listing. Globs, bare agent names, and
+Multiple \fIpath\fR arguments are listed as rows (ls \fBfile1 file2\fR
+semantics), sorted like a normal listing. Globs, bare agent names, and
 exact ids may be mixed. A missing id is reported and skipped. This makes cdir the
 end of a \fBcgrep -l | xargs cdir\fR pipeline.
 .SH FILTERING
@@ -269,32 +268,27 @@ $ cdir -R
 .fi
 .RE
 .PP
-Export a session as JSON:
+Show one session's row (long format):
 .PP
 .RS
 .nf
-$ cdir opencode/ses_abc123
+$ cdir -l opencode/ses_abc123
+  ID                              NAME                              MODIFIED            SIZE  MSGS  PATH
+  ses_abc123                      Python Help   2024-01-15 10:30   2.4 KB     12  /home/user/src/project
+
+  1 session(s)
+.fi
+.RE
+.PP
+Read that session's conversation with ccat:
+.PP
+.RS
+.nf
+$ ccat opencode/ses_abc123
 [
   {"role": "user", "content": "Hello"},
   {"role": "assistant", "content": "Hi there!"}
 ]
-.fi
-.RE
-.PP
-Export a session as Markdown:
-.PP
-.RS
-.nf
-$ cdir --format md opencode/ses_abc123
-# Session — opencode/ses_abc123
-
-## You
-
-Hello
-
-## Assistant
-
-Hi there!
 .fi
 .RE
 .SH FILES

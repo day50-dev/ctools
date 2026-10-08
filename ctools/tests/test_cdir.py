@@ -842,11 +842,28 @@ def test_cli_glob_is_case_insensitive(tmp_path):
 
 
 def test_cli_exact_id_not_treated_as_glob(tmp_path):
-    """A plain session id (no wildcards) is exported, not run through the
-    glob filter (which would print 'No sessions matching')."""
+    """A plain session id (no wildcards) is listed as a row (ls file
+    semantics), not run through the glob filter (which would print
+    'No sessions matching') and not exported as conversation JSON."""
     _make_opencode_db_glob(tmp_path)
     result = _run_opencode_cli(tmp_path, ["opencode/ses_abc123"])
+    assert result.exit_code == 0
     assert 'No sessions matching' not in result.stdout
+    assert 'ses_abc123' in result.stdout
+    assert '"role"' not in result.stdout
+    assert '1 session(s)' in result.stdout
+
+
+def test_cli_single_exact_id_long_lists_row(tmp_path):
+    """cdir -l agent/ses_id shows the long row for that session, not the
+    conversation (contents are ccat's job)."""
+    _make_opencode_db_glob(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["-l", "opencode/ses_abc123"])
+    assert result.exit_code == 0
+    for col in ('MODIFIED', 'SIZE', 'MSGS', 'PATH'):
+        assert col in result.stdout
+    assert 'ses_abc123' in result.stdout
+    assert '"role"' not in result.stdout
 
 
 def test_cli_one_line_with_glob(tmp_path):
@@ -1216,13 +1233,14 @@ def test_cli_pi_long_shows_cwd(tmp_path):
 
 
 def test_cli_pi_export(tmp_path):
-    """Test cdir pi/<id> exports the session messages."""
+    """cdir pi/<id> lists the session as a row (ls file semantics)."""
     session_id = '019fe37e-d6a2-7344-8a05-5b04d8d40161'
     _make_pi_session(tmp_path, session_id)
     result = _run_pi_cli(tmp_path, [f"pi/{session_id}"])
     assert result.exit_code == 0
-    assert '"role": "user"' in result.stdout
-    assert 'hello pi' in result.stdout
+    assert session_id in result.stdout
+    assert '"role"' not in result.stdout
+    assert '1 session(s)' in result.stdout
 
 
 # --- Goose Session Tests ---

@@ -9,6 +9,29 @@ Grep through your conversation history in Claude Desktop, Claude Code, Codex, Pi
 
 Copy your conversation from one to another. Start in one program, continue in another. using the normal resume syntax.
 
+Here's an example:
+
+```shell
+# I look for mentions of snake game in opencode:
+$ cgrep "snake game" opencode
+opencode/ses_a1d1a5a4df984ee698cab4a7:1:user: make a simple snake game in python
+opencode/ses_a1d1a5a4df984ee698cab4a7:2:assistant: I'll make a terminal-based snake game using `curses` (standard library, no dependencies).
+opencode/ses_a1d1a5a4df984ee698cab4a7:3:assistant: Done — `snake.py` is a terminal snake game using Python's built-in `curses` module (no dependencies).
+
+# cool let's look at the status of that session
+$ cdir -l opencode/ses_a1d1a5a4df984ee698cab4a7
+  ID                            NAME                                MODIFIED            SIZE  MSGS  PATH
+  ses_a1d1a5a4df984ee698cab4a7  make a simple snake game in python  2026-10-07 16:56  2.7 KB     3  /home/chris/.local/share/opencode
+
+  1 session(s)
+
+# Alright let's copy that into pi!
+$ ccopy opencode/ses_a1d1a5a4df984ee698cab4a7 pi
+Copied 3 message(s) from opencode/ses_a1d1a5a4df984ee698cab4a7 to a new pi session: e357f435-f813-463a-b313-f97f1051f3cb
+Resume it with:
+  pi --session e357f435-f813-463a-b313-f97f1051f3cb
+
+```
 
 ### 1. `cgrep` — find it in your past conversations
 
