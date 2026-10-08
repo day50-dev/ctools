@@ -4,8 +4,7 @@
 </p>
 
 ------
-
-Grep through your conversation history in Claude Desktop, Claude Code, Codex, Pi, Hermes, Goose, Kilo, Hermes, FreeBuff, Cline, and omp.
+Grep through your conversation history in [Claude Desktop](https://claude.com/download), [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [Hermes](https://github.com/NousResearch/hermes-agent), [Goose](https://github.com/aaif-goose/goose), [Kilo](https://github.com/Kilo-Org/kilocode), [Hermes](https://github.com/NousResearch/hermes-agent), [FreeBuff](https://github.com/CodebuffAI/freebuff), [Cline](https://github.com/cline/cline), and [omp](https://github.com/can1357/oh-my-pi).
 
 Copy your conversation from one to another. Start in one program, continue in another. using the applications normal system for resuming conversations.
 
