@@ -97,17 +97,29 @@ def test_does_not_touch_source(tmp_path):
         AGENTS["opencode"].base_path = original
 
 
-def test_unknown_source_agent_is_error():
-    result = runner.invoke(app, ["not-an-agent/ses_src", "opencode"])
-    assert result.exit_code == 1
-    assert "Unknown agent" in result.stdout
+def test_unknown_source_agent_is_error(tmp_path):
+    _make_opencode_conversation_db(tmp_path, "ses_src")
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    try:
+        result = runner.invoke(app, ["not-an-agent/ses_src", "opencode"])
+        assert result.exit_code == 1
+        assert "Unknown agent" in result.stdout
+    finally:
+        AGENTS["opencode"].base_path = original
 
 
-def test_missing_session_id_is_error():
+def test_missing_session_id_is_error(tmp_path):
     """A source with no session id is an error."""
-    result = runner.invoke(app, ["opencode", "opencode"])
-    assert result.exit_code == 1
-    assert "No session ID" in result.stdout
+    _make_opencode_conversation_db(tmp_path, "ses_src")
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    try:
+        result = runner.invoke(app, ["opencode", "opencode"])
+        assert result.exit_code == 1
+        assert "No session ID" in result.stdout
+    finally:
+        AGENTS["opencode"].base_path = original
 
 
 def test_unknown_destination_agent_is_error(tmp_path):
@@ -269,6 +281,98 @@ def test_pipe_roundtrip(tmp_path):
                [m.content for m in AGENTS["opencode"].messages("ses_src")]
     finally:
         AGENTS["opencode"].base_path = original
+
+
+# --- File / fd / stdin source (the Unix-y form) ---
+
+def _conv_json(tmp_path, records=None):
+    if records is None:
+        records = [{"role": "user", "content": "from a file"},
+                   {"role": "assistant", "content": "ok, from a file"}]
+    p = tmp_path / "conv.json"
+    p.write_text(json.dumps(records))
+    return p, records
+
+
+def test_file_source_imports_json(tmp_path):
+    """ccopy FILE dest reads a conversation JSON from a file."""
+    _make_opencode_conversation_db(tmp_path, "ses_src")
+    p, records = _conv_json(tmp_path)
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    try:
+        result = runner.invoke(app, [str(p), "opencode"])
+        assert result.exit_code == 0, result.output
+        new_id = result.stdout.strip().split()[-1]
+        assert new_id.startswith("ses_")
+        assert [m.content for m in AGENTS["opencode"].messages(new_id)] == \
+            [r["content"] for r in records]
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
+def test_stdin_source_via_dash(tmp_path):
+    """ccopy - dest reads the conversation JSON from stdin (the Unix-y pipe)."""
+    _make_opencode_conversation_db(tmp_path, "ses_src")
+    records = [{"role": "user", "content": "piped in"}]
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    try:
+        result = runner.invoke(app, ["-", "opencode"], input=json.dumps(records))
+        assert result.exit_code == 0, result.output
+        new_id = result.stdout.strip().split()[-1]
+        assert [m.content for m in AGENTS["opencode"].messages(new_id)] == \
+            [r["content"] for r in records]
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
+def test_file_source_rejects_garbage(tmp_path):
+    """A file source that isn't valid conversation JSON is a clean error."""
+    _make_opencode_conversation_db(tmp_path, "ses_src")
+    p = tmp_path / "bad.json"
+    p.write_text("{not json")
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    try:
+        result = runner.invoke(app, [str(p), "opencode"])
+        assert result.exit_code == 1
+        # rich wraps the line, so collapse whitespace before asserting.
+        import re
+        flat = re.sub(r"\s+", " ", result.stdout)
+        assert "is not valid conversation JSON" in flat
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
+def test_file_source_dry_run(tmp_path):
+    """--dry-run with a file source reports the count and writes nothing."""
+    _make_opencode_conversation_db(tmp_path, "ses_src")
+    p, records = _conv_json(tmp_path)
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    try:
+        before = {s.id for s in AGENTS["opencode"].sessions()}
+        result = runner.invoke(app, [str(p), "opencode", "--dry-run"])
+        assert result.exit_code == 0
+        assert "Would copy" in result.stdout
+        after = {s.id for s in AGENTS["opencode"].sessions()}
+        assert before == after
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
+def test_is_json_source(tmp_path):
+    """_is_json_source recognizes '/', /dev/fd/N, and real files."""
+    import ctools.ccopy as ccopy
+    assert ccopy._is_json_source("-")
+    assert ccopy._is_json_source("/dev/fd/63")
+    f = tmp_path / "conv.json"
+    f.write_text("[]")
+    assert ccopy._is_json_source(str(f))
+    # a normal agent ref is NOT a json source
+    assert not ccopy._is_json_source("opencode/ses_abc")
+    assert not ccopy._is_json_source("ssh://host/opencode/ses_abc")
 
 
 # --- Remote transport (ssh mocked) ---

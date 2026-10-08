@@ -242,3 +242,87 @@ def test_ccat_transcript_role_alignment(tmp_path):
             # after the 4-space margin, the role label (<=9 chars) then "  "
             rest = line[4:]
             assert "  " in rest
+
+
+# --- --raw lossless envelope ---
+
+def test_ccat_raw_envelope_shape(tmp_path):
+    """--raw prints the lossless envelope: context + source + raw + metadata."""
+    _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
+    result = _run_ccat(tmp_path, ["--raw", "opencode/ses_a"])
+    assert result.exit_code == 0, result.output
+    doc = json.loads(result.stdout)
+    # context is the llcat/OpenAI spine (a list of {role, content})
+    assert isinstance(doc["context"], list)
+    assert [r["role"] for r in doc["context"]] == ["user", "assistant"]
+    assert doc["context"][0]["content"] == "Write a fibonacci function"
+    # source is the origin label
+    assert doc["source"] == "opencode/ses_a"
+    # session metadata is at the top, not per-record
+    assert "created" in doc and "modified" in doc
+    # lossless verbatim records are present and parallel to the raw messages
+    assert "raw" in doc and len(doc["raw"]) == 2
+    assert doc["raw"][0]["message"]["role"] == "user"
+    assert doc["raw"][0]["parts"][0]["text"] == "Write a fibonacci function"
+
+
+def test_ccat_raw_context_is_bare_llcat_spine(tmp_path):
+    """The context records carry only role/content (no per-record meta)."""
+    _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
+    result = _run_ccat(tmp_path, ["--raw", "opencode/ses_a"])
+    doc = json.loads(result.stdout)
+    for rec in doc["context"]:
+        assert set(rec.keys()) == {"role", "content"}
+
+
+def test_ccat_raw_omits_raw_when_unintrospectable(tmp_path):
+    """When an agent can't introspect its storage, raw is omitted (honest)."""
+    # An agent whose raw_records() returns [] must not emit an empty raw key.
+    _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
+    # AGENTS["opencode"] is a singleton instance; patch the CLASS method so it
+    # binds normally (an instance attribute would not receive self).
+    opencode_cls = type(AGENTS["opencode"])
+    original = opencode_cls.raw_records
+    opencode_cls.raw_records = lambda self, sid: []
+    try:
+        result = _run_ccat(tmp_path, ["--raw", "opencode/ses_a"])
+        assert result.exit_code == 0, result.output
+        doc = json.loads(result.stdout)
+        assert "raw" not in doc
+    finally:
+        opencode_cls.raw_records = original
+
+
+def test_raw_records_base_defaults_empty():
+    """Base agents that can't introspect return an empty raw list."""
+    from ctools.agents import get_agent
+    # cline is a base Agent (no custom raw_records), so it returns [].
+    assert get_agent("cline").raw_records("anything") == []
+
+
+def test_opencode_raw_records_roundtrip(tmp_path):
+    """raw_records returns each message's verbatim message.data + part rows."""
+    _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    try:
+        recs = AGENTS["opencode"].raw_records("ses_a")
+        assert len(recs) == 2
+        assert recs[0]["message"]["role"] == "user"
+        assert recs[0]["parts"][0]["type"] == "text"
+        assert recs[1]["message"]["role"] == "assistant"
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
+def test_opencode_session_info(tmp_path):
+    """session_info surfaces model + timestamps from the session row."""
+    _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    try:
+        info = AGENTS["opencode"].session_info("ses_a")
+        assert info is not None
+        assert "created" in info and "modified" in info
+    finally:
+        AGENTS["opencode"].base_path = original

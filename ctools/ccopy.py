@@ -18,6 +18,7 @@ Usage:
 
 import json
 import io
+import os
 import shlex
 import shutil
 import subprocess
@@ -25,7 +26,7 @@ import sys
 import tarfile
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import typer
 from rich.console import Console
@@ -61,6 +62,27 @@ def import_conversation(agent: Agent, records: List[dict]) -> str:
     return agent.create_session(messages)
 
 
+def export_common(agent: Agent, session_id: str) -> dict:
+    """Export a session to the common interchange format (the ccat --raw envelope)."""
+    return agent.to_common(session_id)
+
+
+def import_common(agent: Agent, doc: dict) -> str:
+    """Import a common-format envelope into a NEW session in `agent`; return id."""
+    return agent.from_common(doc)
+
+
+def common_copy(source: Agent, source_id: str, destination: Agent) -> Tuple[str, int]:
+    """Copy via the common format: to_common(source) -> from_common(destination).
+
+    This is the 2N path -- every agent is proven against the common format
+    independently, so A->B is the composition. Returns (new id, message count).
+    """
+    doc = source.to_common(source_id)
+    new_id = destination.from_common(doc)
+    return new_id, len(doc.get('context') or [])
+
+
 def _validate_records(records) -> List[dict]:
     if (not isinstance(records, list)
             or not all(isinstance(r, dict) and "role" in r and "content" in r
@@ -68,6 +90,40 @@ def _validate_records(records) -> List[dict]:
         console.print('[red]Expected a JSON list of {"role", "content"} objects[/red]')
         raise typer.Exit(1)
     return records
+
+
+def _is_json_source(source: str) -> bool:
+    """True if `source` is a conversation JSON to read from a file, a process
+    substitution (/dev/fd/N), or stdin ('-'), rather than an agent/session
+    reference or an ssh:// URI.
+
+    This is what makes the Unix-y form work:
+    ccopy <(ssh remote ccat AGENT/SES) AGENT
+    """
+    if source == '-':
+        return True
+    if source.startswith('/dev/fd/'):
+        return True
+    return os.path.isfile(source)
+
+
+def _read_records_from(source: str) -> List[dict]:
+    """Read a conversation JSON from a file path, an fd path, or stdin ('-')."""
+    if source == '-':
+        data = sys.stdin.read()
+    else:
+        try:
+            with open(source, 'r', encoding='utf-8') as f:
+                data = f.read()
+        except OSError as e:
+            console.print(f"[red]Could not read {source}: {e}[/red]")
+            raise typer.Exit(1)
+    try:
+        records = json.loads(data)
+    except json.JSONDecodeError as e:
+        console.print(f"[red]{source} is not valid conversation JSON: {e}[/red]")
+        raise typer.Exit(1)
+    return _validate_records(records)
 
 
 def _do_export(ref: str) -> None:
@@ -269,7 +325,7 @@ def copy_conversation(source: Agent, source_id: str,
 @app.command()
 def main(
     source: Optional[str] = typer.Argument(None,
-                                           help="Source session (agent/session_id) or ssh://[user@]host[:port]/agent/session_id"),
+                                           help="Source session (agent/session_id), a conversation JSON file/fd/'-', or ssh://[user@]host[:port]/agent/session_id"),
     destination: Optional[str] = typer.Argument(None,
                                                 help="Destination agent (bare name) or ssh://[user@]host[:port]/agent"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would happen without writing"),
@@ -285,16 +341,24 @@ def main(
 
     The source session is never modified. The destination agent receives a fresh
     session holding the copied conversation, and ccopy prints how to resume it.
-    Either side may be remote: address it as ssh://[user@]host[:port]/... and it
-    runs over your normal ssh setup -- ccopy pulls the agent's storage files
-    over ssh, processes them locally, and pushes changes back, so the remote
-    host only needs sshd and tar.
+
+    The source can be addressed three ways:
+      agent/session_id   a session in a local agent
+      ssh://.../agent/session_id   a session on a remote host (needs only sshd + tar there)
+      FILE, /dev/fd/N, or -        a conversation JSON read from a file or stdin
+
+    That third form is the Unix-y way to copy from a remote without ccopy doing
+    the ssh itself: ccopy <(ssh remote ccat AGENT/SES) AGENT. Either side may be
+    remote; a remote source can be pulled by ccopy (sshd + tar), or piped in
+    with ccat (needs ctools on the remote).
 
     Examples:
         ccopy opencode/ses_abc claude-code
         ccopy claude-code/ses_123 codex
         ccopy opencode/ses_abc ssh://chris@remote/codex
         ccopy ssh://chris@remote/opencode/ses_abc codex
+        ccopy <(ssh chris@remote ccat opencode/ses_abc) codex
+        ccat opencode/ses_abc | ccopy - codex
         ccopy opencode/ses_abc opencode --dry-run
     """
     configure_logging(verbose=verbose)
@@ -314,21 +378,7 @@ def main(
     src_remote, src_ref = parse_remote_ref(source)
     dst_remote, dst_ref = parse_remote_ref(destination)
 
-    # Validate both ends locally, so errors are friendly before any ssh happens.
-    src_name, src_id = parse_ref(src_ref)
-    if not src_id:
-        console.print(f"[red]No session ID in {source} (expected agent/session_id)[/red]")
-        raise typer.Exit(1)
-    src_agent = get_agent(src_name)
-    if src_agent is None:
-        console.print(f"[red]Unknown agent: {src_name}[/red]")
-        console.print(f"[dim]Available agents: {', '.join(REGISTRY)}[/dim]")
-        raise typer.Exit(1)
-    if src_remote is None and not src_agent.exists():
-        console.print(f"[yellow]Agent path not found: {src_agent.base_path}[/yellow]")
-        console.print(f"[dim]Is {src_agent.name} installed?[/dim]")
-        raise typer.Exit(1)
-
+    # The destination is always an agent (bare name, or ssh://agent).
     if not dst_ref:
         console.print(f"[red]No destination agent in {destination}[/red]")
         raise typer.Exit(1)
@@ -346,28 +396,53 @@ def main(
         console.print(f"[dim]Is {dst_agent.name} installed?[/dim]")
         raise typer.Exit(1)
 
-    # Fetch the conversation (read-only; pull the remote's storage files
-    # locally and read them with the normal agent code when the source is
-    # remote).
-    if src_remote is None:
-        records = export_conversation(src_agent, src_id)
+    # The source is either a conversation JSON (a file, an fd from process
+    # substitution, or stdin), or an agent/session reference, local or remote
+    # via ssh://. We build a common-format `doc` so the copy is to_common ->
+    # from_common (the 2N path).
+    if src_remote is None and _is_json_source(source):
+        records = _read_records_from(source)
         if not records:
-            console.print(f"[yellow]No conversation in {src_name}/{src_id}[/yellow]")
+            console.print(f"[yellow]No conversation in {source}[/yellow]")
             raise typer.Exit(1)
+        common_doc = {'context': records, 'source': source}
+        src_desc = source
     else:
-        with tempfile.TemporaryDirectory() as tmp:
-            _pull(src_remote, src_agent, Path(tmp))
-            probe = _local_agent(src_agent, Path(tmp))
-            try:
-                records = export_conversation(probe, src_id)
-            except SessionNotFound:
-                records = []
-        if not records:
-            console.print(f"[yellow]No conversation in {src_name}/{src_id} on "
-                          f"{src_remote.target}[/yellow]")
+        src_name, src_id = parse_ref(src_ref)
+        if not src_id:
+            console.print(f"[red]No session ID in {source} (expected agent/session_id)[/red]")
             raise typer.Exit(1)
-
-    src_desc = f"{src_name}/{src_id}" + (f" on {src_remote.target}" if src_remote else "")
+        src_agent = get_agent(src_name)
+        if src_agent is None:
+            console.print(f"[red]Unknown agent: {src_name}[/red]")
+            console.print(f"[dim]Available agents: {', '.join(REGISTRY)}[/dim]")
+            raise typer.Exit(1)
+        if src_remote is None and not src_agent.exists():
+            console.print(f"[yellow]Agent path not found: {src_agent.base_path}[/yellow]")
+            console.print(f"[dim]Is {src_agent.name} installed?[/dim]")
+            raise typer.Exit(1)
+        # Fetch the conversation as a common envelope (read-only; for a remote
+        # source, pull the storage files locally and read them with agent code).
+        if src_remote is None:
+            common_doc = export_common(src_agent, src_id)
+            records = common_doc.get('context') or []
+            if not records:
+                console.print(f"[yellow]No conversation in {src_name}/{src_id}[/yellow]")
+                raise typer.Exit(1)
+        else:
+            with tempfile.TemporaryDirectory() as tmp:
+                _pull(src_remote, src_agent, Path(tmp))
+                probe = _local_agent(src_agent, Path(tmp))
+                try:
+                    common_doc = export_common(probe, src_id)
+                    records = common_doc.get('context') or []
+                except SessionNotFound:
+                    records = []
+            if not records:
+                console.print(f"[yellow]No conversation in {src_name}/{src_id} on "
+                              f"{src_remote.target}[/yellow]")
+                raise typer.Exit(1)
+        src_desc = f"{src_name}/{src_id}" + (f" on {src_remote.target}" if src_remote else "")
 
     log.info("conversation_copy_dry_run" if dry_run else "conversation_copy",
              source=src_desc, destination=dst_ref,
@@ -382,10 +457,10 @@ def main(
             console.print(f"[dim]Resume command shape: {resume}[/dim]")
         return
 
-    # Import into a brand-new session: locally, or by pushing the updated
-    # storage back when the destination is remote.
+    # Import into a brand-new session: locally via the common format, or by
+    # pushing the updated storage back when the destination is remote.
     if dst_remote is None:
-        new_id = import_conversation(dst_agent, records)
+        new_id = import_common(dst_agent, common_doc)
     else:
         new_id = _remote_destination(dst_remote, dst_agent, records)
 

@@ -102,7 +102,8 @@ def test_kilo_lists_sessions(tmp_path):
     assert s.id == 'kil_ses_1'
     assert s.name == 'Kilo Session'
     assert s.model == 'kilo-model'
-    assert s.size == 300
+    assert s.size > 0  # stored message + part content bytes
+    assert s.tokens == 300  # 100 + 200
     assert s.message_count == 2
     assert s.path == '/tmp'
 
@@ -204,7 +205,8 @@ def test_hermes_lists_sessions(tmp_path):
     s = sessions[0]
     assert s.id == 'her_ses_1'
     assert s.model == 'hermes-model'
-    assert s.size == 30
+    assert s.size > 0  # stored message content bytes
+    assert s.tokens == 30  # 10 + 20
     assert s.path == '/tmp'
     assert s.ctime is not None
     assert s.mtime is not None

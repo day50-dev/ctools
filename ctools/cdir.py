@@ -41,7 +41,7 @@ FIELDS = {
     'name': 'Session title (or ID prefix when no title is set)',
     'ctime': 'Creation / start time',
     'mtime': 'Last modification time',
-    'size': 'Size: token count for opencode, bytes for file-based agents',
+    'size': 'Stored content size in bytes',
     'msgs': 'Number of messages in the session',
     'model': 'Model used for the session',
     'path': 'Session working directory (where the conversation\'s code lives)',

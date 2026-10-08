@@ -10,6 +10,10 @@ ccopy \- copy a conversation from one agent to a new session in another
 .I destination
 .br
 .B ccopy
+.I "FILE | /dev/fd/N | -"
+.I destination
+.br
+.B ccopy
 .B \-\-export-json
 .I agent/session_id
 .br
@@ -22,11 +26,16 @@ ccopy \- copy a conversation from one agent to a new session in another
 brand-new session in a destination agent. The source session is never modified,
 so it is a true copy, not a move.
 .PP
-The source is
+The source is an
 .I agent/session_id
-(with no @ prefix). The destination is a bare agent name; a fresh session is
-created there holding the copied conversation, and ccopy prints the command to
-resume it.
+(with no @ prefix), a conversation JSON
+.IR FILE ,
+an fd from process substitution
+(\fB/dev/fd/N\fR), or
+.B -
+for stdin. The destination is a bare agent name; a fresh session is created
+there holding the copied conversation, and ccopy prints the command to resume
+it.
 .SH OPTIONS
 .TP
 .B \-\-dry-run
@@ -56,7 +65,14 @@ The source session, as
 .IR opencode/ses_abc123 ),
 or
 .I ssh://[user@]host[:port]/agent/session_id
-for a session on a remote host.
+for a session on a remote host. It may instead be a conversation JSON
+.IR FILE ,
+/dev/fd/N
+(a process substitution), or
+.B -
+(stdin) — this is what makes
+.B ccopy <(ssh remote ccat AGENT/SES) AGENT
+work.
 .TP
 .I destination
 A bare agent name (e.g.
@@ -88,7 +104,21 @@ back the same way. The storage location is anchored at the remote's $HOME
 (the agent's default install root, e.g.
 .IR ~/.local/share/opencode ,
 .IR ~/.pi/agent ),
-so the remote just needs whatever agent it already runs. Locally this reduces to:
+so the remote just needs whatever agent it already runs.
+.PP
+If the remote already runs ctools, the simpler Unix-y form is to pipe it: run
+.B ccat
+on the remote (it prints the conversation as JSON) and feed that into a local
+.BR ccopy .
+.PP
+.RS
+.nf
+ccopy <(ssh chris@remote ccat opencode/ses_abc) codex
+ssh chris@remote ccat opencode/ses_abc | ccopy - codex
+.fi
+.RE
+.PP
+Locally the wire form reduces to:
 .PP
 .RS
 .nf
@@ -123,6 +153,17 @@ Copy a conversation to a remote host:
 $ ccopy opencode/ses_abc123 ssh://chris@remote/codex
 Copied 42 message(s) from opencode/ses_abc123 to a new codex session on chris@remote: 1a2b3c
 Resume it on chris@remote with:
+  codex resume 1a2b3c
+.fi
+.RE
+.PP
+Seed a new session from a conversation piped over ssh (the remote runs ccat):
+.PP
+.RS
+.nf
+$ ccopy <(ssh chris@remote ccat opencode/ses_abc123) codex
+Copied 42 message(s) from /dev/fd/63 to a new codex session: 1a2b3c
+Resume it with:
   codex resume 1a2b3c
 .fi
 .RE

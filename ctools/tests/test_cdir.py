@@ -149,13 +149,15 @@ def test_get_opencode_sessions_with_data(tmp_path):
         )
     ''')
     
-    # Create message table for message count
+    # Create message table for message count + content size (real opencode
+    # stores message rows in a `data` JSON column).
     cursor.execute('''
         CREATE TABLE message (
             id TEXT PRIMARY KEY,
             session_id TEXT,
-            role TEXT,
-            content TEXT
+            time_created INTEGER,
+            time_updated INTEGER,
+            data TEXT
         )
     ''')
     
@@ -168,16 +170,19 @@ def test_get_opencode_sessions_with_data(tmp_path):
         INSERT INTO session (id, title, time_created, time_updated, tokens_input, tokens_output, model, directory)
         VALUES ('ses_def456', 'Code Review', 1705398000000, 1705403400000, 800, 1200, 'claude-3', '/home/user/project')
     ''')
-    
-    # Insert messages for message count
+
+    # Insert messages for message count (data column carries the content)
     cursor.execute('''
-        INSERT INTO message (id, session_id, role, content) VALUES ('msg1', 'ses_abc123', 'user', 'Hello')
+        INSERT INTO message (id, session_id, time_created, time_updated, data)
+        VALUES ('msg1', 'ses_abc123', 1705312200000, 1705312200000, '{"role":"user","content":"Hello"}')
     ''')
     cursor.execute('''
-        INSERT INTO message (id, session_id, role, content) VALUES ('msg2', 'ses_abc123', 'assistant', 'Hi there')
+        INSERT INTO message (id, session_id, time_created, time_updated, data)
+        VALUES ('msg2', 'ses_abc123', 1705312201000, 1705312201000, '{"role":"assistant","content":"Hi there"}')
     ''')
     cursor.execute('''
-        INSERT INTO message (id, session_id, role, content) VALUES ('msg3', 'ses_def456', 'user', 'Review this code')
+        INSERT INTO message (id, session_id, time_created, time_updated, data)
+        VALUES ('msg3', 'ses_def456', 1705398000000, 1705398000000, '{"role":"user","content":"Review this code"}')
     ''')
     
     conn.commit()
@@ -192,12 +197,58 @@ def test_get_opencode_sessions_with_data(tmp_path):
     assert sessions[0].id == 'ses_def456'
     assert sessions[0].name == 'Code Review'
     assert sessions[0].message_count == 1
-    assert sessions[0].size == 2000  # 800 + 1200 tokens
+    # size is now the stored content bytes; the token count is carried
+    # separately (800 + 1200) so a session never reports 0.
+    assert sessions[0].size >= len('{"role":"user","content":"Review this code"}')
+    assert sessions[0].tokens == 2000
     assert sessions[0].path == '/home/user/project'  # session working directory
     
     # Check second session
     assert sessions[1].id == 'ses_abc123'
     assert sessions[1].name == 'Python Help'
+    assert sessions[1].tokens == 4000  # 1500 + 2500
+
+
+def test_opencode_zero_token_session_reports_content_size(tmp_path):
+    """A zero-token session with real content must not report 0 bytes.
+
+    Regression: opencode sometimes records 0 tokens for a session that clearly
+    has a body (a 263-message session used to display as "0 B"). Size must be
+    the stored content bytes so it is always accurate.
+    """
+    db_path = tmp_path / 'opencode.db'
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE session (
+            id TEXT PRIMARY KEY, title TEXT, time_created INTEGER, time_updated INTEGER,
+            tokens_input INTEGER, tokens_output INTEGER, directory TEXT,
+            model TEXT, parent_id TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE message (
+            id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER,
+            time_updated INTEGER, data TEXT
+        )
+    ''')
+    cursor.execute('''
+        INSERT INTO session (id, time_created, time_updated, tokens_input, tokens_output, directory)
+        VALUES ('ses_zero', 1700000000000, 1700000060000, 0, 0, '/tmp')
+    ''')
+    # A real body even though tokens are 0.
+    cursor.execute('''
+        INSERT INTO message (id, session_id, time_created, time_updated, data)
+        VALUES ('m1', 'ses_zero', 1700000000000, 1700000000000, ?)
+    ''', ('{"role":"user","content":"' + ('x' * 500) + '"}',))
+    conn.commit()
+    conn.close()
+
+    agent = OpencodeAgent(tmp_path)
+    s = agent.sessions()[0]
+    assert s.id == 'ses_zero'
+    assert s.tokens is None  # no tokens recorded
+    assert s.size > 0  # but the content size is real, never 0
 
 
 def test_get_opencode_sessions_no_title(tmp_path):
@@ -621,6 +672,12 @@ def _make_opencode_db_two_sizes(tmp_path):
         )
     ''')
     cursor.execute('''
+        CREATE TABLE message (
+            id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER,
+            time_updated INTEGER, data TEXT
+        )
+    ''')
+    cursor.execute('''
         INSERT INTO session (id, title, time_created, time_updated,
                              tokens_input, tokens_output, directory)
         VALUES ('ses_small', 'Small', 1700000000000, 1700000060000, 10, 10, '/tmp')
@@ -630,6 +687,16 @@ def _make_opencode_db_two_sizes(tmp_path):
                              tokens_input, tokens_output, directory)
         VALUES ('ses_big', 'Big', 1700000000000, 1700000010000, 5000, 5000, '/tmp')
     ''')
+    # Content sizes: ses_big has a much larger stored body than ses_small, so
+    # a size (bytes) sort puts it first.
+    cursor.execute('''
+        INSERT INTO message (id, session_id, time_created, time_updated, data)
+        VALUES ('m_small', 'ses_small', 1700000000000, 1700000000000, '{"role":"user","content":"hi"}')
+    ''')
+    cursor.execute('''
+        INSERT INTO message (id, session_id, time_created, time_updated, data)
+        VALUES ('m_big', 'ses_big', 1700000000000, 1700000000000, ?)
+    ''', ('{"role":"user","content":"' + ('x' * 2000) + '"}',))
     conn.commit()
     conn.close()
     return db_path
@@ -1063,7 +1130,8 @@ def test_get_pi_sessions_with_data(tmp_path):
     assert s.path == '/home/user/project'  # cwd
     assert s.model == 'moonshotai/kimi-k2.6'
     assert s.message_count == 2
-    assert s.size == 15  # totalTokens from usage
+    assert s.size > 0  # stored content bytes (the session file)
+    assert s.tokens == 15  # totalTokens from usage
     assert s.ctime and s.mtime
     assert s.parent_id is None
 
@@ -1233,7 +1301,8 @@ def test_get_goose_sessions_with_data(tmp_path):
     main = next(s for s in sessions if s.id == '20260101_1')
     assert main.name == 'Monitor Bug'
     assert main.model == 'gpt-4'
-    assert main.size == 4200
+    assert main.size > 0  # stored message content bytes
+    assert main.tokens == 4200
     assert main.message_count == 2
     assert main.path == '/home/user/project'
     assert main.parent_id is None
@@ -1265,7 +1334,8 @@ def test_get_goose_sessions_legacy_jsonl(tmp_path):
     assert s.id == '20250309_181707'
     assert s.name == 'legacy chat'
     assert s.message_count == 2
-    assert s.size == 900
+    assert s.size > 0  # the legacy .jsonl file size
+    assert s.tokens == 900
 
 
 def test_export_goose_session(tmp_path):

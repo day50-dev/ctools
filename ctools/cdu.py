@@ -37,6 +37,16 @@ console = Console()
 __all__ = ['app', 'count_tokens', 'format_tokens', 'get_session_tokens']
 
 
+def _session_tokens(s) -> int:
+    """Token count for a session row: the recorded token total where the agent
+    tracks it, else the stored content size as a stand-in. Keeps cdu's token
+    metric meaningful even when size is now bytes.
+    """
+    if s.tokens:
+        return s.tokens
+    return s.size or 0
+
+
 def get_session_tokens(agent_name: str, session_id: str) -> Dict[str, int]:
     """Token breakdown for a session.
 
@@ -121,7 +131,7 @@ def _show_all_agents(json_output: bool):
         results.append({
             "agent": agent.name,
             "sessions": len(sessions),
-            "tokens": sum(s.size for s in sessions),
+            "tokens": sum(_session_tokens(s) for s in sessions),
         })
 
     if json_output:
@@ -160,7 +170,7 @@ def _show_agent_sessions(agent: Agent, json_output: bool):
         console.print(f"[yellow]No sessions found for {agent.name}[/yellow]")
         return
 
-    sessions.sort(key=lambda s: s.size, reverse=True)
+    sessions.sort(key=lambda s: _session_tokens(s), reverse=True)
 
     if json_output:
         data = []
@@ -168,7 +178,7 @@ def _show_agent_sessions(agent: Agent, json_output: bool):
             data.append({
                 "id": s.id,
                 "name": s.name,
-                "tokens": s.size,
+                "tokens": _session_tokens(s),
                 "messages": s.message_count,
             })
         print(json.dumps(data, indent=2))
@@ -182,10 +192,10 @@ def _show_agent_sessions(agent: Agent, json_output: bool):
 
     total = 0
     for s in sessions[:50]:
-        total += s.size
+        total += _session_tokens(s)
         name = s.name[:40] + "..." if len(s.name) > 40 else s.name
         msgs = str(s.message_count) if s.message_count else "-"
-        table.add_row(s.id, name, format_tokens(s.size), msgs)
+        table.add_row(s.id, name, format_tokens(_session_tokens(s)), msgs)
 
     if len(sessions) > 50:
         table.add_row("...", f"{len(sessions) - 50} more", "", "")

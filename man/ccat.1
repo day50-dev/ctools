@@ -4,6 +4,7 @@ ccat \- cat for LLM context windows
 .SH SYNOPSIS
 .B ccat
 .RB [ \-t ]
+.RB [ \-r ]
 .RB [ \-\-color
 .IR never | auto | always ]
 .RB [ \-\-version ]
@@ -40,6 +41,16 @@ column, followed by the message content.
 .TP
 .BR \-t ", " \-\-text
 Print a readable transcript instead of the default JSON.
+.TP
+.BR \-r ", " \-\-raw
+Print the lossless envelope: the
+.B context
+array (the default JSON) plus the source agent's verbatim
+.B raw
+records and the session metadata
+(\fBsource\fR, \fBmodel\fR, \fBcreated\fR, \fBmodified\fR). The session facts sit at the
+top of the object, not on every record. Agents whose storage cannot be
+introspected omit the \fBraw\fR key; the \fBcontext\fR still carries the conversation.
 .TP
 .BR \-\-color " MODE"
 Colorize the \fB--text\fR transcript.
@@ -95,6 +106,15 @@ Pipe the JSON onward:
 .RS
 .nf
 $ ccat opencode/ses_abc123 | jq .
+.fi
+.RE
+.PP
+Dump the lossless envelope and address it with jq:
+.PP
+.RS
+.nf
+$ ccat --raw opencode/ses_abc123 | jq .context[0]
+{ "role": "user", "content": "do a git diff to v0.16.10 ..." }
 .fi
 .RE
 .PP

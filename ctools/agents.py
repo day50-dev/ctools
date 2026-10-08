@@ -37,11 +37,12 @@ class Session:
     name: str
     ctime: Optional[datetime]
     mtime: Optional[datetime]
-    size: int  # tokens where the agent tracks them, bytes otherwise
+    size: int  # real stored content size in bytes (always)
     path: Optional[str] = None
     model: Optional[str] = None
     message_count: Optional[int] = None
     parent_id: Optional[str] = None
+    tokens: Optional[int] = None  # token count where the agent records it
 
 
 @dataclass
@@ -305,6 +306,81 @@ class Agent:
         Defaults to the conversation for agents that keep nothing else.
         """
         return self.messages(session_id)
+
+    def raw_records(self, session_id: str) -> List[dict]:
+        """The agent's verbatim storage record for each message, in order.
+
+        This is the lossless payload a copy needs to replay a session into the
+        *same* agent without flattening: pi's JSONL entries, opencode's
+        message+part rows, and so on. Agents whose storage we cannot introspect
+        return an empty list, in which case consumers fall back to the portable
+        {role, content} conversation and accept the loss.
+
+        The list is parallel to :meth:`raw_messages` when the agent can produce
+        it; an empty list is the honest "we can't" answer.
+        """
+        return []
+
+    def session_info(self, session_id: str) -> Optional[Dict[str, object]]:
+        """Session-level metadata (model, timestamps) for one session, or None.
+
+        Used by ccat --raw to annotate the envelope. Returns a plain dict with
+        any subset of the keys the agent tracks; no requirement to fill all.
+        """
+        return None
+
+    # --- common interchange format ---
+    #
+    # The common format is the ccat --raw envelope: a dict with
+    #   { "context": [{role, content}, ...],   # portable spine (llcat/OpenAI)
+    #     "source": "agent/session_id",
+    #     "model": ..., "created": ..., "modified": ...,   # session facts
+    #     "raw": [agent's verbatim records] }              # lossless, optional
+    # Every agent that can be seeded gets to_common (export) and from_common
+    # (import); agents that can't do either refuse with UnsupportedOperation.
+    # The point of the 2N design: prove to_common and from_common per agent,
+    # and A->B is just the composition to_common(A) -> from_common(B).
+
+    def to_common(self, session_id: str) -> Dict[str, object]:
+        """Export `session_id` to the common interchange format."""
+        context = [{"role": m.role, "content": m.content}
+                   for m in self.messages(session_id)]
+        doc: Dict[str, object] = {'context': context,
+                                  'source': f'{self.name}/{session_id}'}
+        info = self.session_info(session_id)
+        if info:
+            for key in ('model', 'created', 'modified'):
+                if info.get(key):
+                    doc[key] = info[key]
+        raw = self.raw_records(session_id)
+        if raw:
+            doc['raw'] = raw
+        return doc
+
+    def from_common(self, doc: Dict[str, object]) -> str:
+        """Import a common-format envelope into a NEW session; return its id."""
+        context = doc.get('context') or []
+        if not isinstance(context, list):
+            raise AgentError(f'{self.name}: common format missing a context list')
+        # If the envelope carries verbatim records *for this agent* (a same-
+        # agent round trip), replay them; otherwise project the portable spine.
+        messages = self._from_common_messages(doc, context)
+        return self.create_session(messages)
+
+    def _from_common_messages(self, doc: Dict[str, object],
+                              context: List[dict]) -> List[Message]:
+        """Build the Message list a common import seeds from.
+
+        Default: project the portable {role, content} spine. Agents that can
+        replay their own verbatim records override this for lossless same-agent
+        round trips.
+        """
+        out: List[Message] = []
+        for rec in context:
+            if isinstance(rec, dict) and rec.get('content'):
+                out.append(Message(role=rec.get('role', 'user'),
+                                   content=rec.get('content', '')))
+        return out
 
     def lines(self, session_id: str) -> List[Tuple[int, str]]:
         """Searchable ``(line_num, "role: text")`` pairs for grep."""
@@ -643,6 +719,28 @@ class SqliteAgent(Agent):
             return sqlite3.connect(str(self.db_path))
         except sqlite3.Error:
             return None
+
+    @staticmethod
+    def _content_bytes(cursor, tables_cols, session_id: str) -> int:
+        """Real stored size (bytes) of a session's message content.
+
+        `tables_cols` is a list of (table, content_column) pairs; the lengths
+        of the content columns are summed. Any table/column that does not
+        exist is skipped, so this degrades gracefully across schemas. Returns
+        0 when nothing can be measured.
+        """
+        total = 0
+        for table, col in tables_cols:
+            try:
+                cursor.execute(
+                    f'SELECT COALESCE(SUM(LENGTH({col})), 0) FROM {table} '
+                    'WHERE session_id = ?', (session_id,))
+                row = cursor.fetchone()
+                if row and row[0]:
+                    total += int(row[0])
+            except sqlite3.Error:
+                continue
+        return total
 
 
 # --- Concrete agents ---
@@ -988,6 +1086,58 @@ class PiAgent(JsonlAgent):
                 out.append(Message(role=message.get('role', ''), content=content))
         return out
 
+    def raw_records(self, session_id: str) -> List[dict]:
+        """The active-branch message entries, verbatim (lossless replay form)."""
+        path = self.require_file(session_id)
+        by_id, parents = {}, {}
+        children, last_id = {}, None
+        for entry in read_json_lines(path):
+            eid = entry.get('id')
+            if not eid:
+                continue
+            by_id[eid] = entry
+            parents[eid] = entry.get('parentId')
+            children.setdefault(entry.get('parentId'), []).append(eid)
+            last_id = eid
+        if not by_id:
+            return []
+        leaves = [eid for eid in by_id if not children.get(eid)]
+        if leaves:
+            leaves.sort(key=lambda eid: by_id[eid].get('timestamp') or '')
+            node = leaves[-1]
+        else:
+            node = last_id
+        branch, seen = [], set()
+        while node and node in by_id and node not in seen:
+            seen.add(node)
+            branch.append(by_id[node])
+            node = parents.get(node)
+        branch.reverse()
+        return [e for e in branch if e.get('type') == 'message']
+
+    def session_info(self, session_id: str) -> Optional[Dict[str, object]]:
+        path = self.session_file(session_id)
+        if path is None:
+            return None
+        header, model, last_ts = None, None, None
+        for entry in read_json_lines(path):
+            etype, ts = entry.get('type'), entry.get('timestamp')
+            if ts:
+                last_ts = ts
+            if etype == 'session':
+                header = entry
+            elif etype == 'model_change':
+                model = entry.get('modelId') or model
+            elif etype == 'message':
+                model = (entry.get('message') or {}).get('model') or model
+        if header is None:
+            return None
+        info: Dict[str, object] = {'created': header.get('timestamp'),
+                                   'modified': last_ts or header.get('timestamp')}
+        if model:
+            info['model'] = model
+        return info
+
     def sessions(self) -> List[Session]:
         sessions = []
         for path in self.session_files():
@@ -1034,18 +1184,19 @@ class PiAgent(JsonlAgent):
                 name = name or session_id[:8]
             ctime = parse_timestamp(header_ts)
             try:
-                fallback_size = path.stat().st_size
+                file_size = path.stat().st_size
             except OSError:
-                fallback_size = 0
+                file_size = 0
             sessions.append(Session(
                 id=session_id,
                 name=name,
                 ctime=ctime,
                 mtime=parse_timestamp(last_ts) or ctime,
-                size=total_tokens or fallback_size,
+                size=file_size,
                 path=cwd or str(path),
                 model=model,
                 message_count=message_count,
+                tokens=total_tokens or None,
                 parent_id=self._session_uuid(parent_session),
             ))
         return sessions
@@ -1110,6 +1261,18 @@ class OpencodeAgent(SqliteAgent):
     def default_base_path(cls) -> Path:
         return Path.home() / '.local/share/opencode'
 
+    @staticmethod
+    def _content_bytes(cursor, session_id: str) -> int:
+        """Real stored size (bytes) of a session's message + part data.
+
+        opencode does not always record token counts (some sessions have 0
+        tokens despite real content), so the byte size of the actual stored
+        rows is the honest size to report.
+        """
+        return SqliteAgent._content_bytes(cursor, [('message', 'data'),
+                                                  ('part', 'data')], session_id)
+
+
     def sessions(self) -> List[Session]:
         conn = self.connect()
         if conn is None:
@@ -1132,16 +1295,21 @@ class OpencodeAgent(SqliteAgent):
                     msg_count = cursor.fetchone()[0]
                 except sqlite3.Error:
                     msg_count = None
+                tokens = (tokens_in or 0) + (tokens_out or 0)
+                # size is the real stored content bytes (always accurate); the
+                # token count is carried separately where opencode records it.
+                size = self._content_bytes(cursor, session_id)
                 sessions.append(Session(
                     id=session_id,
                     name=title or session_id[:8],
                     ctime=epoch_ms(created),
                     mtime=epoch_ms(updated),
-                    size=(tokens_in or 0) + (tokens_out or 0),
+                    size=size,
                     path=directory or str(self.db_path),
                     model=model,
                     message_count=msg_count,
                     parent_id=parent_id,
+                    tokens=tokens or None,
                 ))
         except sqlite3.Error:
             return []
@@ -1218,6 +1386,68 @@ class OpencodeAgent(SqliteAgent):
         return [Message(role=role, content=text)
                 for _, role, text in self._rows(session_id) if text]
 
+    def raw_records(self, session_id: str) -> List[dict]:
+        """Each message's verbatim `message.data` plus its `part` rows, in order."""
+        conn = self.connect()
+        if conn is None:
+            raise SessionNotFound(self.name, session_id)
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT 1 FROM session WHERE id = ?', (session_id,))
+            if cursor.fetchone() is None:
+                raise SessionNotFound(self.name, session_id)
+            cursor.execute('''
+                SELECT id, data FROM message
+                WHERE session_id = ?
+                ORDER BY time_created
+            ''', (session_id,))
+            out = []
+            for msg_id, msg_data in cursor.fetchall():
+                try:
+                    message = json.loads(msg_data)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                cursor.execute('''
+                    SELECT data FROM part WHERE message_id = ? ORDER BY time_created
+                ''', (msg_id,))
+                parts = []
+                for (part_data,) in cursor.fetchall():
+                    try:
+                        parts.append(json.loads(part_data))
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                out.append({'message': message, 'parts': parts})
+            return out
+        except sqlite3.Error:
+            raise SessionNotFound(self.name, session_id)
+        finally:
+            conn.close()
+
+    def session_info(self, session_id: str) -> Optional[Dict[str, object]]:
+        conn = self.connect()
+        if conn is None:
+            return None
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT model, time_created, time_updated FROM session WHERE id = ?
+            ''', (session_id,))
+            row = cursor.fetchone()
+        except sqlite3.Error:
+            return None
+        finally:
+            conn.close()
+        if row is None:
+            return None
+        model, created, updated = row
+        info: Dict[str, object] = {
+            'created': epoch_ms(created).isoformat() if created else None,
+            'modified': epoch_ms(updated).isoformat() if updated else None,
+        }
+        if model:
+            info['model'] = model
+        return info
+
     def messages(self, session_id: str) -> List[Message]:
         return [m for m in self.raw_messages(session_id) if m.role in CONVERSATION_ROLES]
 
@@ -1292,9 +1522,18 @@ class OpencodeAgent(SqliteAgent):
         return len(targets)
 
     def create_session(self, messages: List[Message]) -> str:
+        """Seed a real, loadable opencode session.
+
+        The runtime (opencode -s / the TUI) reads richer message data than our
+        portable {role, content} spine: user messages carry time.created + agent;
+        assistant messages additionally carry model/provider, a parent link, and a
+        completion time; every part links back to its message/session by id. We
+        write that shape so the created session actually loads, not just parses.
+        """
         session_id = f"ses_{uuid.uuid4().hex[:24]}"
         now_ms = int(time.time() * 1000)
         first_user = next((m.content for m in messages if m.role == 'user'), '')
+        cwd = os.getcwd()
         try:
             conn = sqlite3.connect(str(self.db_path))
         except sqlite3.Error as exc:
@@ -1314,18 +1553,45 @@ class OpencodeAgent(SqliteAgent):
             ''', (session_id, project_id, None, session_id, str(self.base_path),
                   _truncated(first_user or 'ctools session'), '0',
                   now_ms, now_ms, 0.0, 0, 0, 0, 0, 0))
+            prev_id: Optional[str] = None
             for i, message in enumerate(messages):
                 msg_id = f"msg_{session_id}_{i}"
-                data = json.dumps({'role': message.role, 'content': message.content})
-                part = json.dumps({'type': 'text', 'text': message.content})
+                m_created = now_ms + i
+                m_data: Dict[str, object] = {
+                    'role': message.role,
+                    'time': {'created': m_created},
+                    'agent': 'build',
+                    'path': {'cwd': cwd, 'root': cwd},
+                }
+                if message.role == 'assistant':
+                    m_data['model'] = {'providerID': 'ctools', 'modelID': 'imported'}
+                    m_data['modelID'] = 'imported'
+                    m_data['providerID'] = 'ctools'
+                    m_data['mode'] = 'build'
+                    if prev_id:
+                        m_data['parentID'] = prev_id
+                    m_data['time'] = {'created': m_created,
+                                      'completed': m_created + 1}
+                    m_data['finish'] = 'stop'
+                    m_data['tokens'] = {'input': 0, 'output': 0, 'reasoning': 0,
+                                        'cache': {'read': 0, 'write': 0}}
+                else:
+                    m_data['summary'] = {'title': '' , 'diffs': []}
+                part_id = f"part_{msg_id}"
+                part_data = {'type': 'text', 'text': message.content,
+                             'id': part_id, 'sessionID': session_id,
+                             'messageID': msg_id}
                 cursor.execute(
                     'INSERT INTO message (id, session_id, time_created, time_updated, data)'
                     ' VALUES (?, ?, ?, ?, ?)',
-                    (msg_id, session_id, now_ms + i, now_ms + i, data))
+                    (msg_id, session_id, m_created, m_created,
+                     json.dumps(m_data)))
                 cursor.execute(
                     'INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)'
                     ' VALUES (?, ?, ?, ?, ?, ?)',
-                    (f"part_{msg_id}", msg_id, session_id, now_ms + i, now_ms + i, part))
+                    (part_id, msg_id, session_id, m_created, m_created,
+                     json.dumps(part_data)))
+                prev_id = msg_id
             conn.commit()
         finally:
             conn.close()
@@ -1413,11 +1679,13 @@ class GooseAgent(SqliteAgent):
                     name=name or description or session_id[:8],
                     ctime=parse_timestamp(created_at),
                     mtime=parse_timestamp(updated_at),
-                    size=total_tokens or 0,
+                    size=self._content_bytes(cursor, [('messages', 'content_json')],
+                                              session_id),
                     path=working_dir or str(self.db_path),
                     model=model or provider_name,
                     message_count=msg_count,
                     parent_id=parent_id,
+                    tokens=total_tokens or None,
                 ))
         except sqlite3.Error:
             return None
@@ -1450,9 +1718,10 @@ class GooseAgent(SqliteAgent):
                 name=meta.get('description') or session_id[:8],
                 ctime=parse_timestamp(meta.get('created_at')) or ctime,
                 mtime=parse_timestamp(meta.get('updated_at')) or mtime,
-                size=meta.get('total_tokens') or size,
+                size=size,
                 path=str(path),
                 message_count=message_count,
+                tokens=int(meta.get('total_tokens') or 0) or None,
             ))
         return sessions
 
@@ -1561,11 +1830,13 @@ class HermesAgent(SqliteAgent):
                     name=title or display_name or session_id[:8],
                     ctime=epoch_seconds(created),
                     mtime=epoch_seconds(activity or ended),
-                    size=(tokens_in or 0) + (tokens_out or 0),
+                    size=self._content_bytes(cursor, [('messages', 'content')],
+                                             session_id),
                     path=cwd or str(self.db_path),
                     model=model,
                     message_count=msg_count,
                     parent_id=parent_id,
+                    tokens=(tokens_in or 0) + (tokens_out or 0) or None,
                 ))
         except sqlite3.Error:
             return []
@@ -1744,9 +2015,10 @@ class ClineAgent(Agent):
             first_user = next((m.content for m in messages if m.role == 'user'), '')
             name = str(meta['name']) if meta['name'] else _truncated(first_user or session_id[:8])
             try:
-                ctime, mtime, _ = file_metadata(task_dir / 'api_conversation_history.json')
+                ctime, mtime, _hist_size = file_metadata(task_dir / 'api_conversation_history.json')
             except OSError:
                 ctime = mtime = None
+                _hist_size = 0
             ts = meta['ts']
             if ts:
                 created = epoch_ms(ts)
@@ -1757,11 +2029,12 @@ class ClineAgent(Agent):
                 name=str(name)[:80],
                 ctime=ctime,
                 mtime=mtime,
-                size=int(meta['tokens'] or 0),
+                size=int(_hist_size),
                 path=meta['path'] or str(task_dir),
                 model=meta['model'],
                 message_count=len(messages),
                 parent_id=None,
+                tokens=int(meta['tokens'] or 0) or None,
             ))
         return sessions
 
@@ -1884,6 +2157,13 @@ class OmpAgent(Agent):
             return int(usage['totalTokens'])
         return 0
 
+    @staticmethod
+    def _file_size(path: Path) -> int:
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+
     def sessions(self) -> List[Session]:
         sessions = []
         for path in self.session_files():
@@ -1911,11 +2191,12 @@ class OmpAgent(Agent):
                 name=_truncated(str(parsed['title'] or header.get('title') or first_user)),
                 ctime=parse_timestamp(header.get('timestamp')),
                 mtime=parse_timestamp(header.get('timestamp')),
-                size=sum(self._message_total_tokens(e) for e in conversation),
+                size=self._file_size(path),
                 path=header.get('cwd') or str(path),
                 model=model,
                 message_count=len(conversation),
                 parent_id=None,
+                tokens=sum(self._message_total_tokens(e) for e in conversation) or None,
             ))
         return sessions
 

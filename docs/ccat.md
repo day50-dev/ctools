@@ -8,6 +8,7 @@ more at a time.
 ccat opencode/ses_abc123                 # print one conversation as JSON
 ccat opencode/ses_a opencode/ses_b       # several, each a JSON array
 ccat --text opencode/ses_abc            # a human-readable transcript
+ccat --raw opencode/ses_abc > session.json   # the lossless envelope
 ccat opencode/ses_abc | jq .            # it is JSON, so pipe it anywhere
 ccat ssh://chris@remote/opencode/ses_a  # a conversation on another host
 ```
@@ -28,6 +29,43 @@ $ ccat opencode/ses_abc123
 $ ccat --text opencode/ses_abc123
     you        do a git diff to v0.16.10 ... i broke toolcalling somehow
     assistant  Let me look at the broader context around tool calling...
+```
+
+## --raw: the lossless envelope
+
+The default JSON is the *portable* conversation — as much as every agent can
+carry. `--raw` prints the *lossless* form instead: the same `context` array,
+plus the source agent's verbatim records and the session metadata, so a copy
+back into the *same* agent loses nothing.
+
+```sh
+$ ccat --raw opencode/ses_abc123
+{
+  "context": [ {"role": "user", "content": "do a git diff ..."}, ... ],
+  "source":  "opencode/ses_abc123",
+  "model":   {...},
+  "created": "2025-...",
+  "modified": "2025-...",
+  "raw":     [ { /* the agent's verbatim per-message records */ } ]
+}
+```
+
+- **`context`** — the `llcat`/OpenAI spine, a bare list of `{"role", "content"}`
+  (plus `tool_calls` / `reasoning` where the agent keeps them). This is what you
+  feed `jq`, `llcat`, or a different agent.
+- **`source`**, **`model`**, **`created`**, **`modified`** — session-level facts,
+  carried *once* at the top rather than bolted onto every record.
+- **`raw`** — the source agent's verbatim storage records, parallel to the
+  conversation. It is what `ccopy` uses to replay a session into the *same*
+  agent without flattening. Agents whose storage we can't introspect simply omit
+  it (the honest "we can't" answer), and `context` still carries the conversation.
+
+Because it's JSON with a top-level `context` key, the lossless payload is
+jq-addressable without ever polluting the everyday pipe:
+
+```sh
+ccat --raw opencode/ses_abc | jq .context[0]     # just the first turn
+ccat --raw opencode/ses_abc | jq .model          # the session's model
 ```
 
 ## Many sessions

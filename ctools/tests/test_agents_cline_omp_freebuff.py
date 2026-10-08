@@ -106,7 +106,8 @@ def test_cline_history_item_title_and_tokens(tmp_path):
     agent = ClineAgent(tmp_path)
     s = agent.sessions()[0]
     assert s.name == 'Nice Task Title'
-    assert s.size == 150
+    assert s.size > 0  # the api_conversation_history.json file size
+    assert s.tokens == 150  # 100 + 50
     assert s.path == '/repo'
 
 
@@ -171,7 +172,8 @@ def test_omp_lists_sessions(tmp_path):
     s = sessions[0]
     assert s.name == 'refactor importer'
     assert s.model == 'claude-opus-4-6'
-    assert s.size == 1245
+    assert s.size > 0  # the session file size
+    assert s.tokens == 1245  # sum of message usage tokens
     assert s.path == '/repo'
     assert s.message_count == 3
     assert s.ctime is not None
