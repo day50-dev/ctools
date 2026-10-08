@@ -54,19 +54,6 @@ opencode/ses_000d460f:16:user: ok graflex has an erorr in the check. i see this:
 opencode/ses_000d460f:34:assistant: Found it. Root cause: `_check_host` (graflex/__init__.py:128) tries `http`, and …
 ```
 
-No agent argument? It searches **every installed agent**.
-
-### 2. `ccopy` — move your project from one tool to another
-
-Switched from opencode to Claude Code mid-project? You don't have to start from zero. Copy the whole conversation — context, decisions, the lot — into a fresh session in the other tool:
-
-```shell
-$ ccopy opencode/ses_abc123 claude-code
-Copied 128 message(s) from opencode/ses_abc123 to a new claude-code session: 1a2b3c
-Resume it with:
-  claude-code --resume 1a2b3c
-```
-
 ## Tools
 
 | Tool | What it does | Docs |
