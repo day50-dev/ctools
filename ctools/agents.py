@@ -201,6 +201,64 @@ def read_json_lines(path: Path) -> Iterator[dict]:
         return
 
 
+def scan_jsonl_head(path: Path, max_bytes: int = 262144) -> Tuple[List[dict], int]:
+    """Parse only the leading lines of a JSONL file.
+
+    Returns ``(entries, record_count)`` where ``entries`` is the list of
+    parsed dict entries read from the leading ``max_bytes`` and
+    ``record_count`` is the total number of records in the file.
+
+    Listing a session does not need the whole file: the metadata that
+    populates a row (cwd, title, first user turn, model) lives in the first
+    dozen-or-so lines, but the message count needs the whole thing. Counting
+    newlines over raw bytes is ~10x cheaper than JSON-parsing every line, so
+    we parse the head (enough for the metadata) and count the rest. If the
+    file is smaller than ``max_bytes`` the whole file is parsed.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return [], 0
+    if size == 0:
+        return [], 0
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(max_bytes)
+    except OSError:
+        return [], 0
+    # Record count = newline count, plus one if the file does not end in a
+    # newline (JSONL records are newline-delimited; real transcripts have no
+    # blank lines). Count in chunks so the whole file is scanned, cheaply.
+    total = head.count(b'\n')
+    last = head[-1:]
+    if size > len(head):
+        try:
+            with open(path, 'rb') as f:
+                f.seek(len(head))
+                while True:
+                    chunk = f.read(1 << 20)
+                    if not chunk:
+                        break
+                    total += chunk.count(b'\n')
+                    last = chunk[-1:]
+        except OSError:
+            pass
+    if last and last != b'\n':
+        total += 1
+    entries: List[dict] = []
+    for line in head.split(b'\n'):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line.decode('utf-8', 'replace'))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+    return entries, total
+
+
 # --- Base agent ---
 
 class Agent:
@@ -833,6 +891,34 @@ class ClaudeCodeAgent(JsonlAgent):
     def _session_dir(self) -> Path:
         return self.base_path / 'projects' / '-ctools'
 
+    def _session_meta(self, entries: List[dict]) -> Tuple[Optional[str], Optional[str],
+                                                          Optional[str], Optional[str]]:
+        """Pull (title, first_user, model, cwd) from leading JSONL entries.
+
+        Mirrors the full-file scan semantics on the (small) head list: the
+        first non-None cwd, the first user/human turn, the first assistant
+        model, and the last non-empty ai-title (later titles overwrite).
+        """
+        title = None
+        first_user = None
+        model = None
+        cwd = None
+        for entry in entries:
+            etype = entry.get('type')
+            if cwd is None:
+                cwd = entry.get('cwd')
+            if etype == 'ai-title':
+                title = entry.get('aiTitle') or title
+            elif etype in ('user', 'human') and first_user is None:
+                message = entry.get('message')
+                if isinstance(message, dict):
+                    first_user = text_of(message.get('content', ''))
+            elif etype == 'assistant':
+                message = entry.get('message')
+                if isinstance(message, dict):
+                    model = message.get('model') or model
+        return title, first_user, model, cwd
+
     def sessions(self) -> List[Session]:
         sessions = []
         for path in self.session_files():
@@ -841,26 +927,8 @@ class ClaudeCodeAgent(JsonlAgent):
             except OSError:
                 continue
             session_id = path.stem
-            title = None
-            first_user = None
-            model = None
-            cwd = None
-            line_count = 0
-            for entry in read_json_lines(path):
-                line_count += 1
-                etype = entry.get('type')
-                if cwd is None:
-                    cwd = entry.get('cwd')
-                if etype == 'ai-title':
-                    title = entry.get('aiTitle') or title
-                elif etype in ('user', 'human') and first_user is None:
-                    message = entry.get('message')
-                    if isinstance(message, dict):
-                        first_user = text_of(message.get('content', ''))
-                elif etype == 'assistant':
-                    message = entry.get('message')
-                    if isinstance(message, dict):
-                        model = message.get('model') or model
+            entries, message_count = scan_jsonl_head(path)
+            title, first_user, model, cwd = self._session_meta(entries)
             name = title or (first_user or '').strip().replace('\n', ' ')[:50] or session_id[:8]
             sessions.append(Session(
                 id=session_id,
@@ -870,7 +938,7 @@ class ClaudeCodeAgent(JsonlAgent):
                 size=size,
                 path=cwd or str(path),
                 model=model,
-                message_count=line_count,
+                message_count=message_count,
             ))
         return sessions
 

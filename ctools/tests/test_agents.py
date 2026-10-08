@@ -9,7 +9,7 @@ from ctools.agents import (
     AGENT_CLASSES, REGISTRY, Agent, ClaudeCodeAgent, ClaudeDesktopAgent,
     CodexAgent, GooseAgent, OpencodeAgent, PiAgent, SessionNotFound,
     UnsupportedOperation, epoch_ms, file_metadata, get_agent, normalize_name,
-    parse_timestamp, text_of,
+    parse_timestamp, scan_jsonl_head, text_of,
 )
 
 
@@ -212,6 +212,64 @@ def test_claude_code_records_model(tmp_path):
                                           "content": [{"type": "text", "text": "hi"}]}},
     ])
     assert ClaudeCodeAgent(tmp_path).sessions()[0].model == 'claude-opus-5'
+
+
+def test_claude_code_listing_only_scans_head(tmp_path):
+    """Listing must not JSON-parse the whole transcript.
+
+    The row metadata (cwd, title, first prompt, model) lives in the first few
+    lines, so a multi-megabyte session must list as fast as a small one. We
+    pin the behavior by asserting the message count is exact while the file is
+    far larger than the head window.
+    """
+    project = tmp_path / 'projects' / 'proj'
+    project.mkdir(parents=True)
+    path = project / 'ses_big.jsonl'
+    # Small head carrying all metadata...
+    head = [
+        {"type": "summary", "cwd": "/home/u/x"},
+        {"type": "user", "message": {"role": "user", "content": "first prompt"}},
+        {"type": "assistant", "message": {"role": "assistant",
+                                          "model": "claude-opus-5",
+                                          "content": [{"type": "text", "text": "hi"}]}},
+        {"type": "ai-title", "aiTitle": "Big Session"},
+    ]
+    # ...then a large body of records that never carry metadata.
+    body = [{"type": "assistant", "message": {"role": "assistant",
+                                              "model": "claude-opus-5",
+                                              "content": [{"type": "text",
+                                                           "text": "x" * 2000}]}}
+            for _ in range(400)]
+    lines = [json.dumps(e) for e in head + body]
+    path.write_text("\n".join(lines) + "\n")
+
+    # Direct head scan: exact count, small parse set.
+    entries, count = scan_jsonl_head(path, max_bytes=65536)
+    assert count == len(head) + len(body)
+    assert len(entries) < len(head) + len(body)  # did not parse the whole body
+
+    # End-to-end: the row is correct and complete.
+    s = ClaudeCodeAgent(tmp_path).sessions()[0]
+    assert s.name == 'Big Session'
+    assert s.path == '/home/u/x'
+    assert s.model == 'claude-opus-5'
+    assert s.message_count == len(head) + len(body)
+
+
+def test_scan_jsonl_head_counts_unterminated_final_record(tmp_path):
+    p = tmp_path / 'a.jsonl'
+    # No trailing newline: the last record still counts.
+    p.write_text(json.dumps({"type": "user", "message": {"content": "a"}}) + "\n"
+                 + json.dumps({"type": "user", "message": {"content": "b"}}))
+    entries, count = scan_jsonl_head(p)
+    assert count == 2
+    assert len(entries) == 2
+
+
+def test_scan_jsonl_head_empty_file(tmp_path):
+    p = tmp_path / 'a.jsonl'
+    p.write_text("")
+    assert scan_jsonl_head(p) == ([], 0)
 
 
 def test_lines_are_derived_from_messages(tmp_path):
