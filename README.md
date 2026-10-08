@@ -4,11 +4,9 @@
 </p>
 
 ------
-ctools is a suite of simple tools for navigating through the sessions in various agents. It allows you to search your history, transfer conversations, filter them, and even share them among hosts and users through ssh.
+*ctools* is a suite of simple tools for navigating through the sessions in various agents. It allows you to search your history, transfer conversations, filter them, and even share them among hosts and users through ssh.
 
-Grep through your conversation history in [Claude Desktop](https://claude.com/download), [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [Hermes](https://github.com/NousResearch/hermes-agent), [Goose](https://github.com/aaif-goose/goose), [Kilo](https://github.com/Kilo-Org/kilocode), [Hermes](https://github.com/NousResearch/hermes-agent), [FreeBuff](https://github.com/CodebuffAI/freebuff), [Cline](https://github.com/cline/cline), and [omp](https://github.com/can1357/oh-my-pi).
-
-Copy your conversation from one to another. Start in one program, continue in another. using the applications normal system for resuming conversations.
+It supports [Claude Desktop](https://claude.com/download), [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [Hermes](https://github.com/NousResearch/hermes-agent), [Goose](https://github.com/aaif-goose/goose), [Kilo](https://github.com/Kilo-Org/kilocode), [Hermes](https://github.com/NousResearch/hermes-agent), [FreeBuff](https://github.com/CodebuffAI/freebuff), [Cline](https://github.com/cline/cline), and [omp](https://github.com/can1357/oh-my-pi).
 
 Here's an example:
 
