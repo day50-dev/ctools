@@ -1791,6 +1791,52 @@ class GooseAgent(SqliteAgent):
                 out.append(Message(role=entry['role'], content=text))
         return out
 
+    def create_session(self, messages: List[Message]) -> str:
+        """Seed a real, loadable Goose session.
+
+        The sessions row carries the columns goose's readers sort and list on
+        (working_dir NOT NULL, RFC-3339 timestamps like goose's own), and each
+        message is a real content block (``[{\"type\": \"text\", ...}]``) with a
+        monotonically increasing created_timestamp, the order goose reads by.
+        """
+        conn = self.connect()
+        if conn is None:
+            raise AgentError(f"{self.name}: cannot open {self.db_path}")
+        base_id = f"{datetime.now():%Y%m%d_%H%M%S}"
+        session_id = base_id
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,))
+            n = 1
+            while cursor.fetchone() is not None:
+                session_id = f"{base_id}_{n}"
+                n += 1
+                cursor.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,))
+        except sqlite3.Error:
+            session_id = f"{base_id}_{uuid.uuid4().hex[:6]}"
+        stamp = datetime.now().astimezone().isoformat()
+        first_user = next((m.content for m in messages if m.role == 'user'), '')
+        try:
+            cursor.execute('''
+                INSERT INTO sessions (id, name, description, working_dir,
+                    created_at, updated_at)
+                VALUES (?, '', ?, ?, ?, ?)
+            ''', (session_id, _truncated(first_user or 'ctools session'),
+                  os.getcwd(), stamp, stamp))
+            cursor.executemany(
+                'INSERT INTO messages (session_id, role, content_json,'
+                ' created_timestamp) VALUES (?, ?, ?, ?)',
+                [(session_id, m.role,
+                  json.dumps([{'type': 'text', 'text': m.content}]),
+                  int(time.time()) + i)
+                 for i, m in enumerate(messages)])
+            conn.commit()
+        except sqlite3.Error as exc:
+            raise AgentError(f"{self.name}: cannot write session ({exc})")
+        finally:
+            conn.close()
+        return session_id
+
 
 class HermesAgent(SqliteAgent):
     """Hermes: one SQLite database (``state.db``) with sessions / messages tables.
@@ -1918,6 +1964,48 @@ class HermesAgent(SqliteAgent):
 
     def messages(self, session_id: str) -> List[Message]:
         return [m for m in self.raw_messages(session_id) if m.role in CONVERSATION_ROLES]
+
+    def create_session(self, messages: List[Message]) -> str:
+        """Seed a real, loadable Hermes session.
+
+        Mirrors hermes's own foreign-history import (hermes_state_portability):
+        the id is minted like an import id (``YYYYMMDD_HHMMSS_<hex12>``), the
+        sessions row carries source/title/cwd/timestamps so the session lists,
+        sorts and stays resumable (``ended_at`` NULL), and each message is the
+        minimal real row (role, content, timestamp, active) that hermes's read
+        path loads in id order; hermes's insert triggers complete the rest
+        (message_uid, FTS, display order).
+        """
+        conn = self.connect()
+        if conn is None:
+            raise AgentError(f"{self.name}: cannot open {self.db_path}")
+        session_id = f"{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:12]}"
+        now = time.time()
+        first_user = next((m.content for m in messages if m.role == 'user'), '')
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'")
+            if cursor.fetchone() is None:
+                raise AgentError(f"{self.name}: no sessions table in {self.db_path}")
+            cursor.execute('''
+                INSERT INTO sessions (id, source, title, model, cwd,
+                    started_at, last_activity_at, message_count, hidden)
+                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 0)
+            ''', (session_id, 'import',
+                  _truncated(first_user or 'ctools session'),
+                  os.getcwd(), now, now, len(messages)))
+            cursor.executemany(
+                'INSERT INTO messages (session_id, role, content, timestamp, active)'
+                ' VALUES (?, ?, ?, ?, 1)',
+                [(session_id, m.role, m.content, now + i)
+                 for i, m in enumerate(messages)])
+            conn.commit()
+        except sqlite3.Error as exc:
+            raise AgentError(f"{self.name}: cannot write session ({exc})")
+        finally:
+            conn.close()
+        return session_id
 
 
 class ClineAgent(Agent):

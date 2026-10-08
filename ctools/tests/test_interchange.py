@@ -367,6 +367,68 @@ def test_pi_from_common_live_oracle(tmp_path, monkeypatch):
 # cross-agent composition (the N^2 that falls out of 2N)
 # =====================================================================
 
+def _goose_db(tmp_path, session_id="20261008_1", messages=None):
+    """A minimal real-shaped goose sessions.db (snake-game conversation)."""
+    if messages is None:
+        messages = [
+            ("user", "make a simple snake game in python"),
+            ("assistant", "Created `snake.py`. Run it with: python3 snake.py"),
+        ]
+    db_dir = tmp_path / "goose" / "sessions"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    db_path = db_dir / "sessions.db"
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    cur.execute('''CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '',
+        session_type TEXT NOT NULL DEFAULT 'user',
+        working_dir TEXT NOT NULL, created_at TIMESTAMP, updated_at TIMESTAMP,
+        total_tokens INTEGER, provider_name TEXT, model_config_json TEXT,
+        parent_session_id TEXT)''')
+    cur.execute('''CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT,
+        session_id TEXT NOT NULL, role TEXT NOT NULL,
+        content_json TEXT NOT NULL, created_timestamp INTEGER NOT NULL)''')
+    cur.execute(
+        "INSERT INTO sessions (id, description, working_dir, created_at,"
+        " updated_at) VALUES (?, ?, '/tmp', '2026-10-08T01:00:00+00:00',"
+        " '2026-10-08T01:05:00+00:00')", (session_id, "snake"))
+    for i, (role, content) in enumerate(messages):
+        cur.execute(
+            "INSERT INTO messages (session_id, role, content_json,"
+            " created_timestamp) VALUES (?, ?, ?, ?)",
+            (session_id, role,
+             json.dumps([{"type": "text", "text": content}]),
+             1700000001 + i))
+    conn.commit()
+    conn.close()
+    return tmp_path / "goose"
+
+
+def _hermes_db(tmp_path):
+    """A minimal real-shaped hermes state.db (no sessions yet)."""
+    base = tmp_path / "hermes"
+    base.mkdir(parents=True, exist_ok=True)
+    db_path = base / "state.db"
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    cur.execute('''CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, source TEXT NOT NULL, display_name TEXT,
+        title TEXT, model TEXT, started_at REAL NOT NULL, ended_at REAL,
+        last_activity_at REAL, input_tokens INTEGER DEFAULT 0,
+        output_tokens INTEGER DEFAULT 0, reasoning_tokens INTEGER DEFAULT 0,
+        cwd TEXT, parent_session_id TEXT, message_count INTEGER DEFAULT 0,
+        hidden INTEGER NOT NULL DEFAULT 0)''')
+    cur.execute('''CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+        role TEXT NOT NULL, content TEXT, timestamp REAL NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1)''')
+    conn.commit()
+    conn.close()
+    return base
+
+
 def test_cross_agent_opencode_to_pi(tmp_path):
     """opencode snake -> common -> pi keeps the prompt + answer."""
     _opencode_db(tmp_path, "ses_snake")
@@ -447,3 +509,145 @@ def test_common_format_missing_context_is_clean(tmp_path):
         assert AGENTS["opencode"].messages(new_id) == []
     finally:
         AGENTS["opencode"].base_path = original
+
+
+# =====================================================================
+# goose / hermes: to_common / from_common (newly seedable)
+# =====================================================================
+
+def test_goose_to_common_shape(tmp_path):
+    """goose exports the bare {role, content} spine with source attribution."""
+    from ctools.agents import GooseAgent
+    base = _goose_db(tmp_path)
+    agent = GooseAgent(base)
+    doc = agent.to_common("20261008_1")
+    assert doc["source"] == "goose/20261008_1"
+    assert [m["role"] for m in doc["context"]] == ["user", "assistant"]
+    assert doc["context"][0]["content"] == "make a simple snake game in python"
+
+
+def test_goose_from_common_roundtrip(tmp_path):
+    """A goose envelope seeds a new goose session that reads back identically."""
+    from ctools.agents import GooseAgent
+    base = _goose_db(tmp_path)
+    agent = GooseAgent(base)
+    doc = agent.to_common("20261008_1")
+    new_id = agent.from_common(doc)
+    assert new_id != "20261008_1"
+    msgs = agent.messages(new_id)
+    assert [(m.role, m.content) for m in msgs] == \
+           [(m["role"], m["content"]) for m in doc["context"]]
+
+
+def test_goose_from_common_real_shape(tmp_path):
+    """Imported goose rows are real-shaped: content blocks, ordered timestamps."""
+    import json as _json
+    import sqlite3 as _sqlite
+    from ctools.agents import GooseAgent
+    base = _goose_db(tmp_path)
+    agent = GooseAgent(base)
+    new_id = agent.from_common(agent.to_common("20261008_1"))
+    conn = _sqlite.connect(str(agent.db_path))
+    cur = conn.cursor()
+    cur.execute("SELECT working_dir, created_at FROM sessions WHERE id = ?",
+                (new_id,))
+    row = cur.fetchone()
+    assert row and row[0], "sessions row must carry working_dir"
+    cur.execute("SELECT content_json, created_timestamp FROM messages"
+                " WHERE session_id = ? ORDER BY created_timestamp, id", (new_id,))
+    rows = cur.fetchall()
+    conn.close()
+    assert len(rows) == 2
+    for content_json, _ts in rows:
+        blocks = _json.loads(content_json)
+        assert blocks[0]["type"] == "text"
+    assert rows[0][1] < rows[1][1]
+
+
+def test_hermes_to_common_shape(tmp_path):
+    """hermes exports the bare spine; raw records are omitted (no introspect)."""
+    from ctools.agents import HermesAgent
+    base = _hermes_db(tmp_path)
+    agent = HermesAgent(base)
+    sid = agent.from_common({"source": "goose/x", "context": [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"}]})
+    doc = agent.to_common(sid)
+    assert doc["source"] == f"hermes/{sid}"
+    assert [m["role"] for m in doc["context"]] == ["user", "assistant"]
+
+
+def test_hermes_from_common_roundtrip(tmp_path):
+    """A hermes envelope seeds a session that reads back identically."""
+    from ctools.agents import HermesAgent
+    base = _hermes_db(tmp_path)
+    agent = HermesAgent(base)
+    doc = {"source": "goose/20261008_1", "context": [
+        {"role": "user", "content": "make a simple snake game in python"},
+        {"role": "assistant", "content": "Created snake.py"}]}
+    new_id = agent.from_common(doc)
+    assert any(s.id == new_id for s in agent.sessions())
+    msgs = agent.messages(new_id)
+    assert [(m.role, m.content) for m in msgs] == \
+           [(m["role"], m["content"]) for m in doc["context"]]
+
+
+def test_hermes_from_common_real_shape(tmp_path):
+    """Imported hermes rows match hermes's own import shape.
+
+    id: YYYYMMDD_HHMMSS_<hex12> (the import id width); source 'import';
+    ended_at NULL so the session stays resumable; counters and active rows
+    correct.
+    """
+    import re
+    import sqlite3 as _sqlite
+    from ctools.agents import HermesAgent
+    base = _hermes_db(tmp_path)
+    agent = HermesAgent(base)
+    doc = {"source": "goose/20261008_1", "context": [
+        {"role": "user", "content": "make a simple snake game in python"},
+        {"role": "assistant", "content": "Created snake.py"}]}
+    new_id = agent.from_common(doc)
+    assert re.fullmatch(r"\d{8}_\d{6}_[0-9a-f]{12}", new_id)
+    conn = _sqlite.connect(str(agent.db_path))
+    cur = conn.cursor()
+    cur.execute("SELECT source, ended_at, hidden, message_count, cwd, title"
+                " FROM sessions WHERE id = ?", (new_id,))
+    source, ended_at, hidden, count, cwd, title = cur.fetchone()
+    assert source == "import"
+    assert ended_at is None and hidden == 0 and count == 2
+    assert cwd and title
+    cur.execute("SELECT role, active, timestamp FROM messages"
+                " WHERE session_id = ? ORDER BY id", (new_id,))
+    rows = cur.fetchall()
+    conn.close()
+    assert [r[0] for r in rows] == ["user", "assistant"]
+    assert all(r[1] == 1 for r in rows)
+    assert rows[0][2] < rows[1][2]
+
+
+def test_cross_agent_goose_to_hermes(tmp_path):
+    """The user's case: a goose session lands in hermes intact."""
+    from ctools.agents import GooseAgent, HermesAgent
+    goose = GooseAgent(_goose_db(tmp_path))
+    hermes = HermesAgent(_hermes_db(tmp_path))
+    new_id = hermes.from_common(goose.to_common("20261008_1"))
+    msgs = hermes.messages(new_id)
+    assert [(m.role, m.content) for m in msgs] == [
+        ("user", "make a simple snake game in python"),
+        ("assistant", "Created `snake.py`. Run it with: python3 snake.py"),
+    ]
+
+
+def test_cross_agent_hermes_to_goose(tmp_path):
+    """The reverse direction: hermes lands in goose intact."""
+    from ctools.agents import GooseAgent, HermesAgent
+    goose = GooseAgent(_goose_db(tmp_path))
+    hermes = HermesAgent(_hermes_db(tmp_path))
+    hermes_id = hermes.from_common(goose.to_common("20261008_1"))
+    new_id = goose.from_common(hermes.to_common(hermes_id))
+    assert new_id != "20261008_1"
+    assert [(m.role, m.content) for m in goose.messages(new_id)] == [
+        ("user", "make a simple snake game in python"),
+        ("assistant", "Created `snake.py`. Run it with: python3 snake.py"),
+    ]
