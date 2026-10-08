@@ -12,7 +12,7 @@
 
 It supports [Claude Desktop](https://claude.com/download), [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [Hermes](https://github.com/NousResearch/hermes-agent), [Goose](https://github.com/aaif-goose/goose), [Kilo](https://github.com/Kilo-Org/kilocode), [FreeBuff](https://github.com/CodebuffAI/freebuff), [Cline](https://github.com/cline/cline), and [omp](https://github.com/can1357/oh-my-pi).
 
-Your work travels with you. The source is never touched, so it's a true copy. And when the destination is on another machine, it's just `ccopy opencode/ses_abc123 ssh://chris@remote/codex`. It pulls the agent's storage over your normal ssh (the remote only needs `sshd` and `tar`, not ctools).
+Your work travels with you. The source is never touched, so it's a true copy. And when the destination is on another machine, it's just `ccopy opencode/ses_abc123 ssh://chris@remote/codex`. It pulls the agent's storage over your normal ssh (the remote only needs `sshd` and `tar`).
 
 Here's an example:
 
