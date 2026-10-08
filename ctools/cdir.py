@@ -20,7 +20,7 @@ import fnmatch
 import json
 import sys
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import typer
 from rich.console import Console
@@ -383,6 +383,60 @@ def _show_specific_sessions(refs: List[str], sort: str, reverse: bool,
     print(f"\n  {len(rows)} session(s)")
 
 
+def _show_agent_glob_sessions(refs: List[str], sort: str, reverse: bool,
+                              formatter, fields, long_format: bool,
+                              one_line: bool, color: bool) -> None:
+    """Render rows for references whose agent part is a glob.
+
+    ls segment semantics for `*/...`, `p*/...` and friends: the agent segment
+    selects installed agents; the session segment is an exact id, a glob over
+    id/name/path (as in `agent/*pattern`), or empty (all sessions). Rows carry
+    the agent prefix in the id column so the merged listing is unambiguous.
+    """
+    rows: List[Tuple[str, Session]] = []
+    for ref in refs:
+        agent_pat, session_pat = parse_ref(ref)
+        for name, agent in AGENTS.items():
+            if not fnmatch.fnmatch(name, agent_pat) or not agent.exists():
+                continue
+            with reporting():
+                if session_pat and any(c in session_pat for c in "*?["):
+                    sessions = [s for s in agent.sessions()
+                                if _matches_pattern(s, session_pat)]
+                elif session_pat:
+                    s = agent.session(session_pat)
+                    sessions = [s] if s is not None else []
+                else:
+                    sessions = agent.sessions()
+            rows.extend((name, s) for s in sessions)
+
+    if not rows:
+        console.print(f"[yellow]No sessions found matching "
+                      f"{', '.join(refs)}[/yellow]")
+        return
+
+    if one_line:
+        for name, s in rows:
+            print(f"{name}/{s.id}")
+        return
+
+    if formatter:
+        print(formatter.format_sessions([s for _, s in rows]))
+        return
+
+    rfields = fields if fields is not None else (LONG_FIELDS if long_format
+                                                 else DEFAULT_FIELDS)
+    rows.sort(key=lambda ns: _sort_key(sort)(ns[1]), reverse=not reverse)
+    body_rows = []
+    for name, s in rows:
+        values = _session_values(s, rfields)
+        if 'id' in values:
+            values['id'] = f"{name}/{s.id}"
+        body_rows.append((True, values))
+    _render_table(body_rows, rfields, color=color)
+    print(f"\n  {len(body_rows)} session(s)")
+
+
 def _handle_one_ref(path: str, sort: str, reverse: bool, formatter, fields,
                     long_format: bool, one_line: bool, recursive: bool,
                     color: bool) -> None:
@@ -481,22 +535,41 @@ def main(
             _list_agents(formatter)
         return
 
+    def _is_agent_glob(ref: str) -> bool:
+        agent, _ = parse_ref(ref)
+        return any(c in agent for c in "*?[")
+
     def _is_exact(ref: str) -> bool:
         _, sid = parse_ref(ref)
         return bool(sid) and not any(c in sid for c in "*?[")
 
-    exact = [p for p in paths if _is_exact(p)]
-    rest = [p for p in paths if not _is_exact(p)]
+    agent_globs = [p for p in paths if _is_agent_glob(p)]
+    exact = [p for p in paths if not _is_agent_glob(p) and _is_exact(p)]
+    rest = [p for p in paths if not _is_agent_glob(p) and not _is_exact(p)]
+
+    emitted = False
+
+    def _sep() -> None:
+        nonlocal emitted
+        if emitted and not (one_line or formatter):
+            print()
+        emitted = True
+
+    # Cross-agent globs (*/..., p*/...) list matching sessions as rows.
+    if agent_globs:
+        _sep()
+        _show_agent_glob_sessions(agent_globs, sort, reverse, formatter,
+                                  fields, long_format, one_line, use_color)
 
     # Exact agent/session references list as rows (ls file semantics),
     # one or many.
     if exact:
+        _sep()
         _show_specific_sessions(exact, sort, reverse, formatter, fields,
                                 long_format, one_line, use_color)
 
-    for i, path in enumerate(rest):
-        if i and not (one_line or formatter):
-            print()
+    for path in rest:
+        _sep()
         _handle_one_ref(path, sort, reverse, formatter, fields, long_format,
                         one_line, recursive, use_color)
 

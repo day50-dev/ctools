@@ -164,6 +164,25 @@ $ cdir opencode/*llcat*
   ses_13263a5edffeFNJ7tidEfj90ze     Add Ollama transport option to llcat.py
 .fi
 .RE
+.PP
+A glob in the \fBagent\fR part selects agents; the session part then filters
+within each matched agent, exactly as in the single-agent case (ls
+\fB*/...\fR semantics \u2014 each \fB*\fR stays in its own segment). Rows are
+prefixed with the agent name so the merged listing is unambiguous, and they
+sort like a normal listing. The session part may be an exact id (searched
+across the matched agents), a glob over id/name/dir, or empty
+(\fBcdir '*/'\fR lists every session):
+.PP
+.RS
+.nf
+$ cdir '*/*ctools*'
+  ID                                       NAME
+  pi/01a115c5-85e9-7548-9799-1bae4885f4ba  look at session.json we need to pick up this task
+  opencode/ses_ef157d4cfffeXpA7eXkgskzsbs  ctxtols -S sorting and cgrep -l -h -H
+
+  2 session(s)
+.fi
+.RE
 .SH EXAMPLES
 List all known agents:
 .PP

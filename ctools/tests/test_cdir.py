@@ -915,7 +915,99 @@ def test_cli_multiple_exact_ids_bad_id_reported(tmp_path):
         tmp_path, ["opencode/ses_abc123", "opencode/ses_bogus"])
     assert result.exit_code == 0
     assert 'No such session: opencode/ses_bogus' in result.stdout
-    assert 'ses_abc123' in result.stdout
+
+
+def _run_two_agent_cli(tmp_path, args):
+    """Run cdir with opencode and pi base paths pointed at tmp_path."""
+    from ctools.cdir import AGENTS
+    oc_orig, pi_orig = AGENTS['opencode'].base_path, AGENTS['pi'].base_path
+    AGENTS['opencode'].base_path = tmp_path
+    AGENTS['pi'].base_path = tmp_path
+    try:
+        return runner.invoke(app, args)
+    finally:
+        AGENTS['opencode'].base_path = oc_orig
+        AGENTS['pi'].base_path = pi_orig
+
+
+def _make_pi_session_for_glob(tmp_path):
+    """One pi session named 'My Session' to pair with the opencode fixture."""
+    _make_pi_session(tmp_path, '019fe37e-d6a2-7344-8a05-5b04d8d40161',
+                     name='My Session')
+
+
+def test_cli_agent_glob_cross_agent(tmp_path):
+    """cdir '*/*pattern*' matches sessions across agents, rows prefixed."""
+    _make_opencode_db_glob(tmp_path)
+    _make_pi_session_for_glob(tmp_path)
+    # 'python' matches only the opencode session's name.
+    result = _run_two_agent_cli(tmp_path, ["*/*python*"])
+    assert result.exit_code == 0
+    assert 'opencode/ses_abc123' in result.stdout
+    assert 'pi/' not in result.stdout
+    assert '1 session(s)' in result.stdout
+
+
+def test_cli_agent_glob_matches_other_agent_only(tmp_path):
+    """A pattern hitting only the pi session lists it with the pi prefix."""
+    _make_opencode_db_glob(tmp_path)
+    _make_pi_session_for_glob(tmp_path)
+    result = _run_two_agent_cli(tmp_path, ["*/*my session*"])
+    assert result.exit_code == 0
+    assert 'pi/019fe37e-d6a2-7344-8a05-5b04d8d40161' in result.stdout
+    assert 'opencode/' not in result.stdout
+
+
+def test_cli_agent_glob_all_sessions_prefixed(tmp_path):
+    """cdir '*/' lists every session of every installed matched agent."""
+    _make_opencode_db_glob(tmp_path)
+    _make_pi_session_for_glob(tmp_path)
+    result = _run_two_agent_cli(tmp_path, ["*/"])
+    assert result.exit_code == 0
+    assert 'opencode/ses_abc123' in result.stdout
+    assert 'opencode/ses_llcat1' in result.stdout
+    assert 'pi/019fe37e-d6a2-7344-8a05-5b04d8d40161' in result.stdout
+    assert '4 session(s)' in result.stdout
+
+
+def test_cli_agent_glob_agent_name_segment(tmp_path):
+    """The agent segment is itself a glob: 'p*/' selects only pi."""
+    _make_opencode_db_glob(tmp_path)
+    _make_pi_session_for_glob(tmp_path)
+    result = _run_two_agent_cli(tmp_path, ["p*/"])
+    assert result.exit_code == 0
+    assert 'pi/019fe37e-d6a2-7344-8a05-5b04d8d40161' in result.stdout
+    assert 'opencode/' not in result.stdout
+
+
+def test_cli_agent_glob_exact_id_across_agents(tmp_path):
+    """An exact id under a glob agent ('*/<id>') is searched across agents."""
+    _make_opencode_db_glob(tmp_path)
+    _make_pi_session_for_glob(tmp_path)
+    result = _run_two_agent_cli(
+        tmp_path, ["*/019fe37e-d6a2-7344-8a05-5b04d8d40161"])
+    assert result.exit_code == 0
+    assert 'pi/019fe37e-d6a2-7344-8a05-5b04d8d40161' in result.stdout
+    assert '1 session(s)' in result.stdout
+
+
+def test_cli_agent_glob_one_line(tmp_path):
+    """-1 with a cross-agent glob prints agent/id refs one per line."""
+    _make_opencode_db_glob(tmp_path)
+    _make_pi_session_for_glob(tmp_path)
+    result = _run_two_agent_cli(tmp_path, ["-1", "*/"])
+    assert result.exit_code == 0
+    lines = {l for l in result.stdout.split() if l}
+    assert 'opencode/ses_abc123' in lines
+    assert 'pi/019fe37e-d6a2-7344-8a05-5b04d8d40161' in lines
+
+
+def test_cli_agent_glob_no_match(tmp_path):
+    """A cross-agent glob with no match reports cleanly."""
+    _make_opencode_db_glob(tmp_path)
+    result = _run_two_agent_cli(tmp_path, ["zz*/nope*"])
+    assert result.exit_code == 0
+    assert 'No sessions found' in result.stdout
 
 
 def test_cli_multiple_exact_ids_sorted(tmp_path):

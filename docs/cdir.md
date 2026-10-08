@@ -16,6 +16,7 @@ cdir pi/                    # sessions for pi coding agent
 cdir -R                     # all agents, recursive
 cdir opencode/ses_abc123    # show that session's row (contents: ccat)
 cdir opencode/*llcat*       # filter: glob on session id, name, or working dir
+cdir '*/*ctools*'           # cross-agent glob: any agent, session matching the pattern
 ```
 
 ## Sorting
@@ -42,6 +43,26 @@ A reference with no wildcards (`cdir opencode/ses_abc123`) lists that one
 session as a row; only a pattern with `*`, `?`, or `[` switches to filtering.
 Combine with `-l`, `-S`, `-1`, etc. as usual. To see the session's
 conversation, use `ccat opencode/ses_abc123`.
+
+### Cross-agent globs
+
+A glob in the **agent** part selects agents; the session part then filters
+within each matched agent, exactly as in the single-agent case. This is ls
+`*/...` semantics: each `*` stays in its own segment.
+
+```sh
+$ cdir '*/*ctools*'    # any agent, session id/name/dir matching *ctools*
+  ID                                       NAME
+  pi/01a115c5-85e9-7548-9799-1bae4885f4ba  look at session.json we need to pick up this task
+  opencode/ses_ef157d4cfffeXpA7eXkgskzsbs  ctxtols -S sorting and cgrep -l -h -H
+  ...
+```
+
+- `*` matches any installed agent; `p*` matches `pi` only.
+- The session part is an exact id (searched across the matched agents), a
+  glob over id/name/dir, or empty (`cdir '*/'` lists every session).
+- Rows are prefixed with the agent name so the merged listing is unambiguous,
+  and they sort like a normal listing (`-t`, `-S`, `-u`, `-r` all apply).
 
 ## Multiple sessions
 
