@@ -17,11 +17,9 @@ declares success.
 """
 
 import argparse
-import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
-from ctools import __version__
 from ctools.agents import REGISTRY, AgentError, get_agent
 from ctools.backup import (Backup, Backups, BackupError, restore_backup,
                            verify_storage, session_count)

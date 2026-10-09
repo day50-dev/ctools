@@ -27,12 +27,12 @@ import json
 import shutil
 import sqlite3
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from ctools.agents import Agent, AgentError
+from ctools.agents import Agent
 
 __all__ = [
     "BackupError", "Backup", "Backups",
@@ -194,14 +194,15 @@ def _session_table(agent: Agent) -> Optional[str]:
         try:
             conn = sqlite3.connect(str(agent.storage_path))
             try:
-                conn.execute(
+                row = conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
                     (name,)).fetchone()
-                return name
             finally:
                 conn.close()
         except sqlite3.Error:
-            continue
+            row = None
+        if row is not None:
+            return name
     return None
 
 
@@ -342,7 +343,9 @@ class Backups:
                     out.append(Backup.load(child))
                 except (OSError, json.JSONDecodeError, KeyError):
                     continue  # skip a torn/corrupt manifest
-        out.sort(key=lambda b: b.when, reverse=True)
+        # `when` has second precision; the dir name encodes milliseconds and
+        # a collision counter, so it breaks same-second ties in creation order.
+        out.sort(key=lambda b: (b.when, b.path.name), reverse=True)
         return out
 
     def all(self) -> List[Backup]:
@@ -351,7 +354,7 @@ class Backups:
             for child in self.root.iterdir():
                 if child.is_dir():
                     out.extend(self.for_agent(child.name))
-        out.sort(key=lambda b: b.when, reverse=True)
+        out.sort(key=lambda b: (b.when, b.path.name), reverse=True)
         return out
 
     def prune(self, agent_name: str, keep: int) -> int:

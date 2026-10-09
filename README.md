@@ -49,6 +49,7 @@ As you can see, these are unix-friendly tools using simple paradigms that you ar
 | `cdir` | List sessions (ls for your history) | [docs/cdir.md](docs/cdir.md) |
 | `ccat` | Print one or more conversations (cat for your history) | [docs/ccat.md](docs/ccat.md) |
 | `ccopy` | Copy a whole conversation from one agent to a new session in another | [docs/ccopy.md](docs/ccopy.md) |
+| `crecover` | List, verify, and restore the storage backups ccopy takes before each write | [docs/crecover.md](docs/crecover.md) |
 | `cextract` | Extract concepts from a session into files, and inject them back | [docs/cextract.md](docs/cextract.md) |
 | `cconnect` | Live concept pipelines between sessions | [docs/cconnect.md](docs/cconnect.md) |
 | `cdu` | Token usage per session (du for context windows) | [docs/cdu.md](docs/cdu.md) |
@@ -87,6 +88,32 @@ graph LR
 ```
 
 Context windows are endpoints: opencode, Claude Code, Codex, Pi. They all speak different protocols, but they all consume the same packets. See [cextract](docs/cextract.md) for the concept packet format, strategies, and the filter configs (decision model and JSON-RPC).
+
+## Write safety
+
+The session-mover tools write into your agents' **live** storage — for the
+SQLite-backed agents (opencode, goose, kilo, hermes) that's the database that
+holds every session of that agent. A write that fails or is interrupted
+part-way can corrupt it, and losing an agent's whole history would be
+unforgivable.
+
+So every local write is guarded:
+
+1. ctools **snapshots the agent's storage first** (SQLite via `VACUUM INTO` —
+   a consistent copy even mid-write; file agents via a tree copy), kept under
+   `~/.local/share/ctools/backups/<agent>/` (20 newest per agent).
+2. After the write it **verifies** the storage: the DB opens,
+   `PRAGMA integrity_check` passes, the session table still exists, and the
+   session count did not decrease. A database that is structurally valid but
+   emptied of data is caught too.
+3. If anything looks wrong, the snapshot is **restored automatically** — you
+   get a clean error, not a broken database.
+
+And because a restore is itself a write, it snapshots what it overwrites, so
+**every restore is undoable**. For the out-of-band case (you notice days later
+that an agent's history vanished), `crecover list` / `verify` / `restore` are
+there. Details: [ccopy — safety](docs/ccopy.md#safety-automatic-backups) and
+[crecover](docs/crecover.md).
 
 ## Supported endpoints
 

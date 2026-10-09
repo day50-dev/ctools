@@ -4,6 +4,11 @@ from ctools.agents import REGISTRY
 from ctools.log import configure_logging
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers",
+                            "live_ssh: test runs real ssh against localhost")
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _setup_logging():
     configure_logging(verbose=True)

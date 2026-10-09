@@ -20,7 +20,9 @@ import json
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from datetime import datetime
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -169,6 +171,77 @@ class Handler(BaseHTTPRequestHandler):
     def _error(self, code: int, message: str):
         self._json({"error": message}, code)
 
+    # --- model discovery ---------------------------------------------------
+
+    @staticmethod
+    def _http_get_json(url: str, headers: dict, timeout: float = 4.0):
+        """GET ``url`` and return ``(status, parsed_json_or_text, err)``.
+
+        Never raises for the common failure modes (connection refused, DNS,
+        timeout, bad JSON) — those come back as a non-2xx status plus an
+        error string so the caller can fall through to the next scheme.
+        """
+        req = urllib.request.Request(url, headers=headers or {})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                status = resp.getcode()
+                raw = resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            return e.code, None, f"HTTP {e.code}"
+        except (urllib.error.URLError, OSError) as e:
+            reason = getattr(e, "reason", None) or e
+            return 0, None, str(reason)
+        except Exception as e:  # noqa: BLE001 - network surprises
+            return 0, None, f"{type(e).__name__}: {e}"
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            parsed = raw
+        return status, parsed, None
+
+    def _get_models(self):
+        """List the models a server at ``?host=`` advertises.
+
+        Tries Ollama's native ``/api/tags`` first (returns model *names*),
+        then the OpenAI-compatible ``/v1/models`` (returns model *ids*). An
+        optional ``api_key`` is sent as a Bearer token for OpenAI-style
+        servers. Returns ``{host, source, models: [...]}`` or a 400/502 with
+        a useful reason.
+        """
+        q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else {})
+        host = (q.get("host", ["http://localhost:11434"])[0] or "").strip().rstrip("/")
+        api_key = (q.get("api_key", [""])[0] or "").strip()
+        if not host:
+            return self._error(400, "No host given.")
+        if host not in ("http://", "https://") and "://" not in host:
+            host = "http://" + host
+
+        # 1) Ollama native
+        status, data, err = self._http_get_json(f"{host}/api/tags", {}, timeout=3.0)
+        if status == 200 and isinstance(data, dict) and isinstance(data.get("models"), list):
+            names = [m.get("name") or m.get("model") for m in data["models"] if isinstance(m, dict)]
+            names = sorted({n for n in names if n})
+            return self._json({"host": host, "source": "ollama", "models": names})
+
+        # 2) OpenAI-compatible
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        status2, data2, err2 = self._http_get_json(f"{host}/v1/models", headers, timeout=4.0)
+        if status2 == 200 and isinstance(data2, dict) and isinstance(data2.get("data"), list):
+            ids = [m.get("id") for m in data2["data"] if isinstance(m, dict)]
+            ids = sorted({i for i in ids if i})
+            return self._json({"host": host, "source": "openai", "models": ids})
+
+        # Neither worked: report the most useful reason we have.
+        reasons = []
+        if err:
+            reasons.append(f"ollama /api/tags: {err}")
+        if err2:
+            reasons.append(f"openai /v1/models: {err2}")
+        detail = "; ".join(reasons) or "no model list returned"
+        return self._error(502, f"Could not fetch models from {host}. {detail}")
+
     def _path(self) -> tuple:
         parts = [p for p in self.path.split("?", 1)[0].strip("/").split("/") if p]
         return parts
@@ -201,6 +274,9 @@ class Handler(BaseHTTPRequestHandler):
         return self._error(404, "Not found")
 
     def api_get(self, parts):
+        if parts == ["models"]:
+            return self._get_models()
+
         if parts == ["agents"]:
             out = []
             for brief in (_agent_brief(a) for a in REGISTRY.values()):
@@ -628,6 +704,13 @@ button.primary { background: var(--accent); border: none; color: #08111f;
   font-weight: 600; border-radius: 8px; padding: 7px 14px; cursor: pointer;
   font-size: 13px; }
 button.primary:disabled { opacity: .5; cursor: default; }
+.modelrow { display: flex; gap: 6px; }
+.modelrow input { flex: 1; min-width: 0; }
+.modelrow button { flex: none; background: var(--panel2); border: 1px solid var(--border);
+  color: var(--dim); border-radius: 8px; padding: 0 12px; font-size: 12px;
+  cursor: pointer; white-space: nowrap; }
+.modelrow button:hover { border-color: var(--accent); color: var(--accent); }
+.modelrow button:disabled { opacity: .5; cursor: default; }
 table { width: 100%; border-collapse: collapse; }
 th { text-align: left; color: var(--dim); font-size: 11px; text-transform: uppercase;
   letter-spacing: .6px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
@@ -1401,9 +1484,14 @@ function stratFormFields() {
         <div class="hint">Any OpenAI-compatible chat server. Ollama's default is
           <code>http://localhost:11434</code>.</div></div>
       <div class="field"><label for="st-model">Model</label>
-        <input id="st-model" placeholder="e.g. qwen2.5:3b">
-        <div class="hint">Must exist on that server — check with
-          <code>ollama list</code>.</div></div>
+        <div class="modelrow">
+          <input id="st-model" list="st-models" placeholder="e.g. qwen2.5:3b">
+          <button type="button" id="st-fetch" onclick="fetchModels('st-model','st-host','st-models','st-fetch')">fetch models</button>
+        </div>
+        <datalist id="st-models"></datalist>
+        <div class="hint">Must exist on that server — hit “fetch models” to list what
+          the server has (Ollama <code>/api/tags</code> or OpenAI <code>/v1/models</code>),
+          or check with <code>ollama list</code>.</div></div>
     </div>
     <div class="field"><label for="st-key">API key <span>optional</span></label>
       <input id="st-key" type="password" placeholder="leave empty for Ollama">
@@ -1425,6 +1513,31 @@ function fillDefaultPrompt() {
     + 'JSON object with fields: type (constraint|goal|preference|observation|reference), '
     + 'description (<20 words), short (<250 chars), medium (<1000 chars), long (full text). '
     + 'Output a JSON array. No other text.';
+}
+async function fetchModels(inputId, hostId, listId, btnId) {
+  const hostEl = $("#" + hostId);
+  const listEl = $("#" + listId);
+  const btn = $("#" + btnId);
+  const host = hostEl ? hostEl.value.trim() : "";
+  if (btn) { btn.disabled = true; btn.textContent = "fetching…"; }
+  try {
+    const keyId = inputId === "st-model" ? "st-key" : null;
+    const key = keyId ? $("#" + keyId).value.trim() : "";
+    const data = await api("/api/models?host=" + encodeURIComponent(host)
+      + (key ? "&api_key=" + encodeURIComponent(key) : ""));
+    const names = data.models || [];
+    if (!names.length) throw new Error(data.error || "server returned no models");
+    listEl.innerHTML = names.map(m => `<option value="${esc(m)}">`).join("");
+    const input = $("#" + inputId);
+    if (input && !input.value.trim() && names.length === 1) input.value = names[0];
+    if (btn) btn.textContent = `${names.length} models`;
+  } catch (e) {
+    alert("Could not fetch models: " + e.message);
+    if (btn) btn.textContent = "fetch models";
+  } finally {
+    if (btn) btn.disabled = false;
+    if (btn && !btn.textContent.includes("models")) btn.textContent = "fetch models";
+  }
 }
 function saveStrategy() {
   const name = $("#st-name").value.trim();
@@ -1470,9 +1583,13 @@ function filterBackend() {
           <input id="fl-host" value="http://localhost:11434">
           <div class="hint">Ollama default is <code>http://localhost:11434</code>.</div></div>
         <div class="field"><label for="fl-model">Model</label>
-          <input id="fl-model" placeholder="e.g. tev1">
+          <div class="modelrow">
+            <input id="fl-model" list="fl-models" placeholder="e.g. tev1">
+            <button type="button" id="fl-fetch" onclick="fetchModels('fl-model','fl-host','fl-models','fl-fetch')">fetch models</button>
+          </div>
+          <datalist id="fl-models"></datalist>
           <div class="hint">A trained decision model on that server.
-            <code>ollama list</code></div></div>
+            “fetch models” lists what the server has, or use <code>ollama list</code>.</div></div>
         <div class="field"><label for="fl-endpoint">Endpoint</label>
           <select id="fl-endpoint">
             <option value="systemone">systemone (typed, Ollama)</option>

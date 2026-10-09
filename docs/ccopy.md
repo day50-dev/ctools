@@ -104,6 +104,35 @@ ccopy --export-json opencode/ses_abc | ccopy --import-json codex
 ccat opencode/ses_abc | ccopy - codex
 ```
 
+## Safety: automatic backups
+
+A local `ccopy` writes a new session into the destination agent's **live**
+storage. For the SQLite-backed agents that means inserting rows into the
+database that holds *all* of that agent's sessions — a write that fails or is
+interrupted part-way could take the whole sessions database down with it.
+
+So `ccopy` guards every local write:
+
+1. **Before** the write it snapshots the destination agent's storage (for
+   SQLite agents via `VACUUM INTO`, so the copy is consistent even mid-write).
+2. **After** the write it verifies the database is still intact *and* that the
+   session count did not decrease — a write that corrupts the DB or wipes it
+   is caught even when `PRAGMA integrity_check` would pass on the wreckage.
+3. If either check fails, the snapshot is **restored automatically** and
+   ccopy reports what happened instead of leaving a broken database behind.
+
+On success ccopy prints where the snapshot went:
+
+```
+Backup of opencode storage saved before this write:
+  ~/.local/share/ctools/backups/opencode/20261008T201349-405
+Restore it with: crecover restore opencode ~/.local/share/ctools/backups/opencode/20261008T201349-405
+```
+
+Snapshots are retained (20 newest per agent) so you can recover out-of-band
+failures later — see [crecover](crecover.md). A *remote* destination writes on
+the other host, so there is no local storage to back up in that case.
+
 ## Related
 
 - To extract **concepts** (constraints, preferences, goals) from a session into

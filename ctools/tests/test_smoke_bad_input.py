@@ -36,7 +36,11 @@ def _run(argv, home=None, inp=None, timeout=30):
     """Run a command (already a full argv) in a fresh subprocess."""
     env = dict(os.environ)
     if home is not None:
+        # Isolate the whole data area: HOME for agent storage, and XDG_DATA_HOME
+        # (which ctools.backup prefers for the backup root) so a developer
+        # machine that sets XDG_DATA_HOME never sees test backups.
         env["HOME"] = str(home)
+        env["XDG_DATA_HOME"] = str(Path(home) / ".local" / "share")
         env.pop("USERPROFILE", None)
     try:
         return subprocess.run(
@@ -299,6 +303,7 @@ def webui(opencode_home):
     port = _free_port()
     env = dict(os.environ)
     env["HOME"] = str(opencode_home)
+    env["XDG_DATA_HOME"] = str(opencode_home / ".local" / "share")
     proc = subprocess.Popen(
         [sys.executable, "-m", "ctools.webui", "--port", str(port)],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -463,3 +468,62 @@ def test_webui_save_config_rejects_traversal_name(webui):
 def test_webui_get_unknown_agent(webui):
     status, body = _get(webui, "/api/agents/no-such-agent/sessions")
     _api_error(status, body, "Unknown agent")
+
+
+def test_webui_models_down_host_is_clean_502(webui):
+    """An unreachable host must yield a clean 502 with a reason — never a
+    traceback, a dropped connection, or a 500."""
+    status, body = _get(webui, "/api/models?host=http://127.0.0.1:1")
+    _api_error(status, body, "Could not fetch models")
+    assert "Traceback" not in body
+
+
+def test_webui_models_ollama_and_openai_shapes(webui):
+    """/api/models speaks Ollama (/api/tags) and OpenAI (/v1/models)."""
+    import json as _json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    def _fake(path_to_serve, payload):
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                if self.path == path_to_serve:
+                    body = _json.dumps(payload).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv, srv.server_address[1]
+
+    ollama = {
+        "models": [{"name": "qwen2.5:3b"}, {"name": "tev1"},
+                   {"name": "llama3.2:1b"}],
+    }
+    so, po = _fake("/api/tags", ollama)
+    try:
+        status, body = _get(webui, f"/api/models?host=http://127.0.0.1:{po}")
+        assert status == 200, body
+        d = _json.loads(body)
+        assert d["source"] == "ollama"
+        assert d["models"] == ["llama3.2:1b", "qwen2.5:3b", "tev1"]
+    finally:
+        so.shutdown()
+
+    openai = {"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]}
+    sa, pa = _fake("/v1/models", openai)
+    try:
+        status, body = _get(webui, f"/api/models?host=http://127.0.0.1:{pa}")
+        assert status == 200, body
+        d = _json.loads(body)
+        assert d["source"] == "openai"
+        assert d["models"] == ["gpt-4o", "gpt-4o-mini"]
+    finally:
+        sa.shutdown()

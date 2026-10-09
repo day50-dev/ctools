@@ -17,6 +17,27 @@ def _clear_probe_cache():
     yield
     ccopy._ctools_probes.clear()
 
+
+@pytest.fixture(autouse=True)
+def _isolate_backup_home(tmp_path, monkeypatch, request):
+    """ccopy now snapshots the destination agent's storage before every
+    local write (``ctools.backup``), writing under the XDG data home. Point
+    both HOME and XDG_DATA_HOME at a throwaway dir so the tests never
+    create (or read) backups in the developer's real home.
+
+    The live-ssh tests are exempt: ssh itself needs the real ``~/.ssh``.
+    """
+    if "live_ssh" in request.node.keywords:
+        yield
+        return
+    home = tmp_path / "home"
+    home.mkdir()
+    data = home / ".local" / "share"
+    data.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_DATA_HOME", str(data))
+    yield
+
 runner = Runner()
 
 
@@ -804,6 +825,7 @@ def _ssh_localhost_available() -> bool:
         return False
 
 
+@pytest.mark.live_ssh
 @pytest.mark.skipif(not _ssh_localhost_available(),
                     reason="ssh to localhost not available")
 def test_live_ssh_transport():
