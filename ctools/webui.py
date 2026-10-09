@@ -89,10 +89,16 @@ def _session_brief(s) -> dict:
 def _do_search(pattern: str, agents, ignore_case: bool, max_results: int, fmt: str = "default"):
     if _compile_pattern is None:
         return None, "Search unavailable (ctools.cgrep failed to import)."
+    flags = re.IGNORECASE if ignore_case else 0
+    # Regex first (grep-style); if the pattern isn't a valid regex, fall back
+    # to a literal substring so the navbar search box "just works" for plain
+    # text. The response says which mode ran.
+    mode = "regex"
     try:
-        compiled = _compile_pattern(pattern, re.IGNORECASE if ignore_case else 0)
-    except re.error as e:
-        return None, f"Invalid pattern: {e}"
+        compiled = _compile_pattern(pattern, flags)
+    except re.error:
+        mode = "literal"
+        compiled = re.compile(re.escape(pattern), flags)
 
     if agents == ["*"]:
         targets = list(REGISTRY.values())
@@ -104,16 +110,43 @@ def _do_search(pattern: str, agents, ignore_case: bool, max_results: int, fmt: s
                 return None, f"Unknown agent: {name}"
             targets.append(agent)
 
+    # Pass 1 — session metadata (id, name, path). Cheap: session objects only,
+    # no line scanning. Independent of the content cap below.
+    session_hits = []
+    agent_sessions = {}
+    for agent in targets:
+        if not agent.exists():
+            continue
+        try:
+            sessions = agent.sessions()
+        except AgentError:
+            continue
+        agent_sessions[agent.name] = sessions
+        for session in sessions:
+            hay = "\n".join(filter(None, [
+                session.id, session.name or "", getattr(session, "path", "") or ""]))
+            if hay and compiled.search(hay):
+                session_hits.append({
+                    "agent": agent.name,
+                    "session_id": session.id,
+                    "name": session.name or "",
+                    "path": getattr(session, "path", "") or "",
+                    "mtime": session.mtime.isoformat() if session.mtime else None,
+                    "message_count": session.message_count or 0,
+                })
+    session_hits.sort(key=lambda s: s["mtime"] or "", reverse=True)
+    session_hits = session_hits[:200]
+
+    # Pass 2 — conversation content, capped.
     matches = []
     per_agent = {}
     errors = []
     for agent in targets:
         if not agent.exists():
             continue
-        try:
-            sessions = agent.sessions()
-        except AgentError as e:
-            errors.append(f"{agent.name}: {e}")
+        sessions = agent_sessions.get(agent.name)
+        if sessions is None:
+            errors.append(f"{agent.name}: sessions unreadable")
             continue
         for session in sessions:
             try:
@@ -136,7 +169,11 @@ def _do_search(pattern: str, agents, ignore_case: bool, max_results: int, fmt: s
         if len(matches) >= max_results:
             break
 
-    result = {"matches": matches, "total": len(matches), "per_agent": per_agent, "errors": errors}
+    result = {
+        "matches": matches, "total": len(matches), "per_agent": per_agent,
+        "errors": errors, "sessions": session_hits,
+        "sessions_total": len(session_hits), "mode": mode,
+    }
     if fmt != "default":
         try:
             formatter = get_formatter(fmt)
@@ -645,15 +682,27 @@ INDEX_HTML = r"""<!DOCTYPE html>
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-header { display: flex; align-items: baseline; gap: 14px; padding: 14px 22px;
+header { display: flex; align-items: center; gap: 14px; padding: 12px 22px;
   border-bottom: 1px solid var(--border); background: var(--panel);
-  position: sticky; top: 0; z-index: 5; }
+  position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
 header h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: .3px; cursor: pointer; }
 header h1:hover { color: var(--accent); }
 header h1 span { color: var(--accent); }
 header .ver { color: var(--dim); font-size: 12px; font-family: var(--mono); cursor: pointer; }
 header .ver:hover { color: var(--accent); text-decoration: underline; }
-nav { display: flex; gap: 4px; margin-left: auto; }
+.navsearch { display: flex; align-items: center; gap: 4px; margin-left: auto;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
+  padding: 3px 6px 3px 10px; flex: 0 1 340px; min-width: 170px; }
+.navsearch:focus-within { border-color: var(--accent); }
+.navsearch input[type=search] { flex: 1; min-width: 0; font-size: 13px; padding: 5px 0;
+  background: none; border: none; }
+.navsearch .ic { display: flex; align-items: center; gap: 3px; font-size: 11px;
+  color: var(--dim); cursor: pointer; user-select: none; white-space: nowrap; }
+.navsearch .ic input { width: auto; margin: 0; }
+.navsearch button { background: none; border: none; color: var(--dim); font-size: 15px;
+  cursor: pointer; padding: 4px 6px; border-radius: 6px; line-height: 1; }
+.navsearch button:hover { color: var(--accent); background: var(--panel2); }
+nav { display: flex; gap: 4px; }
 nav button { background: none; border: 1px solid transparent; color: var(--dim);
   padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; }
 nav button:hover { color: var(--text); background: var(--panel2); }
@@ -664,6 +713,8 @@ main { padding: 20px 22px 60px; max-width: 1100px; margin: 0 auto; }
 h2 { font-size: 15px; margin: 22px 0 10px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .8px; font-weight: 600; }
 h2:first-child { margin-top: 0; }
+.crumb { color: var(--accent); text-decoration: none; cursor: pointer; }
+.crumb:hover { text-decoration: underline; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
   gap: 12px; }
 .card { background: var(--panel); border: 1px solid var(--border);
@@ -794,9 +845,12 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
 <header>
   <h1>ctools<span>.</span></h1>
   <span class="ver" id="ver"></span>
+  <div class="navsearch" title="Search sessions and conversations — / to focus, Ctrl+K also works">
+    <input type="search" id="q" placeholder="search sessions & conversations…" autocomplete="off" spellcheck="false">
+    <button id="qbtn" title="Search (Enter)" aria-label="Search">⌕</button>
+  </div>
   <nav>
     <button data-view="overview">Overview</button>
-    <button data-view="search">Search</button>
     <button data-view="sessions">Sessions</button>
     <button data-view="converse">Conversation</button>
     <button data-view="configs">Strategies &amp; Filters</button>
@@ -818,15 +872,20 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
   </section>
 
   <section id="view-search" class="view">
-    <h2>Search every session</h2>
+    <h2>Search</h2>
+    <p class="dim small" id="q-intro">Type a pattern in the bar above (or press <b>/</b>) — it searches
+      session ids, names, paths <b>and</b> the content of every conversation on this machine,
+      all at once. Then filter the results below.</p>
     <div class="toolbar">
-      <input type="search" id="q" placeholder="regex, e.g. snake game|TODO|ssl" autofocus>
-      <label class="small dim" style="display:flex;align-items:center;gap:6px">
-        <input type="checkbox" id="qi" style="width:auto"> -i
-      </label>
-      <button class="primary" id="qbtn">Search</button>
+      <div id="q-agents"></div>
+      <div id="q-types" style="display:flex;gap:6px;flex-wrap:wrap">
+        <span class="chip on" data-t="all">everything</span>
+        <span class="chip" data-t="sessions">sessions only</span>
+        <span class="chip" data-t="matches">matches only</span>
+      </div>
     </div>
-    <div id="q-agents"></div>
+    <p id="q-summary" class="small dim"></p>
+    <div id="q-sessions"></div>
     <div id="q-result"></div>
   </section>
 
@@ -963,7 +1022,16 @@ function parseHash() {
   const h = decodeURIComponent(location.hash.replace(/^#/, ""));
   if (!h) return {view: "overview"};
   const parts = h.split("/");
-  if (parts[0] === "search") return {view: "search"};
+  if (parts[0] === "search" || parts[0].startsWith("search?")) {
+    let q = null, ic = false;
+    const qi = parts[0].indexOf("?");
+    if (qi >= 0) (parts[0].slice(qi + 1).split("&")).forEach(kv => {
+      const [k, v] = kv.split("=");
+      if (k === "q" && v !== "") q = v;
+      if (k === "i") ic = v === "1";
+    });
+    return {view: "search", q, ic};
+  }
   if (parts[0] === "configs") return {view: "configs"};
   if (parts[0] === "sessions" && parts[1]) {
     const seg = parts[1].split("?");
@@ -1000,6 +1068,15 @@ function applyRoute() {
     if (r.sort) $("#s-sort").value = r.sort;
     const key = $("#s-agent").value + "|" + $("#s-sort").value;
     if (key !== window._shownSessKey) { window._shownSessKey = key; listSessions(); }
+  }
+  if (r.view === "search") {
+    if (r.q != null && r.q !== "") {
+      if (r.q !== $("#q").value) $("#q").value = r.q;
+      $("#qi").checked = !!r.ic;
+      runGlobalSearch(); // fetches only if the pattern/case changed
+    } else if (LAST_SEARCH) {
+      renderSearch();
+    }
   }
   if (r.view === "converse" &&
       (!CONV || CONV.agent !== r.agent || CONV.session_id !== r.sid)) {
@@ -1125,8 +1202,17 @@ async function loadOverview() {
       document.querySelectorAll("#q-agents .chip")
         .forEach(x => x.classList.remove("on"));
       c.classList.add("on");
-      // clicking an agent chip searches immediately — no extra button click
-      if ($("#q").value.trim()) doSearch();
+      // chips filter the already-fetched results client-side — instant
+      searchAgent = c.dataset.a;
+      renderSearch();
+    });
+  document.querySelectorAll("#q-types .chip").forEach(c =>
+    c.onclick = () => {
+      document.querySelectorAll("#q-types .chip")
+        .forEach(x => x.classList.remove("on"));
+      c.classList.add("on");
+      searchType = c.dataset.t;
+      renderSearch();
     });
   // sessions select
   $("#s-agent").innerHTML = `<option value="all">all agents</option>` +
@@ -1228,36 +1314,94 @@ function sortSessions(col) {
   renderSessions();
 }
 
-async function doSearch() {
-  const pattern = $("#q").value;
+// --- global search (navbar) ---------------------------------------------
+// One query, everything at once: session metadata (id/name/path) AND
+// conversation content. We fetch across ALL agents once, then filter
+// (agent, result type) client-side so chips re-render instantly.
+let LAST_SEARCH = null;   // {q, ic, matches, total, per_agent, sessions, sessions_total, mode, error}
+let searchAgent = "*";    // "*" or an agent name
+let searchType = "all";   // "all" | "sessions" | "matches"
+
+function searchHash() {
+  const q = $("#q").value.trim();
+  if (!q) return "search";
+  return "search?q=" + encodeURIComponent(q);
+}
+
+async function runGlobalSearch() {
+  const pattern = $("#q").value.trim();
   if (!pattern) return;
-  const sel = document.querySelector("#q-agents .chip.on");
-  const agents = sel ? [sel.dataset.a] : ["*"];
-  $("#q-result").innerHTML = `<p class="dim">Searching…</p>`;
-  try {
-    const d = await api("/api/search", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({pattern, agents, ignore_case: $("#qi").checked,
-                            max_results: 300}),
-    });
-    if (!d.matches.length) {
-      $("#q-result").innerHTML = `<p class="dim">No matches for “${esc(pattern)}”.</p>`;
-      return;
+  const fresh = !LAST_SEARCH || LAST_SEARCH.q !== pattern;
+  if (fresh) {
+    $("#q-result").innerHTML = `<p class="dim">Searching sessions & conversations…</p>`;
+    $("#q-sessions").innerHTML = "";
+    $("#q-summary").textContent = "";
+    try {
+      const d = await api("/api/search", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({pattern, agents: ["*"], ignore_case: true,
+                              max_results: 300}),
+      });
+      LAST_SEARCH = Object.assign({}, d, {q: pattern});
+    } catch (e) {
+      LAST_SEARCH = {q: pattern, error: e.message};
     }
-    const per = Object.entries(d.per_agent || {})
-      .map(([a,n]) => `${esc(a)} <b>${n}</b>`).join(" · ");
-    $("#q-result").innerHTML = `
-      <p class="small dim" style="margin-bottom:8px">${d.total} match(es) — ${per}</p>
-      <div>${d.matches.map(m => `
+  }
+  const hash = searchHash();
+  if (location.hash.replace(/^#/, "") !== hash) navigate(hash);
+  else switchView("search");
+  renderSearch();
+}
+
+function renderSearch() {
+  const swrap = $("#q-sessions"), wrap = $("#q-result"), sum = $("#q-summary");
+  if (!LAST_SEARCH) {
+    swrap.innerHTML = ""; sum.textContent = "";
+    wrap.innerHTML = `<p class="dim">Nothing searched yet.</p>`;
+    return;
+  }
+  const {q, mode} = LAST_SEARCH;
+  if (LAST_SEARCH.error) {
+    swrap.innerHTML = ""; sum.textContent = "";
+    wrap.innerHTML = `<div class="err">${esc(LAST_SEARCH.error)}</div>`;
+    return;
+  }
+  const ms = (LAST_SEARCH.matches || []).filter(m => searchAgent === "*" || m.agent === searchAgent);
+  const ss = (LAST_SEARCH.sessions || []).filter(s => searchAgent === "*" || s.agent === searchAgent);
+  const who = searchAgent === "*" ? "all agents" : searchAgent;
+  const modeNote = mode === "literal" ? " · not a valid regex, matched literally" : "";
+  sum.textContent = `“${q}” · ${who}${modeNote}`;
+
+  // sessions section
+  if (searchType !== "matches") {
+    if (!ss.length) swrap.innerHTML = "";
+    else swrap.innerHTML = `<h2>Sessions <span class="dim small">${ss.length}${LAST_SEARCH.sessions_total > ss.length ? " of " + LAST_SEARCH.sessions_total : ""}</span></h2>`
+      + ss.map(s => `
+        <div class="match">
+          <span class="ref" onclick="openConverse('${esc(s.agent)}','${esc(s.session_id)}')">
+            ${esc(s.agent)}/${esc(s.session_id)}</span>
+          <span class="ln">${s.name ? esc(s.name) : "&nbsp;"}</span>
+          <span class="dim small" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            title="${esc(s.path || "")}">${esc(s.path || "")}</span>
+          <span class="dim small" style="margin-left:10px;white-space:nowrap">${s.message_count || 0} msgs</span>
+        </div>`).join("");
+  } else swrap.innerHTML = "";
+
+  // matches section
+  if (searchType !== "sessions") {
+    const per = searchAgent === "*" ? (LAST_SEARCH.per_agent || {}) : {};
+    const perStr = Object.entries(per).map(([a, n]) => `${esc(a)} <b>${n}</b>`).join(" · ");
+    if (!ms.length) {
+      wrap.innerHTML = `<p class="dim">No content matches${perStr ? " yet" : ""}.</p>`;
+    } else wrap.innerHTML = `<h2>Content matches <span class="dim small">${ms.length} of ${LAST_SEARCH.total}${perStr ? " — " + perStr : ""}</span></h2>`
+      + ms.map(m => `
         <div class="match">
           <span class="ref" onclick="openConverse('${esc(m.agent)}','${esc(m.session_id)}')">
             ${esc(m.agent)}/${esc(m.session_id)}</span>
           <span class="ln">${m.line_num}</span>${esc(m.line)}
-        </div>`).join("")}</div>`;
-  } catch (e) {
-    $("#q-result").innerHTML = `<div class="err">${esc(e.message)}</div>`;
-  }
+        </div>`).join("");
+  } else wrap.innerHTML = "";
 }
 
 async function openConverse(agent, sid) {
@@ -1265,7 +1409,9 @@ async function openConverse(agent, sid) {
   const cur = location.hash.replace(/^#/, "");
   if (cur === `session/${agent}/${sid}`) switchView("converse");
   else navigate(`session/${agent}/${sid}`);
-  $("#c-title").textContent = `${agent} / ${sid}`;
+  $("#c-title").innerHTML =
+    `<a class="crumb" href="#" onclick="openSessions('${esc(agent)}');return false">${esc(agent)}</a>
+     <span class="dim"> / </span><span class="crumb-sid" title="${esc(sid)}">${esc(sid)}</span>`;
   $("#c-body").innerHTML = `<p class="dim">Loading…</p>`;
   $("#c-meta").innerHTML = "";
   dismissBanner();
@@ -1383,12 +1529,27 @@ function sessionsChange() {
 }
 
 // events
-$("#qbtn").addEventListener("click", doSearch);
+$("#qbtn").addEventListener("click", () => runGlobalSearch());
 // logo → overview; version → GitHub repo
 $("header h1").addEventListener("click", () => navigate(""));
 $("#ver").addEventListener("click", () =>
   window.open("https://github.com/day50-dev/ctools", "_blank", "noopener"));
-$("#q").addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
+$("#q").addEventListener("keydown", e => { if (e.key === "Enter") runGlobalSearch(); });
+$("#qi").addEventListener("change", () => {
+  // toggling case re-runs the search, but only when results are on screen
+  if (parseHash().view === "search" && $("#q").value.trim()) runGlobalSearch();
+});
+// / or Ctrl/Cmd+K focuses the search bar from anywhere
+document.addEventListener("keydown", e => {
+  const t = document.activeElement;
+  const typing = t && /INPUT|TEXTAREA|SELECT/.test(t.tagName);
+  if ((e.key === "/" && !typing) ||
+      ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "k")) {
+    e.preventDefault();
+    $("#q").focus();
+    $("#q").select();
+  }
+});
 $("#s-btn").addEventListener("click", listSessions);
 $("#s-agent").addEventListener("change", sessionsChange);
 $("#s-sort").addEventListener("change", sessionsChange);

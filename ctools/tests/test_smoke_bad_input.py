@@ -436,6 +436,35 @@ def test_webui_search_bad_format(webui):
     _api_error(status, body, "Unknown format")
 
 
+def test_webui_search_returns_session_metadata(webui):
+    """The navbar search hits session metadata (id/name/path) as well as
+    conversation content — one query, everything at once. 'Conv' is the
+    fixture session's title, which appears in no conversation line."""
+    status, body = _post(webui, "/api/search",
+                         {"pattern": "Conv", "agents": ["*"]})
+    assert status == 200, body
+    body = json.loads(body)
+    assert body["mode"] == "regex"
+    assert body["total"] == 0, "title should not appear in content"
+    assert body["sessions_total"] == 1
+    hit = body["sessions"][0]
+    assert hit["agent"] == "opencode"
+    assert hit["session_id"] == "ses_src"
+
+
+def test_webui_search_invalid_regex_falls_back_to_literal(webui):
+    """The search box is typed by humans, not grep users: a pattern that
+    isn't a valid regex must not 400 — it degrades to a literal substring
+    match and the response says so (mode == 'literal')."""
+    status, body = _post(webui, "/api/search",
+                         {"pattern": "hello(", "agents": ["*"]})
+    assert status == 200, body
+    body = json.loads(body)
+    assert body["mode"] == "literal"
+    assert body["total"] == 0  # nothing contains the literal text "hello("
+    assert body["sessions"] == []
+
+
 def test_webui_concepts_filter_traversal_rejected(webui, opencode_home):
     """A filter name with path separators must not be treated as a path.
     (The dashboard binds to 127.0.0.1 by default, so this is defence in
