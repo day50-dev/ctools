@@ -11,10 +11,10 @@ Usage:
     cdu opencode/ses_abc    # Show token breakdown for a session
 """
 
+import argparse
 import json
-from typing import Dict, Optional
+from typing import Dict
 
-import typer
 from rich.console import Console
 from rich.table import Table
 
@@ -29,9 +29,8 @@ except ImportError:
         return len(text) // 4
 
 from ctools.agents import Agent, AgentError, REGISTRY as AGENTS, get_agent
-from ctools.cli import parse_ref, require_installed, version_option
+from ctools.cli import parse_ref, require_installed, version_option, handle_version
 
-app = typer.Typer()
 console = Console()
 
 __all__ = ['app', 'count_tokens', 'format_tokens', 'get_session_tokens']
@@ -91,23 +90,34 @@ def format_tokens(tokens: int) -> str:
     return f"{tokens / 1_000_000:.1f}M"
 
 
-@app.command()
-def main(
-    path: Optional[str] = typer.Argument(None, help="Agent or agent/session_id"),
-    json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
-    version: bool = version_option("cdu"),
-):
-    """
-    Show token length of conversations.
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="cdu",
+        description="Show token length of conversations.\n\n"
+                    "Uses tiktoken for accurate counts, falls back to ~4 chars/token "
+                    "estimation. With no arguments, shows total usage across all "
+                    "agents. With an agent name, shows sessions sorted by token "
+                    "usage. With agent/session_id, shows token breakdown for that "
+                    "session.",
+    )
+    parser.add_argument("path", nargs="?", default=None,
+                        help="Agent or agent/session_id")
+    parser.add_argument("--json", "-j", action="store_true", help="JSON output")
+    version_option(parser, "cdu")
+    return parser
 
-    Uses tiktoken for accurate counts, falls back to ~4 chars/token estimation.
-    With no arguments, shows total usage across all agents.
-    With an agent name, shows sessions sorted by token usage.
-    With agent/session_id, shows token breakdown for that session.
-    """
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    if (v := handle_version(args)) is not None:
+        return v
+
+    path = args.path
+    json_output = args.json
+
     if path is None:
         _show_all_agents(json_output)
-        return
+        return 0
 
     agent_name, session_id = parse_ref(path)
     agent = require_installed(agent_name)
@@ -116,6 +126,10 @@ def main(
         _show_session_tokens(agent, session_id, json_output)
     else:
         _show_agent_sessions(agent, json_output)
+    return 0
+
+
+app = main
 
 
 def _show_all_agents(json_output: bool):
@@ -164,7 +178,7 @@ def _show_agent_sessions(agent: Agent, json_output: bool):
         sessions = agent.sessions()
     except AgentError as exc:
         console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     if not sessions:
         console.print(f"[yellow]No sessions found for {agent.name}[/yellow]")
@@ -212,7 +226,7 @@ def _show_session_tokens(agent: Agent, session_id: str, json_output: bool):
     tokens = get_session_tokens(agent_name, session_id)
     if not tokens:
         console.print(f"[yellow]Session not found: {agent_name}/{session_id}[/yellow]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     if json_output:
         data = {"session": f"{agent_name}/{session_id}", **tokens}
@@ -245,4 +259,4 @@ def _show_session_tokens(agent: Agent, session_id: str, json_output: bool):
 
 
 if __name__ == "__main__":
-    app()
+    raise SystemExit(main())

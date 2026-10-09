@@ -1,11 +1,11 @@
 import json
 import sqlite3
 import pytest
-from typer.testing import CliRunner
+from ctools.testing import Runner
 from ctools.ccopy import app
 from ctools.lib import AGENTS
 
-runner = CliRunner()
+runner = Runner()
 
 
 def _make_opencode_conversation_db(tmp_path, session_id="ses_src",

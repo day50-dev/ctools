@@ -160,4 +160,5 @@ Not Found:
   cline         Cline (cline.bot)           ~/.cline/data/tasks/
   omp           omp (oh-my-pi)              ~/.omp/agent/sessions/
   freebuff      Freebuff (Codebuff)         ~/.config/freebuff/projects/
+  openclaw      OpenClaw personal assistant ~/.openclaw/agents/
 ```

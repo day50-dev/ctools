@@ -1,8 +1,8 @@
 import json
 import sqlite3
 import pytest
-import typer
-from typer.testing import CliRunner
+
+from ctools.testing import Runner
 from ctools.cextract import (
     app, parse_args, extract_concepts_from_messages,
     concepts_to_messages, read_concepts_from_file, write_concepts_to_file,
@@ -11,7 +11,7 @@ from ctools.cextract import (
 )
 from ctools.lib import Message, AGENTS
 
-runner = CliRunner()
+runner = Runner()
 
 
 # --- Argument parsing tests ---
@@ -128,7 +128,7 @@ def test_write_read_concepts(tmp_path):
 
 
 def test_read_concepts_not_found():
-    with pytest.raises(typer.Exit):
+    with pytest.raises(SystemExit):
         read_concepts_from_file("/nonexistent/path.json")
 
 
@@ -274,7 +274,7 @@ def test_read_concepts_from_dir_empty(tmp_path):
 
 
 def test_read_concepts_from_dir_not_found():
-    with pytest.raises(typer.Exit):
+    with pytest.raises(SystemExit):
         read_concepts_from_dir("/nonexistent/path")
 
 

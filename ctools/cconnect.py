@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-import typer
+import argparse
 from rich.console import Console
 
 from ctools.agents import AgentError, get_agent
@@ -25,10 +25,9 @@ from ctools.cextract import (
     load_strategy,
     read_concepts_from_dir,
 )
-from ctools.cli import parse_ref, version_option
+from ctools.cli import handle_version, parse_ref, version_option
 from ctools.log import configure_logging, get_logger
 
-app = typer.Typer()
 console = Console()
 log = get_logger()
 
@@ -190,39 +189,59 @@ def _run_pipeline_cycle(pipeline: dict) -> bool:
     return injected > 0
 
 
-@app.command()
-def main(
-    source: Optional[str] = typer.Argument(None, help="Source session (@agent/session_id)"),
-    destination: Optional[str] = typer.Argument(None, help="Destination session (@agent/session_id)"),
-    strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for extraction"),
-    filter_config: Optional[str] = typer.Option(None, "--filter", "-f", help="Filter JSON file (built-in, JSON-RPC, or decision model)"),
-    tool_name: str = typer.Option("context_from_source", "--tool-name", "-t", help="Name for the toolcall"),
-    count: int = typer.Option(0, "--count", "-c", help="Number of cycles (0=infinity)"),
-    poll_interval: float = typer.Option(5.0, "--poll-interval", "-p", help="Poll interval in seconds"),
-    pipeline: Optional[str] = typer.Option(None, "--pipeline", "-P", help="Pipeline JSON config for one-to-many"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
-    version: bool = version_option("cconnect"),
-):
-    """
-    Connect context windows via live concept pipelines.
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="cconnect",
+        description=("Connect context windows via live concept pipelines.\n\n"
+                     "Exposes concepts from source session as a toolcall in "
+                     "destination session's context. Polls the source and "
+                     "re-injects concepts on each cycle. With --pipeline, "
+                     "reads pipeline config from a JSON file."),
+    )
+    parser.add_argument("source", nargs="?",
+                        help="Source session (@agent/session_id)")
+    parser.add_argument("destination", nargs="?",
+                        help="Destination session (@agent/session_id)")
+    parser.add_argument("-s", "--strategy",
+                        help="Strategy JSON file for extraction")
+    parser.add_argument("-f", "--filter", dest="filter_config",
+                        help="Filter JSON file (built-in, JSON-RPC, or decision model)")
+    parser.add_argument("-t", "--tool-name", default="context_from_source",
+                        help="Name for the toolcall")
+    parser.add_argument("-c", "--count", type=int, default=0,
+                        help="Number of cycles (0=infinity)")
+    parser.add_argument("-p", "--poll-interval", type=float, default=5.0,
+                        help="Poll interval in seconds")
+    parser.add_argument("-P", "--pipeline",
+                        help="Pipeline JSON config for one-to-many")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Verbose output")
+    version_option(parser, "cconnect")
+    return parser
 
-    Exposes concepts from source session as a toolcall in destination session's context.
-    Polls the source and re-injects concepts on each cycle.
 
-    Simple (one-to-one):
-        cconnect @opencode/ses_abc @claude-code/ses_xyz
-        cconnect -c 1 @opencode/ses_abc @claude-code/ses_xyz
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    if (v := handle_version(args)) is not None:
+        return v
 
-    Pipeline (one-to-many):
-        cconnect --pipeline pipeline.json
-    """
+    source = args.source
+    destination = args.destination
+    strategy = args.strategy
+    filter_config = args.filter_config
+    tool_name = args.tool_name
+    count = args.count
+    poll_interval = args.poll_interval
+    pipeline = args.pipeline
+    verbose = args.verbose
+
     configure_logging(verbose=verbose)
 
     if pipeline:
         pipeline_path = Path(pipeline)
         if not pipeline_path.exists():
             log.error("pipeline_not_found", path=pipeline)
-            raise typer.Exit(1)
+            raise SystemExit(1)
         with open(pipeline_path) as f:
             config = json.load(f)
 
@@ -247,7 +266,7 @@ def main(
     else:
         if not source or not destination:
             console.print("[red]Source and destination required (or use --pipeline)[/red]")
-            raise typer.Exit(1)
+            raise SystemExit(1)
 
         log.info("connect_started", source=source, destination=destination, count=count, poll_interval=poll_interval)
 
@@ -264,7 +283,11 @@ def main(
                 time.sleep(poll_interval)
         except KeyboardInterrupt:
             log.info("interrupted", cycle=cycle)
+    return 0
+
+
+app = main
 
 
 if __name__ == "__main__":
-    app()
+    raise SystemExit(main())

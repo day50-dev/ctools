@@ -2,13 +2,13 @@ import io
 import json
 import sqlite3
 import pytest
-from typer.testing import CliRunner
+from ctools.testing import Runner
 from ctools import cgrep
 from ctools.cgrep import app, grep_session, parse_path_pattern
 from ctools.agents import (REGISTRY as AGENTS, SessionNotFound,
                             GooseAgent, OpencodeAgent, PiAgent)
 
-runner = CliRunner()
+runner = Runner()
 
 
 _captured = io.StringIO()

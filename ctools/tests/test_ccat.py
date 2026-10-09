@@ -1,12 +1,12 @@
 """Tests for ccat (cat for LLM context windows)."""
 import json
 import sqlite3
-from typer.testing import CliRunner
+from ctools.testing import Runner
 
 from ctools.ccat import app
 from ctools.agents import REGISTRY as AGENTS
 
-runner = CliRunner()
+runner = Runner()
 
 
 def _make_opencode_conv_db(tmp_path, session_id, messages):

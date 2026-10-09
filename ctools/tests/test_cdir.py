@@ -1,13 +1,13 @@
 import json
 import sqlite3
 import pytest
-from typer.testing import CliRunner
+from ctools.testing import Runner
 from datetime import datetime
 from ctools.cdir import app
 from ctools.agents import (Session, SessionNotFound, REGISTRY as AGENTS,
                            ClaudeCodeAgent, GooseAgent, OpencodeAgent, PiAgent)
 
-runner = CliRunner()
+runner = Runner()
 
 
 # --- Agent Registry Tests ---

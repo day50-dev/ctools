@@ -204,6 +204,7 @@ Not Found:
   cline         Cline (cline.bot)           ~/.cline/data/tasks/
   omp           omp (oh-my-pi)              ~/.omp/agent/sessions/
   freebuff      Freebuff (Codebuff)         ~/.config/freebuff/projects/
+  openclaw      OpenClaw personal assistant ~/.openclaw/agents/
 .fi
 .RE
 .PP
@@ -349,6 +350,18 @@ omp (oh-my-pi) JSONL session journals; each file is a tree of entries.
 Freebuff / Codebuff chat directories; the conversation lives in
 .I chat-messages.json
 in each directory.
+.TP
+.I ~/.openclaw/agents/*/agent/openclaw-agent.sqlite
+OpenClaw per-agent SQLite store
+.B (OPENCLAW_STATE_DIR
+if set); one database per configured agent holding
+.B session_nodes
+,
+.B session_windows
+and
+.B transcript_events
+.
+Read/export-only (Gateway-owned store).
 .SH SEE ALSO
 .BR ccopy (1),
 .BR cextract (1),

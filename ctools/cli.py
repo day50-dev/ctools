@@ -11,7 +11,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-import typer
+import argparse
+import sys
+
 from rich.console import Console
 
 from ctools import __version__
@@ -20,18 +22,31 @@ from ctools.agents import Agent, AgentError, REGISTRY, get_agent
 console = Console()
 
 
-def version_option(tool: str):
-    """A GNU-style ``--version`` option printing ``tool (ctxttools) X.Y.Z``.
+def version_option(parser: argparse.ArgumentParser, tool: str) -> None:
+    """Add a GNU-style ``--version`` option printing ``tool (ctxttools) X.Y.Z``.
 
     Eager, so it wins over required arguments: ``crm --version`` works
     without a session.
     """
-    def callback(ctx, value):
-        if value:
-            typer.echo(f"{tool} (ctxttools) {__version__}")
-            raise typer.Exit()
-    return typer.Option(False, "--version", callback=callback, is_eager=True,
+    parser.add_argument("--version", action="store_true",
                         help="Print version information and exit")
+    # Registered after parsing, before the body runs: --version must win over
+    # a missing required argument (GNU tools print the version, not a usage error).
+    parser.set_defaults(_version_tool=tool)
+
+
+def handle_version(args) -> Optional[int]:
+    """If ``--version`` was given, print ``tool (ctxttools) X.Y.Z`` and return 0."""
+    if getattr(args, "version", False):
+        print(f"{args._version_tool} (ctxttools) {__version__}")
+        return 0
+    return None
+
+
+def fail(message: str, code: int = 1) -> int:
+    """Print a clean error to stderr and return an exit code (for ``main``)."""
+    console.print(f"[red]{message}[/red]")
+    return code
 
 
 def parse_ref(ref: str) -> Tuple[str, Optional[str]]:
@@ -106,7 +121,7 @@ def require_agent(name: str) -> Agent:
     if agent is None:
         console.print(f"[red]Unknown agent: {name}[/red]")
         console.print(f"[dim]Available agents: {', '.join(REGISTRY)}[/dim]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     return agent
 
 
@@ -116,7 +131,7 @@ def require_installed(name: str) -> Agent:
     if not agent.exists():
         console.print(f"[yellow]Agent path not found: {agent.base_path}[/yellow]")
         console.print(f"[dim]Is {agent.name} installed?[/dim]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     return agent
 
 
@@ -126,7 +141,7 @@ def require_session(ref: str) -> Tuple[Agent, str]:
     agent = require_installed(name)
     if not session_id:
         console.print(f"[red]No session ID in {ref}[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     return agent, session_id
 
 
@@ -137,7 +152,7 @@ def reporting():
         yield
     except AgentError as exc:
         console.print(f"[yellow]{exc}[/yellow]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
 
 _COMMANDS = {
@@ -161,29 +176,26 @@ def run_command(name: str, argv: List[str]) -> None:
     entry = _COMMANDS.get(name)
     if entry is None:
         print(f"unknown command: {name} (known: {', '.join(sorted(_COMMANDS))})")
-        raise typer.Exit(2)
+        raise SystemExit(2)
     module_name, attr = entry.split(":")
     import importlib
-    app = getattr(importlib.import_module(module_name), attr)
-    app(args=argv, prog_name=name, standalone_mode=False)
+    main = getattr(importlib.import_module(module_name), attr)
+    sys.argv = [name] + list(argv)
+    main()
 
 
 def _main() -> None:
     import sys
     argv = sys.argv[1:]
-    if not argv:
-        print("usage: python -m ctools.cli run <command> [args...]")
-        sys.exit(2)
-    if argv[0] != "run":
+    if not argv or argv[0] != "run":
         print("usage: python -m ctools.cli run <command> [args...]")
         sys.exit(2)
     name, rest = argv[1], argv[2:]
     try:
         run_command(name, rest)
-    except typer.Exit as e:
-        sys.exit(e.exit_code)
     except SystemExit as e:
-        sys.exit(e.code if isinstance(e.code, int) else 1)
+        code = e.code
+        sys.exit(code if isinstance(code, int) else (0 if code is None else 1))
 
 
 if __name__ == "__main__":

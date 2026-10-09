@@ -2076,6 +2076,252 @@ class HermesAgent(SqliteAgent):
         return session_id
 
 
+class OpenclawAgent(SqliteAgent):
+    """OpenClaw: one SQLite database per agent under ``~/.openclaw/agents/``.
+
+    Each configured agent owns ``<state-dir>/agents/<id>/agent/openclaw-agent.sqlite``.
+    A conversation is a *session key* (e.g. ``agent:main:main``) that points at a
+    chain of *windows* (``session_windows``); the live window is
+    ``session_nodes.current_session_id``.  Messages are ``transcript_events`` rows
+    keyed by ``(window.session_id, seq)``, where ``event_json`` is a session entry
+    ``{"type":"message","message":{...}}`` (or ``{"type":"session","cwd":...}``
+    for the header).  Message bodies are the llm-core ``Message`` union:
+    ``UserMessage``/``AssistantMessage``/``ToolResultMessage`` whose content is a
+    list of blocks (``{type:"text",text}``, ``{type:"thinking",...}``,
+    ``{type:"toolCall",...}``, ``{type:"image",...}``).  Assistant messages carry
+    ``usage`` with the same ``input/output/cacheRead/cacheWrite/totalTokens``
+    shape as pi, plus a ``cost`` sub-object.
+
+    ``OPENCLAW_STATE_DIR`` overrides the state root (default ``~/.openclaw``).
+    Reading is safe (read-only); seeding a session is refused because the store
+    is Gateway-owned with canonical-index + integrity validation that a raw
+    insert cannot satisfy.
+    """
+
+    name = 'openclaw'
+    description = 'OpenClaw (openclaw.ai) personal assistant'
+    display_name = 'OpenClaw'
+    storage_format = 'sqlite'
+    db_name = 'openclaw-agent.sqlite'
+
+    @classmethod
+    def default_base_path(cls) -> Path:
+        root = os.environ.get('OPENCLAW_STATE_DIR')
+        if root and os.path.isabs(root):
+            return Path(root) / 'agents'
+        return Path.home() / '.openclaw' / 'agents'
+
+    # --- discovery ---
+
+    def agent_dirs(self) -> List[Path]:
+        """Each configured agent's state dir (``agents/<id>/``)."""
+        if not self.base_path.exists():
+            return []
+        return sorted(p for p in self.base_path.iterdir() if p.is_dir())
+
+    def dbs(self) -> List[Tuple[str, Path]]:
+        """``(agent_id, sqlite path)`` for every agent that has a database."""
+        out = []
+        for d in self.agent_dirs():
+            db = d / 'agent' / 'openclaw-agent.sqlite'
+            if db.exists():
+                out.append((d.name, db))
+        return out
+
+    def sessions(self) -> List[Session]:
+        sessions: List[Session] = []
+        for agent_id, db in self.dbs():
+            try:
+                sessions.extend(self._agent_sessions(agent_id, db))
+            except sqlite3.Error:
+                continue
+        sessions.sort(key=lambda s: s.mtime or s.ctime or datetime.min, reverse=True)
+        return sessions
+
+    def _agent_sessions(self, agent_id: str, db: Path) -> List[Session]:
+        conn = sqlite3.connect(f'file:{db}?mode=ro', uri=True)
+        try:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute('''
+                SELECT sn.session_key, sn.current_session_id, sn.entry_json,
+                       sn.created_at, sn.updated_at, sn.display_name, sn.label,
+                       sn.archived_at,
+                       sw.model, sw.created_at AS win_created
+                FROM session_nodes sn
+                LEFT JOIN session_windows sw
+                       ON sw.session_id = sn.current_session_id
+                WHERE COALESCE(sn.archived_at, 0) = 0
+            ''')
+            out: List[Session] = []
+            for row in cur.fetchall():
+                node_created = row['created_at']
+                node_updated = row['updated_at'] or node_created
+                window = row['current_session_id']
+                if not window:
+                    continue
+                # cwd + message count + content size from this agent's own db.
+                cwd, msgs, size = self._window_facts(cur, window)
+                created = row['win_created'] or node_created
+                out.append(Session(
+                    id=row['session_key'],
+                    name=row['display_name'] or row['label'] or row['session_key'],
+                    ctime=epoch_ms(created),
+                    mtime=epoch_ms(node_updated),
+                    size=size,
+                    path=cwd or str(db),
+                    model=row['model'],
+                    message_count=msgs,
+                ))
+            return out
+        finally:
+            conn.close()
+
+    def _window_facts(self, cursor, session_id: str) -> Tuple[Optional[str], Optional[int], int]:
+        """``(cwd, message_count, content_bytes)`` for a live window."""
+        cwd, msgs, size = None, None, 0
+        cursor.execute('''
+            SELECT COALESCE(JSON_EXTRACT(event_json, '$.cwd'),
+                           JSON_EXTRACT(event_json, '$.message.cwd'))
+            FROM transcript_events
+            WHERE session_id = ? AND typeof(event_json) = 'text'
+              AND JSON_EXTRACT(event_json, '$.type') = 'session'
+            LIMIT 1''', (session_id,))
+        row = cursor.fetchone()
+        if row and row[0]:
+            cwd = row[0]
+        cursor.execute('''
+            SELECT COUNT(*), COALESCE(SUM(LENGTH(event_json)), 0)
+            FROM transcript_events
+            WHERE session_id = ? AND typeof(event_json) = 'text'
+              AND JSON_EXTRACT(event_json, '$.type') = 'message'
+        ''', (session_id,))
+        row = cursor.fetchone()
+        if row:
+            msgs, size = row[0], int(row[1] or 0)
+        return cwd, msgs, size
+
+    # --- reading ---
+
+    def _entry_rows(self, session_key: str) -> List[dict]:
+        """Live-window message entries for a session key, in seq order.
+
+        Returns the parsed ``event_json`` objects (``{"type":"message",...}``).
+        Raises ``SessionNotFound`` when the key is unknown in every agent db.
+        """
+        for agent_id, db in self.dbs():
+            conn = sqlite3.connect(f'file:{db}?mode=ro', uri=True)
+            try:
+                cur = conn.cursor()
+                cur.execute('''
+                    SELECT sw.session_id
+                    FROM session_nodes sn
+                    LEFT JOIN session_windows sw
+                           ON sw.session_id = sn.current_session_id
+                    WHERE sn.session_key = ?
+                ''', (session_key,))
+                row = cur.fetchone()
+                if row is None:
+                    continue
+                window = row[0]
+                if not window:
+                    return []
+                cur.execute('''
+                    SELECT event_json, created_at
+                    FROM transcript_events
+                    WHERE session_id = ? AND typeof(event_json) = 'text'
+                      AND JSON_EXTRACT(event_json, '$.type') = 'message'
+                    ORDER BY seq
+                ''', (window,))
+                entries = []
+                for ev, _created in cur.fetchall():
+                    try:
+                        entries.append(json.loads(ev))
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                return entries
+            finally:
+                conn.close()
+        raise SessionNotFound(self.name, session_key)
+
+    @staticmethod
+    def _message_of(entry: dict) -> Optional[Message]:
+        """Project one stored message entry to a ``{role, content}`` Message."""
+        message = entry.get('message')
+        if not isinstance(message, dict):
+            return None
+        role = message.get('role', '')
+        if role == 'toolResult':
+            role = 'tool'
+        text = text_of(message.get('content'))
+        if not text:
+            return None
+        return Message(role=role, content=text)
+
+    def raw_messages(self, session_id: str) -> List[Message]:
+        out: List[Message] = []
+        for entry in self._entry_rows(session_id):
+            message = self._message_of(entry)
+            if message is not None:
+                out.append(message)
+        return out
+
+    def messages(self, session_id: str) -> List[Message]:
+        return [m for m in self.raw_messages(session_id)
+                if m.role in CONVERSATION_ROLES]
+
+    def raw_records(self, session_id: str) -> List[dict]:
+        """The verbatim ``event_json`` objects for each message, in order."""
+        return [e for e in self._entry_rows(session_id) if e.get('type') == 'message']
+
+    def session_info(self, session_id: str) -> Optional[Dict[str, object]]:
+        for agent_id, db in self.dbs():
+            conn = sqlite3.connect(f'file:{db}?mode=ro', uri=True)
+            try:
+                cur = conn.cursor()
+                cur.execute('''
+                    SELECT sn.created_at, sn.updated_at, sn.current_session_id,
+                           sw.model
+                    FROM session_nodes sn
+                    LEFT JOIN session_windows sw
+                           ON sw.session_id = sn.current_session_id
+                    WHERE sn.session_key = ?
+                ''', (session_id,))
+                row = cur.fetchone()
+                if row is None:
+                    continue
+                created, updated, _window, model = row
+                info: Dict[str, object] = {
+                    'created': epoch_ms(created).isoformat() if created else None,
+                    'modified': epoch_ms(updated).isoformat() if updated else None,
+                }
+                if model:
+                    info['model'] = model
+                return info
+            finally:
+                conn.close()
+        return None
+
+    def token_usage(self, session_id: str) -> Optional[Dict[str, int]]:
+        total_in = total_out = total = 0
+        any_usage = False
+        for entry in self._entry_rows(session_id):
+            message = entry.get('message')
+            if not isinstance(message, dict):
+                continue
+            usage = message.get('usage')
+            if not isinstance(usage, dict):
+                continue
+            any_usage = True
+            total_in += int(usage.get('input') or 0)
+            total_out += int(usage.get('output') or 0)
+            total += int(usage.get('totalTokens') or 0)
+        if not any_usage:
+            return None
+        return {'total': total or (total_in + total_out),
+                'input': total_in, 'output': total_out}
+
+
 class ClineAgent(Agent):
     """Cline (cline.bot): one directory per task under ``~/.cline/data/tasks/``.
 
@@ -2554,6 +2800,7 @@ AGENT_CLASSES = (
     PiAgent,
     GooseAgent,
     HermesAgent,
+    OpenclawAgent,
     ClineAgent,
     OmpAgent,
     FreebuffAgent,

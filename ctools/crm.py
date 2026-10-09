@@ -5,10 +5,11 @@ Surgically removes concept-containing sections from agent sessions.
 Concept JSON files are NOT deleted - only the relevant sections from the context.
 """
 
+import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
-import typer
+import argparse
 from rich.console import Console
 from rich.prompt import Confirm
 
@@ -16,7 +17,6 @@ from ctools.agents import Message
 from ctools.cextract import concept_text, load_strategy, read_concepts_from_file
 from ctools.cli import reporting, require_session, version_option
 
-app = typer.Typer()
 console = Console()
 
 __all__ = ['app']
@@ -104,11 +104,11 @@ def _divide_and_conquer(messages: List[Message], concept: dict,
 
     def search_range(start: int, end: int):
         if start >= end:
-            return
+            return 0
 
         # Check if this range contains the concept
         if not _concept_in_range(concept, messages, start, end, strategy):
-            return
+            return 0
 
         # If range is small enough, mark for removal
         if end - start <= 1:
@@ -117,7 +117,7 @@ def _divide_and_conquer(messages: List[Message], concept: dict,
                     indices_to_remove.add(i)
                     if verbose:
                         console.print(f"  [yellow]Marking message {i} for removal[/yellow]")
-            return
+            return 0
 
         # Divide and conquer
         mid = (start + end) // 2
@@ -162,30 +162,48 @@ SEARCHES = {
 }
 
 
-@app.command()
-def main(
-    session: str = typer.Argument(..., help="Session to remove from (@agent/session_id)"),
-    concepts: List[str] = typer.Argument(..., help="Concept JSON files to remove"),
-    algo: str = typer.Option("divide", "--algo", "-a", help="Algorithm: divide, sliding"),
-    size: int = typer.Option(5, "--size", help="Window size for sliding algorithm"),
-    strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for detection"),
-    interactive: bool = typer.Option(False, "-i", "--interactive", help="Confirm each removal"),
-    verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
-    version: bool = version_option("crm"),
-):
-    """
-    Scalpel remove concepts from sessions.
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="crm",
+        description=("Scalpel remove concepts from sessions.\n\n"
+                     "Surgically removes concept-containing sections from "
+                     "agent sessions. Concept JSON files are NOT deleted — only "
+                     "the relevant sections from the context."),
+    )
+    parser.add_argument("session",
+                        help="Session to remove from (@agent/session_id)")
+    parser.add_argument("concepts", nargs="+",
+                        help="Concept JSON files to remove")
+    parser.add_argument("-a", "--algo", default="divide",
+                        help="Algorithm: divide, sliding")
+    parser.add_argument("--size", type=int, default=5,
+                        help="Window size for sliding algorithm")
+    parser.add_argument("-s", "--strategy",
+                        help="Strategy JSON file for detection")
+    parser.add_argument("-i", "--interactive", action="store_true",
+                        help="Confirm each removal")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Verbose output")
+    version_option(parser, "crm")
+    return parser
 
-    Surgically removes concept-containing sections from agent sessions.
-    Concept JSON files are NOT deleted - only the relevant sections from the context.
 
-    Examples:
-        crm @opencode/ses_abc concept.json
-        crm @opencode/ses_abc concept1.json concept2.json
-        crm -a sliding --size 3 @opencode/ses_abc concept.json
-        crm -s my-strategy.json @opencode/ses_abc concept.json
-        crm -i -v @opencode/ses_abc concept.json
-    """
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--version" in argv:
+        from ctools import __version__
+        print(f"crm (ctxttools) {__version__}")
+        return 0
+    ns = build_parser().parse_args(argv)
+
+    session = ns.session
+    concepts = ns.concepts
+    algo = ns.algo
+    size = ns.size
+    strategy = ns.strategy
+    interactive = ns.interactive
+    verbose = ns.verbose
+
     agent, session_id = require_session(session)
 
     with reporting():
@@ -193,22 +211,21 @@ def main(
 
     if not messages:
         console.print(f"[yellow]Session not found: {session_id}[/yellow]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     if verbose:
         console.print(f"[dim]Loaded {len(messages)} messages from {agent.name}/{session_id}[/dim]")
 
-    # Load all concepts
     all_concepts = []
     for concept_path in concepts:
         if not Path(concept_path).exists():
             console.print(f"[red]Concept file not found: {concept_path}[/red]")
-            raise typer.Exit(1)
+            raise SystemExit(1)
         all_concepts.extend(read_concepts_from_file(concept_path))
 
     if not all_concepts:
         console.print("[yellow]No concepts found in files[/yellow]")
-        return
+        return 0
 
     if verbose:
         console.print(f"[dim]Loaded {len(all_concepts)} concepts[/dim]")
@@ -222,17 +239,16 @@ def main(
     if algo not in SEARCHES:
         console.print(f"[red]Unknown algorithm: {algo}[/red]")
         console.print(f"[dim]Available: {', '.join(SEARCHES)}[/dim]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     search = SEARCHES[algo]
 
-    # Find messages to remove for each concept
     doomed = set()
     for concept in all_concepts:
         doomed.update(search(messages, concept, size, strat, verbose))
 
     if not doomed:
         console.print("[yellow]No matching sections found to remove[/yellow]")
-        return
+        return 0
 
     if interactive:
         console.print(f"\n[yellow]Will remove {len(doomed)} message(s):[/yellow]")
@@ -242,13 +258,17 @@ def main(
 
         if not Confirm.ask("\nProceed with removal?"):
             console.print("[dim]Aborted[/dim]")
-            return
+            return 0
 
     with reporting():
         removed = agent.remove_messages(session_id, sorted(doomed))
 
     console.print(f"[green]Removed {removed} message(s) from {agent.name}/{session_id}[/green]")
+    return 0
+
+
+app = main
 
 
 if __name__ == "__main__":
-    app()
+    raise SystemExit(main())

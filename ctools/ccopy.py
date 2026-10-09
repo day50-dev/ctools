@@ -28,17 +28,17 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import typer
+import argparse
 from rich.console import Console
 
 from ctools.agents import (
     Agent, Message, REGISTRY,
     get_agent, get_resume_command, SessionNotFound, UnsupportedOperation,
 )
-from ctools.cli import Remote, parse_ref, parse_remote_ref, version_option
+from ctools.cli import (Remote, handle_version, parse_ref, parse_remote_ref,
+                        version_option)
 from ctools.log import configure_logging, get_logger
 
-app = typer.Typer()
 console = Console()
 log = get_logger()
 
@@ -88,7 +88,7 @@ def _validate_records(records) -> List[dict]:
             or not all(isinstance(r, dict) and "role" in r and "content" in r
                        for r in records)):
         console.print('[red]Expected a JSON list of {"role", "content"} objects[/red]')
-        raise typer.Exit(1)
+        raise SystemExit(1)
     return records
 
 
@@ -117,12 +117,12 @@ def _read_records_from(source: str) -> List[dict]:
                 data = f.read()
         except OSError as e:
             console.print(f"[red]Could not read {source}: {e}[/red]")
-            raise typer.Exit(1)
+            raise SystemExit(1)
     try:
         records = json.loads(data)
     except json.JSONDecodeError as e:
         console.print(f"[red]{source} is not valid conversation JSON: {e}[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     return _validate_records(records)
 
 
@@ -131,17 +131,17 @@ def _do_export(ref: str) -> None:
     name, session_id = parse_ref(ref)
     if not session_id:
         console.print(f"[red]--export-json needs agent/session_id, got {ref}[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     agent = get_agent(name)
     if agent is None:
         console.print(f"[red]Unknown agent: {name}[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     if not agent.exists():
         console.print(f"[yellow]Agent path not found: {agent.base_path}[/yellow]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     if not session_id or not agent.messages(session_id):
         console.print(f"[yellow]No conversation in {name}/{session_id}[/yellow]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     json.dump(export_conversation(agent, session_id), sys.stdout, indent=2)
     sys.stdout.write("\n")
 
@@ -153,26 +153,26 @@ def _do_import(agent_name: str) -> None:
     if dest is None:
         console.print(f"[red]Unknown agent: {agent_name}[/red]")
         console.print(f"[dim]Available agents: {', '.join(REGISTRY)}[/dim]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     if not dest.supports_create():
         console.print(f"[red]{dest.label} does not support session creation[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     if not dest.exists():
         console.print(f"[yellow]Agent path not found: {dest.base_path}[/yellow]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     if sys.stdin.isatty():
         console.print("[red]No input on stdin; pipe a conversation JSON in "
                       "(ccopy --export-json AGENT/SESSION | ccopy --import-json AGENT)[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     try:
         records = json.load(sys.stdin)
     except json.JSONDecodeError as e:
         console.print(f"[red]Invalid JSON on stdin: {e}[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     records = _validate_records(records)
     if not records:
         console.print("[yellow]No messages to import[/yellow]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     print(import_conversation(dest, records))
 
 
@@ -194,7 +194,7 @@ def _ssh(remote: Remote, command: str, input_text: Optional[str] = None) -> str:
     if shutil.which("ssh") is None:
         console.print("[red]ssh is not installed; cannot reach "
                       f"{remote}[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     proc = _run(remote.ssh_command(command), input_text)
     if proc.returncode != 0:
         console.print(f"[red]ssh to {remote} failed (exit {proc.returncode})[/red]")
@@ -202,7 +202,7 @@ def _ssh(remote: Remote, command: str, input_text: Optional[str] = None) -> str:
             print(proc.stderr.rstrip())
         console.print("[dim]The remote needs only sshd and a POSIX tar; "
                       "nothing ctools-related runs on it.[/dim]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     return proc.stdout
 
 
@@ -233,7 +233,7 @@ def _pull(remote: Remote, agent: Agent, dest_base: Path) -> None:
                       f"(exit {proc.returncode})[/red]")
         if tar_stderr.decode(errors='replace').strip():
             print(tar_stderr.decode(errors='replace').rstrip())
-        raise typer.Exit(1)
+        raise SystemExit(1)
     with tarfile.open(fileobj=io.BytesIO(tar_stdout)) as tar:
         tar.extractall(dest_base)
 
@@ -246,7 +246,7 @@ def _push(remote: Remote, agent: Agent, base: Path) -> None:
     src = base / rel
     if not src.exists():
         console.print(f"[red]nothing to push: {src}[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     remote_tar = f"tar -xf - -C ~ {shlex.quote(rel)}"
     local_tar = subprocess.Popen(
         ["tar", "-cf", "-", "-C", str(base), rel],
@@ -274,7 +274,7 @@ def _push(remote: Remote, agent: Agent, base: Path) -> None:
         code = local_tar.returncode or remote_proc.returncode
         console.print(f"[red]could not push {agent.name} storage to {remote} "
                       f"(exit {code})[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
 
 def _local_agent(agent: Agent, base: Path) -> Agent:
@@ -299,11 +299,11 @@ def _remote_destination(remote: Remote, dest: Agent,
         if not mirror.source.exists():
             console.print(f"[yellow]{dest.name} is not set up on {remote.target} "
                           f"(no storage at {dest.default_base_path()})[/yellow]")
-            raise typer.Exit(1)
+            raise SystemExit(1)
         try:
             new_id = import_conversation(mirror, records)
         except UnsupportedOperation:
-            raise typer.Exit(1)
+            raise SystemExit(1)
         _push(remote, dest, base)
     return new_id
 
@@ -317,63 +317,70 @@ def copy_conversation(source: Agent, source_id: str,
     messages = source.messages(source_id)
     if not messages:
         console.print(f"[yellow]No conversation in {source.name}/{source_id}[/yellow]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     new_id = destination.create_session(messages)
     return new_id, len(messages)
 
 
-@app.command()
-def main(
-    source: Optional[str] = typer.Argument(None,
-                                           help="Source session (agent/session_id), a conversation JSON file/fd/'-', or ssh://[user@]host[:port]/agent/session_id"),
-    destination: Optional[str] = typer.Argument(None,
-                                                help="Destination agent (bare name) or ssh://[user@]host[:port]/agent"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would happen without writing"),
-    export_json: Optional[str] = typer.Option(None, "--export-json", metavar="AGENT/SESSION",
-                                              help="Print a session's conversation as JSON and exit (raw wire format; also what runs over ssh)"),
-    import_json: Optional[str] = typer.Option(None, "--import-json", metavar="AGENT",
-                                              help="Read a conversation JSON from stdin into a NEW session in AGENT and print the new id (raw wire format; also what runs over ssh)"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
-    version: bool = version_option("ccopy"),
-):
-    """
-    Copy a conversation from one agent to a new session in another.
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="ccopy",
+        description=("Copy a conversation from one agent to a new session in another.\n\n"
+                     "The source session is never modified. The destination agent "
+                     "receives a fresh session holding the copied conversation, "
+                     "and ccopy prints how to resume it. The source can be "
+                     "addressed three ways: agent/session_id (a session in a "
+                     "local agent), ssh://[user@]host[:port]/agent/session_id "
+                     "(a session on a remote host), or FILE, /dev/fd/N, or - "
+                     "(a conversation JSON read from a file or stdin)."),
+    )
+    parser.add_argument("source", nargs="?",
+                        help="Source session (agent/session_id), a conversation "
+                             "JSON file/fd/'-', or ssh://[user@]host[:port]/agent/session_id")
+    parser.add_argument("destination", nargs="?",
+                        help="Destination agent (bare name) or "
+                             "ssh://[user@]host[:port]/agent")
+    parser.add_argument("--dry-run", action="store_true", dest="dry_run",
+                        help="Show what would happen without writing")
+    parser.add_argument("--export-json", metavar="AGENT/SESSION",
+                        dest="export_json",
+                        help="Print a session's conversation as JSON and exit "
+                             "(raw wire format; also what runs over ssh)")
+    parser.add_argument("--import-json", metavar="AGENT", dest="import_json",
+                        help="Read a conversation JSON from stdin into a NEW "
+                             "session in AGENT and print the new id (raw wire "
+                             "format; also what runs over ssh)")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Verbose output")
+    version_option(parser, "ccopy")
+    return parser
 
-    The source session is never modified. The destination agent receives a fresh
-    session holding the copied conversation, and ccopy prints how to resume it.
 
-    The source can be addressed three ways:
-      agent/session_id   a session in a local agent
-      ssh://.../agent/session_id   a session on a remote host (needs only sshd + tar there)
-      FILE, /dev/fd/N, or -        a conversation JSON read from a file or stdin
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    if (v := handle_version(args)) is not None:
+        return v
 
-    That third form is the Unix-y way to copy from a remote without ccopy doing
-    the ssh itself: ccopy <(ssh remote ccat AGENT/SES) AGENT. Either side may be
-    remote; a remote source can be pulled by ccopy (sshd + tar), or piped in
-    with ccat (needs ctools on the remote).
+    source = args.source
+    destination = args.destination
+    dry_run = args.dry_run
+    export_json = args.export_json
+    import_json = args.import_json
+    verbose = args.verbose
 
-    Examples:
-        ccopy opencode/ses_abc claude-code
-        ccopy claude-code/ses_123 codex
-        ccopy opencode/ses_abc ssh://chris@remote/codex
-        ccopy ssh://chris@remote/opencode/ses_abc codex
-        ccopy <(ssh chris@remote ccat opencode/ses_abc) codex
-        ccat opencode/ses_abc | ccopy - codex
-        ccopy opencode/ses_abc opencode --dry-run
-    """
     configure_logging(verbose=verbose)
 
     if import_json is not None:
         _do_import(import_json)
-        return
+        return 0
     if export_json is not None:
         _do_export(export_json)
-        return
+        return 0
 
     if source is None or destination is None:
         console.print("[red]Usage: ccopy SOURCE DESTINATION "
                       "(or --export-json AGENT/SESSION, or --import-json AGENT)[/red]")
-        raise typer.Exit(1)
+        return 1
 
     src_remote, src_ref = parse_remote_ref(source)
     dst_remote, dst_ref = parse_remote_ref(destination)
@@ -381,20 +388,20 @@ def main(
     # The destination is always an agent (bare name, or ssh://agent).
     if not dst_ref:
         console.print(f"[red]No destination agent in {destination}[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     dst_agent = get_agent(dst_ref)
     if dst_agent is None:
         console.print(f"[red]Unknown agent: {dst_ref}[/red]")
         console.print(f"[dim]Available agents: {', '.join(REGISTRY)}[/dim]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     if not dst_agent.supports_create():
         console.print(f"[red]{dst_agent.label} does not support session creation[/red]")
         console.print("[dim]The conversation could not be seeded into this agent's storage format.[/dim]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     if dst_remote is None and not dst_agent.exists():
         console.print(f"[yellow]Agent path not found: {dst_agent.base_path}[/yellow]")
         console.print(f"[dim]Is {dst_agent.name} installed?[/dim]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     # The source is either a conversation JSON (a file, an fd from process
     # substitution, or stdin), or an agent/session reference, local or remote
@@ -404,23 +411,23 @@ def main(
         records = _read_records_from(source)
         if not records:
             console.print(f"[yellow]No conversation in {source}[/yellow]")
-            raise typer.Exit(1)
+            raise SystemExit(1)
         common_doc = {'context': records, 'source': source}
         src_desc = source
     else:
         src_name, src_id = parse_ref(src_ref)
         if not src_id:
             console.print(f"[red]No session ID in {source} (expected agent/session_id)[/red]")
-            raise typer.Exit(1)
+            raise SystemExit(1)
         src_agent = get_agent(src_name)
         if src_agent is None:
             console.print(f"[red]Unknown agent: {src_name}[/red]")
             console.print(f"[dim]Available agents: {', '.join(REGISTRY)}[/dim]")
-            raise typer.Exit(1)
+            raise SystemExit(1)
         if src_remote is None and not src_agent.exists():
             console.print(f"[yellow]Agent path not found: {src_agent.base_path}[/yellow]")
             console.print(f"[dim]Is {src_agent.name} installed?[/dim]")
-            raise typer.Exit(1)
+            raise SystemExit(1)
         # Fetch the conversation as a common envelope (read-only; for a remote
         # source, pull the storage files locally and read them with agent code).
         if src_remote is None:
@@ -428,7 +435,7 @@ def main(
             records = common_doc.get('context') or []
             if not records:
                 console.print(f"[yellow]No conversation in {src_name}/{src_id}[/yellow]")
-                raise typer.Exit(1)
+                raise SystemExit(1)
         else:
             with tempfile.TemporaryDirectory() as tmp:
                 _pull(src_remote, src_agent, Path(tmp))
@@ -441,7 +448,7 @@ def main(
             if not records:
                 console.print(f"[yellow]No conversation in {src_name}/{src_id} on "
                               f"{src_remote.target}[/yellow]")
-                raise typer.Exit(1)
+                raise SystemExit(1)
         src_desc = f"{src_name}/{src_id}" + (f" on {src_remote.target}" if src_remote else "")
 
     log.info("conversation_copy_dry_run" if dry_run else "conversation_copy",
@@ -455,7 +462,7 @@ def main(
         resume = get_resume_command(dst_ref, "<new-id>")
         if resume:
             console.print(f"[dim]Resume command shape: {resume}[/dim]")
-        return
+        return 0
 
     # Import into a brand-new session: locally via the common format, or by
     # pushing the updated storage back when the destination is remote.
@@ -472,7 +479,11 @@ def main(
         suffix = f" on {dst_remote.target}" if dst_remote else ""
         console.print(f"[green]Resume it{suffix} with:[/green]")
         console.print(f"  {resume}")
+    return 0
+
+
+app = main
 
 
 if __name__ == "__main__":
-    app()
+    raise SystemExit(main())

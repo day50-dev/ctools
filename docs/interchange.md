@@ -22,7 +22,7 @@ Every agent that supports it exposes two functions against a single
 - **`context`** — the portable spine: bare `{role, content}` (plus `reasoning` /
   `tool_calls` where an agent supports them). Always present.
 - **`raw`** — the agent's *verbatim* storage records, included losslessly when the
-  agent can introspect them (opencode, pi). Optional; omitted when it can't.
+  agent can introspect them (opencode, pi, openclaw). Optional; omitted when it can't.
 - The rest — session facts, once at the top. No per-record decoration.
 
 ## The 2N property
@@ -51,9 +51,12 @@ format rather than raw message lists.
 
 The common format is opt-in and degrades by capability, not by agent name:
 
-- **Seeding agents** (opencode, pi, ...) — `to_common` + `from_common`.
+- **Seeding agents** (opencode, pi, goose, hermes) — `to_common` + `from_common`.
 - **Read-only agents** — expose `raw_records` so `ccat --raw` is lossless for
-  them; they refuse `from_common` (no `create_session`).
+  them; they refuse `from_common` (no `create_session`). OpenClaw is one: its
+  per-agent store is owned by the local Gateway and carries a canonical index
+  plus integrity validation, so a raw insert would not produce a session the
+  Gateway itself considers valid — it exports, it does not seed.
 - **Bare agents** — still move via the `context` spine through `ccopy` (the
   minimum every agent provides).
 
@@ -66,6 +69,7 @@ agent has, **independently** of other agents:
 |---|---|
 | opencode | the real `opencode export <id>` re-reads the session we wrote (message count, roles, text). The TUI loads the same rows. |
 | pi       | `pi --session <id>` exits 0 (the real runtime loads the session we wrote). |
+| openclaw | read/export only — no write oracle (Gateway-owned store); `to_common` is checked structurally. |
 | others   | structural read-back through ctools' reader (no CLI to act as an oracle). |
 
 Live oracles write to the agent's **real** storage (the CLI looks there, not in

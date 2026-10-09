@@ -58,6 +58,9 @@ try:
 except ImportError:  # graceful degradation: filter defaults to pass-through
     requests = None
 
+from pathlib import Path as _Path
+FILTERS_DIR = _Path.home() / ".config" / "ctools" / "filters"
+
 
 class Filter(ABC):
     """Base class for binary classifiers.

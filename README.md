@@ -10,7 +10,7 @@
 ------
 **ctools** is a suite of simple tools for navigating through the sessions of the most popular LLM agents and coding tools. It allows you to search your history, transfer conversations, filter them, and even share them among machines and users.
 
-It supports [Claude Desktop](https://claude.com/download), [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [Hermes](https://github.com/NousResearch/hermes-agent), [Goose](https://github.com/aaif-goose/goose), [Kilo](https://github.com/Kilo-Org/kilocode), [FreeBuff](https://github.com/CodebuffAI/freebuff), [Cline](https://github.com/cline/cline), and [omp](https://github.com/can1357/oh-my-pi).
+It supports [Claude Desktop](https://claude.com/download), [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [Hermes](https://github.com/NousResearch/hermes-agent), [Goose](https://github.com/aaif-goose/goose), [Kilo](https://github.com/Kilo-Org/kilocode), [FreeBuff](https://github.com/CodebuffAI/freebuff), [Cline](https://github.com/cline/cline), [omp](https://github.com/can1357/oh-my-pi), and [OpenClaw](https://openclaw.ai/).
 
 Your work travels with you. The source is never touched, so it's a true copy. And when the destination is on another machine, it's just `ccopy opencode/ses_abc123 ssh://chris@remote/codex`. It pulls the agent's storage over your normal ssh (the remote only needs `sshd` and `tar`).
 
@@ -81,6 +81,7 @@ Resume it with:
 | `cconnect` | Live concept pipelines between sessions | [docs/cconnect.md](docs/cconnect.md) |
 | `cdu` | Token usage per session (du for context windows) | [docs/cdu.md](docs/cdu.md) |
 | `crm` | Remove concepts from a session (mdel) | [docs/crm.md](docs/crm.md) |
+| `ctools-web` | Browser dashboard for all of the above | [Web dashboard](#web-dashboard) |
 
 Every tool takes `--version`. The session-mover tools (`ccopy`, `cextract`, `cconnect`, `crm`) also take `--verbose` for structured logging. Each tool's full flag reference, output formats, and examples live in its `docs/` page — the table above is just the 30-second version.
 
@@ -130,6 +131,12 @@ Context windows are endpoints: opencode, Claude Code, Codex, Pi. They all speak 
 | cline | JSON (`~/.cline/data/tasks/`) |
 | omp | JSONL (`~/.omp/agent/sessions/`, tree journal) |
 | freebuff | JSON (`~/.config/<codebuff>/projects/`) |
+| openclaw | SQLite (per-agent, `~/.openclaw/agents/`, `OPENCLAW_STATE_DIR`) |
+
+OpenClaw is a **personal assistant** rather than a terminal coding agent, so it
+runs in a local Gateway that owns its store; ctools reads and exports its
+sessions but does not seed new ones (the store has canonical-index and integrity
+checks that a raw insert cannot satisfy).
 
 Run `cdir` to see which endpoints are found on your system and where they store data.
 
@@ -170,6 +177,37 @@ Add to your MCP config:
     }
   }
 }
+```
+
+## Web dashboard
+
+Prefer a mouse to a man page? ctools ships a browser dashboard — a small local
+web server (Python stdlib only, no web dependencies) with the same library
+underneath. Same on macOS, Windows, and Linux:
+
+```sh
+$ ctools-web                 # or: python -m ctools.webui
+ctools 0.2.1 dashboard: http://127.0.0.1:8765
+```
+
+Open the URL. You get four views:
+
+- **Overview** — every supported agent, installed or not, with session counts
+  and total tokens, and a jump into each agent's sessions.
+- **Search** — `cgrep` in the browser: one regex box, per-agent chips, live
+  matches; click any match to open that conversation.
+- **Sessions** — `cdir` for one agent: newest, largest, or by token usage.
+- **Conversation** — `ccat` with the source session's messages, token usage,
+  the resume command, concept extraction (`cextract`), a markdown export,
+  and **Copy** — `ccopy` to any other installed agent, which creates a fresh
+  session there (source untouched) and tells you how to resume it.
+
+The server binds to `127.0.0.1` by default, so nothing is exposed to your
+network unless you pass `--host 0.0.0.0`. There is one write operation:
+Copy. Everything else is read-only against the agents' storage.
+
+```sh
+ctools-web --port 9000
 ```
 
 ## Installation

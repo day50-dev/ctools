@@ -22,7 +22,7 @@ import re
 import sys
 from typing import IO, List, Optional, Tuple
 
-import typer
+import argparse
 from rich.console import Console
 
 from ctools.agents import REGISTRY, Agent, AgentError, Match, get_agent
@@ -32,7 +32,6 @@ from ctools.lib import get_formatter
 __all__ = ['app', 'parse_path_pattern', 'sessions_for_pattern', 'grep_session',
            'EXIT_MATCH', 'EXIT_NO_MATCH', 'EXIT_ERROR']
 
-app = typer.Typer()
 console = Console()
 
 # grep-compatible exit statuses.
@@ -215,56 +214,103 @@ def _exit_status(errors: bool, has_result: bool) -> int:
     return EXIT_MATCH if has_result else EXIT_NO_MATCH
 
 
-@app.command()
-def main(
-    pattern: str = typer.Argument(..., help="Regex search pattern"),
-    paths: List[str] = typer.Argument(None,
-                                     help="Agent/session paths (e.g., opencode/*); omit (or pass '*') for all agents"),
-    list_files: bool = typer.Option(False, "--files-with-matches", "-l", help="Show only session IDs with matches"),
-    list_files_neg: bool = typer.Option(False, "--files-without-match", "-L", help="Show only session IDs without matches"),
-    no_filename: bool = typer.Option(False, "--no-filename", "-h", help="Suppress the session path prefix"),
-    with_filename: bool = typer.Option(False, "--with-filename", "-H", help="Force the session path prefix (default)"),
-    max_matches: Optional[int] = typer.Option(None, "--max-count", "-m", help="Stop after N matches per session"),
-    only_matching: bool = typer.Option(False, "--only-matching", "-o", help="Print only the matching text, one hit per line"),
-    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output; rely on the exit status"),
-    whole_word: bool = typer.Option(False, "--word-regexp", "-w", help="Match only whole words"),
-    whole_line: bool = typer.Option(False, "--line-regexp", "-x", help="Match only whole lines"),
-    extended: bool = typer.Option(False, "--extended-regexp", "-E", help="Extended regex (the default; accepted for grep compatibility)"),
-    fixed_string: bool = typer.Option(False, "--fixed-strings", "-F", help="Treat the pattern as a fixed string, not a regex"),
-    include: Optional[List[str]] = typer.Option(None, "--include", help="Only search sessions matching this glob (e.g. 'opencode/ses_*'); repeatable"),
-    exclude: Optional[List[str]] = typer.Option(None, "--exclude", help="Skip sessions matching this glob; repeatable"),
-    all_agents: bool = typer.Option(False, "--all", "-a", help="Search every installed agent (same as omitting paths)"),
-    count: bool = typer.Option(False, "--count", "-c", help="Show match count per session"),
-    invert: bool = typer.Option(False, "--invert-match", "-v", help="Invert match"),
-    before: int = typer.Option(0, "--before", "-B", help="Show N lines before match"),
-    after: int = typer.Option(0, "--after", "-A", help="Show N lines after match"),
-    context: int = typer.Option(0, "--context", "-C", help="Show N lines before and after match"),
-    ignore_case: bool = typer.Option(False, "--ignore-case", "-i", help="Ignore case"),
-    fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md, or default"),
-    version: bool = version_option("cgrep"),
-):
-    """
-    Search through agent session content.
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="cgrep",
+        add_help=False,
+        description=("Search through agent session content.\n\n"
+                     "Patterns are regex. Paths specify agents and optionally "
+                     "session IDs. Match lines are prefixed with the session "
+                     "path, grep-style; use --no-filename (-h) to suppress "
+                     "that prefix, or --with-filename (-H) to force it back "
+                     "on. Exit status is 0 when anything matched, 1 when "
+                     "nothing did, 2 on error."),
+    )
+    parser.add_argument("--help", action="help",
+                        help="Show this help message and exit")
+    parser.add_argument("pattern", help="Regex search pattern")
+    parser.add_argument("paths", nargs="*",
+                        help="Agent/session paths (e.g., opencode/*); omit (or pass '*') for all agents")
+    parser.add_argument("-l", "--files-with-matches", action="store_true",
+                        help="Show only session IDs with matches")
+    parser.add_argument("-L", "--files-without-match", action="store_true",
+                        help="Show only session IDs without matches")
+    parser.add_argument("-h", "--no-filename", action="store_true",
+                        help="Suppress the session path prefix")
+    parser.add_argument("-H", "--with-filename", action="store_true",
+                        help="Force the session path prefix (default)")
+    parser.add_argument("-m", "--max-count", type=int,
+                        help="Stop after N matches per session")
+    parser.add_argument("-o", "--only-matching", action="store_true",
+                        help="Print only the matching text, one hit per line")
+    parser.add_argument("-q", "--quiet", action="store_true",
+                        help="Suppress output; rely on the exit status")
+    parser.add_argument("-w", "--word-regexp", action="store_true",
+                        help="Match only whole words")
+    parser.add_argument("-x", "--line-regexp", action="store_true",
+                        help="Match only whole lines")
+    parser.add_argument("-E", "--extended-regexp", action="store_true",
+                        help="Extended regex (the default; accepted for grep compatibility)")
+    parser.add_argument("-F", "--fixed-strings", action="store_true",
+                        help="Treat the pattern as a fixed string, not a regex")
+    parser.add_argument("--include", action="append",
+                        help="Only search sessions matching this glob; repeatable")
+    parser.add_argument("--exclude", action="append",
+                        help="Skip sessions matching this glob; repeatable")
+    parser.add_argument("-a", "--all", action="store_true",
+                        help="Search every installed agent (same as omitting paths)")
+    parser.add_argument("-c", "--count", action="store_true",
+                        help="Show match count per session")
+    parser.add_argument("-v", "--invert-match", action="store_true",
+                        help="Invert match")
+    parser.add_argument("-B", "--before", type=int, default=0,
+                        help="Show N lines before match")
+    parser.add_argument("-A", "--after", type=int, default=0,
+                        help="Show N lines after match")
+    parser.add_argument("-C", "--context", type=int, default=0,
+                        help="Show N lines before and after match")
+    parser.add_argument("-i", "--ignore-case", action="store_true",
+                        help="Ignore case")
+    parser.add_argument("-f", "--format", dest="fmt", default="default",
+                        help="Output format: json, xml, md, or default")
+    version_option(parser, "cgrep")
+    return parser
 
-    Patterns are regex. Paths specify agents and optionally session IDs.
 
-    Examples:
-        cgrep "error"                    # search every installed agent
-        cgrep -a "TODO"                  # same, with the explicit flag
-        cgrep "error" "opencode/*"       # only opencode
-        cgrep -l "TODO" "opencode/*" "claude-code/*"
-        cgrep -c "import" "opencode/*"
-        cgrep -B2 -A2 "FIXME" "opencode/ses_abc123"
-        cgrep -m1 "import" "opencode/*"
-        cgrep -o "gpt-[0-9.]+" "opencode/*" --exclude 'opencode/*_tmp'
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--version" in argv:
+        from ctools import __version__
+        print(f"cgrep (ctxttools) {__version__}")
+        return 0
+    ns = build_parser().parse_args(argv)
 
-    Match lines are prefixed with the session path, grep-style. Use -h to
-    suppress that prefix, or -H to force it back on. Exit status is 0 when
-    anything matched, 1 when nothing did, 2 on error.
-    """
+    pattern = ns.pattern
+    paths = ns.paths or []
+    list_files = ns.files_with_matches
+    list_files_neg = ns.files_without_match
+    no_filename = ns.no_filename
+    with_filename = ns.with_filename
+    max_matches = ns.max_count
+    only_matching = ns.only_matching
+    quiet = ns.quiet
+    whole_word = ns.word_regexp
+    whole_line = ns.line_regexp
+    fixed_string = ns.fixed_strings
+    include = ns.include
+    exclude = ns.exclude
+    all_agents = ns.all
+    count = ns.count
+    invert = ns.invert_match
+    before = ns.before
+    after = ns.after
+    context = ns.context
+    ignore_case = ns.ignore_case
+    fmt = ns.fmt
+
     if max_matches is not None and max_matches < 1:
         console.print("[red]Invalid max count: must be >= 1[/red]")
-        raise typer.Exit(EXIT_ERROR)
+        raise SystemExit(EXIT_ERROR)
 
     if all_agents:
         paths = ["*"]
@@ -274,7 +320,7 @@ def main(
         compiled = _compile_pattern(pattern, flags, whole_word, whole_line, fixed_string)
     except re.error as e:
         console.print(f"[red]Invalid pattern: {e}[/red]")
-        raise typer.Exit(EXIT_ERROR)
+        raise SystemExit(EXIT_ERROR)
 
     if context > 0:
         before = after = context
@@ -287,7 +333,7 @@ def main(
             formatter = get_formatter(fmt)
         except ValueError as e:
             console.print(f"[red]{e}[/red]")
-            raise typer.Exit(EXIT_ERROR)
+            raise SystemExit(EXIT_ERROR)
 
     errors = False
     agent_specs, unknown_agents = _resolve_path_patterns(' '.join(paths or []))
@@ -346,12 +392,12 @@ def main(
         files = []
 
     if quiet:
-        raise typer.Exit(_exit_status(errors, has_result))
+        raise SystemExit(_exit_status(errors, has_result))
 
     if streaming:
         if not has_result:
             print("No matches found", file=stream.stream, flush=True)
-        raise typer.Exit(_exit_status(errors, has_result))
+        raise SystemExit(_exit_status(errors, has_result))
 
     if list_files or list_files_neg:
         if formatter:
@@ -375,8 +421,11 @@ def main(
     else:
         console.print("[dim]No matches found[/dim]")
 
-    raise typer.Exit(_exit_status(errors, has_result))
+    raise SystemExit(_exit_status(errors, has_result))
+
+
+app = main
 
 
 if __name__ == "__main__":
-    app()
+    raise SystemExit(main())

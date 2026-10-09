@@ -26,22 +26,22 @@ does (the agent's storage is pulled over ssh and read locally), so the
 remote host only needs sshd and tar.
 """
 
+import argparse
 import sys
 import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import typer
 from rich.console import Console
 from rich.text import Text
 
 from ctools.agents import REGISTRY as AGENTS, SessionNotFound, get_agent
-from ctools.cli import parse_ref, parse_remote_ref, reporting, version_option
+from ctools.cli import (handle_version, parse_ref, parse_remote_ref, reporting,
+                        version_option)
 from ctools.ccopy import _local_agent, _pull
 
 __all__ = ['app']
 
-app = typer.Typer()
 console = Console()
 
 # Role -> (label, rich style). A short left margin so the transcript reads
@@ -139,7 +139,7 @@ def _fetch(ref: str) -> Tuple[str, List[dict], List[dict], Optional[dict], Optio
         base = Path(tmp)
         try:
             _pull(remote, agent, base)
-        except typer.Exit:
+        except SystemExit:
             return ref, [], [], None, f'could not pull {name} storage from {remote}'
         probe = _local_agent(agent, base)
         try:
@@ -163,49 +163,56 @@ def _use_color(mode: str) -> bool:
     return sys.stdout.isatty()
 
 
-@app.command()
-def main(
-    refs: Optional[List[str]] = typer.Argument(None,
-        help="One or more sessions to print (agent/session_id, or "
-             "ssh://[user@]host[:port]/agent/session_id)"),
-    text_out: bool = typer.Option(False, "--text", "-t",
-        help="Print a human-readable transcript instead of JSON"),
-    raw_out: bool = typer.Option(False, "--raw", "-r",
-        help="Print the lossless envelope: context plus the agent's verbatim "
-             "records and session metadata (JSON)"),
-    color: str = typer.Option("auto", "--color",
-        help="Colorize the --text transcript: never, auto, or always"),
-    version: bool = version_option("ccat"),
-):
-    """
-    Print one or more conversations, like cat.
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="ccat",
+        description=("Print one or more conversations, like cat.\n\n"
+                     "`ccat AGENT/SESSION` prints the session's messages. The "
+                     "default output is a JSON list of {role, content} objects "
+                     "(one array per session) — the llcat/OpenAI spine — so it "
+                     "can be imported or piped to another tool. Pass --text for "
+                     "a readable transcript instead, or --raw for the lossless "
+                     "envelope (the context plus the source agent's verbatim "
+                     "records and session metadata). Several sessions print in "
+                     "order, separated by a blank line. A remote source "
+                     "(ssh://...) is fetched over ssh first. The source is never "
+                     "modified."),
+    )
+    parser.add_argument("refs", nargs="*",
+                        help="One or more sessions to print (agent/session_id, "
+                             "or ssh://[user@]host[:port]/agent/session_id)")
+    parser.add_argument("-t", "--text", action="store_true", dest="text_out",
+                        help="Print a human-readable transcript instead of JSON")
+    parser.add_argument("-r", "--raw", action="store_true", dest="raw_out",
+                        help=("Print the lossless envelope: context plus the "
+                              "agent's verbatim records and session metadata "
+                              "(JSON)"))
+    parser.add_argument("--color", default="auto",
+                        help="Colorize the --text transcript: never, auto, or always")
+    version_option(parser, "ccat")
+    return parser
 
-    `ccat AGENT/SESSION` prints the session's messages. The default output is a
-    JSON list of {role, content} objects (one array per session) — the llcat/OpenAI
-    spine — so it can be imported or piped to another tool. Pass --text for a
-    readable transcript instead, or --raw for the lossless envelope (the context
-    plus the source agent's verbatim records and session metadata). Several
-    sessions print in order, separated by a blank line. A remote source
-    (ssh://...) is fetched over ssh first. The source is never modified.
 
-    Examples:
-        ccat opencode/ses_abc123
-        ccat opencode/ses_a opencode/ses_b
-        ccat --text opencode/ses_abc
-        ccat --raw opencode/ses_abc > session.json
-        ccat opencode/ses_abc | jq .
-        ccat ssh://chris@remote/opencode/ses_a
-    """
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    if (v := handle_version(args)) is not None:
+        return v
+
+    refs = args.refs or []
+    text_out = args.text_out
+    raw_out = args.raw_out
+    color = args.color
+
     if color not in ('never', 'auto', 'always'):
-        raise typer.BadParameter("must be one of: never, auto, always",
-                                 param_hint="--color")
+        print("Error: --color must be one of: never, auto, always", file=sys.stderr)
+        return 2
     use_color = _use_color(color)
 
     if not refs:
         # No argument: cat from stdin? No — ccat is explicitly ref-based. Be
         # explicit rather than surprising the user.
         console.print("[red]Usage: ccat AGENT/SESSION [AGENT/SESSION ...][/red]")
-        raise typer.Exit(1)
+        return 1
 
     printed_any = False
     for i, ref in enumerate(refs):
@@ -226,8 +233,12 @@ def main(
     # cat exits non-zero only when nothing could be read; a single bad ref
     # among good ones still prints and exits 0.
     if not printed_any:
-        raise typer.Exit(1)
+        return 1
+    return 0
+
+
+app = main
 
 
 if __name__ == "__main__":
-    app()
+    raise SystemExit(main())

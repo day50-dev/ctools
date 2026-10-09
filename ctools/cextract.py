@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import typer
+import argparse
 from rich.console import Console
 
 from ctools.agents import Agent, Message
@@ -32,7 +32,6 @@ from ctools.filterlib import SystemOneFilter
 from ctools.log import configure_logging, get_logger
 from ctools.strategy import Strategy, DEFAULT_STRATEGY
 
-app = typer.Typer()
 console = Console()
 log = get_logger()
 
@@ -198,12 +197,12 @@ def read_concepts_from_file(path: str) -> list:
     p = Path(path)
     if not p.exists():
         console.print(f"[red]File not found: {path}[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     with open(p) as f:
         data = json.load(f)
     if not isinstance(data, list):
         console.print(f"[red]Expected JSON array in {path}[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     return data
 
 
@@ -238,7 +237,7 @@ def read_concepts_from_dir(dir_path: str) -> list:
     p = Path(dir_path)
     if not p.exists():
         console.print(f"[red]Directory not found: {dir_path}[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     concepts = []
     for f in sorted(p.glob("*.json")):
@@ -304,7 +303,7 @@ def session_concepts(agent: Agent, session_id: str, strategy: Optional[str],
         messages = agent.raw_messages(session_id)
     if not messages:
         console.print(f"[yellow]Session not found: {session_id}[/yellow]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
     log.debug("messages_loaded", agent=agent.name, session=session_id, count=len(messages))
 
     if strategy:
@@ -345,42 +344,56 @@ def _dump_concepts(concepts: list, fmt: str) -> None:
             console.print(f"> {concept_text(c)}\n")
     else:
         console.print(f"[red]Unknown format: {fmt}[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
 
-@app.command()
-def main(
-    args: List[str] = typer.Argument(..., help="Sources and destinations (@ for sessions)"),
-    fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md"),
-    strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Strategy JSON file for LLM-based extraction"),
-    filter_config: Optional[str] = typer.Option(None, "--filter", "-F", help="Filter JSON file (built-in, JSON-RPC, or decision model)"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
-    version: bool = version_option("cextract"),
-):
-    """
-    Extract concepts from sessions into files, and inject them back.
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="cextract",
+        description=("Extract concepts from sessions into files, and inject "
+                     "them back.\n\n"
+                     "A leading @ marks a session (agent/session_id); anything "
+                     "else is a concept file path. With no destination, "
+                     "extracted concepts dump to stdout as JSON. To copy a whole "
+                     "CONVERSATION from one agent to a new session in another, "
+                     "use `ccopy`."),
+    )
+    parser.add_argument("args", nargs="+",
+                        help="Sources and destinations (@ for sessions)")
+    parser.add_argument("-f", "--format", dest="fmt", default="default",
+                        help="Output format: json, xml, md")
+    parser.add_argument("-s", "--strategy",
+                        help="Strategy JSON file for LLM-based extraction")
+    parser.add_argument("-F", "--filter", dest="filter_config",
+                        help="Filter JSON file (built-in, JSON-RPC, or decision model)")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Verbose output")
+    version_option(parser, "cextract")
+    return parser
 
-    A leading @ marks a session (agent/session_id); anything else is a concept
-    file path. With no destination, extracted concepts dump to stdout as JSON.
 
-    To copy a whole CONVERSATION from one agent to a new session in another,
-    use `ccopy`.
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # --version wins over the required `args` positional (GNU style): the flag is
+    # scanned before parsing so `cextract --version` works without a session.
+    if "--version" in argv:
+        from ctools import __version__
+        print(f"cextract (ctxttools) {__version__}")
+        return 0
+    ns = build_parser().parse_args(argv)
 
-    Examples:
-        cextract @opencode/ses_abc
-        cextract @opencode/ses_abc concepts/
-        cextract concepts/ @opencode/ses_abc
-        cextract @opencode/ses_abc @claude/ses_xyz
-        cextract --strategy my-strategy.json @opencode/ses_abc concepts/
-        cextract --filter my-filter.json @opencode/ses_abc concepts/
-        cextract --filter decision-model.json @opencode/ses_abc concepts/   # local classifier
-    """
+    args = ns.args
+    fmt = ns.fmt
+    strategy = ns.strategy
+    filter_config = ns.filter_config
+    verbose = ns.verbose
+
     configure_logging(verbose=verbose)
     sessions, files = parse_args(args)
 
     if not sessions:
         console.print("[red]No session references (use @ prefix)[/red]")
-        raise typer.Exit(1)
+        return 1
 
     # Files -> session: the destination is the trailing @ref.
     if files and args[-1].startswith("@"):
@@ -388,22 +401,22 @@ def main(
         concepts = [c for f in files for c in read_concepts_from_path(f)]
         if not concepts:
             console.print("[yellow]No concepts found in files[/yellow]")
-            return
+            return 0
         log.info("concepts_loaded", count=len(concepts), destination=f"{agent.name}/{session_id}")
         inject_concepts(agent, session_id, concepts)
         console.print(f"[green]Injected {len(concepts)} concepts into {agent.name}/{session_id}[/green]")
-        return
+        return 0
 
     if not args[0].startswith("@"):
         console.print("[red]Ambiguous: mix of sessions and files[/red]")
-        raise typer.Exit(1)
+        return 1
 
     # Everything else reads concepts out of the leading session.
     source, session_id = require_session(sessions[0])
     concepts = session_concepts(source, session_id, strategy, filter_config)
     if not concepts:
         console.print("[yellow]No concepts found in session[/yellow]")
-        return
+        return 0
 
     if files:
         # Session -> concept file or directory.
@@ -418,7 +431,11 @@ def main(
     else:
         # No destination: dump to stdout.
         _dump_concepts(concepts, fmt)
+    return 0
+
+
+app = main
 
 
 if __name__ == "__main__":
-    app()
+    raise SystemExit(main())

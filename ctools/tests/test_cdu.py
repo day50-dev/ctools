@@ -1,11 +1,11 @@
 import json
 import sqlite3
 import pytest
-from typer.testing import CliRunner
+from ctools.testing import Runner
 from ctools.cdu import app, count_tokens, format_tokens, get_session_tokens
 from ctools.lib import AGENTS
 
-runner = CliRunner()
+runner = Runner()
 
 
 # --- Token counting tests ---

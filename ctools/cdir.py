@@ -16,22 +16,22 @@ Usage:
     cdir opencode/*llcat*   # Filter sessions: glob on id, name, or path
 """
 
+import argparse
 import fnmatch
 import json
 import sys
 from datetime import datetime
 from typing import List, Optional, Tuple
 
-import typer
 from rich.console import Console
 
 from ctools.agents import Session, REGISTRY as AGENTS
-from ctools.cli import parse_ref, reporting, require_installed, version_option
+from ctools.cli import (handle_version, parse_ref, reporting,
+                        require_installed, version_option)
 from ctools.lib import format_datetime, format_size, get_formatter
 
 __all__ = ['app']
 
-app = typer.Typer()
 console = Console()
 
 # --- Output field registry (ps-style -o selection) ---
@@ -128,14 +128,14 @@ def _resolve_fields(output: Optional[str]) -> Optional[List[str]]:
         return None
     if output.lower() == 'help':
         _print_field_help()
-        raise typer.Exit(0)
+        raise SystemExit(0)
     fields = [f.strip() for f in output.split(',') if f.strip()]
     for f in fields:
         if f not in FIELDS:
             console.print(f"[red]Unknown field: {f}[/red]")
             console.print(f"[dim]Available fields: {', '.join(FIELDS.keys())}[/dim]")
             console.print("[dim]Use 'cdir -o help' for field descriptions.[/dim]")
-            raise typer.Exit(1)
+            raise SystemExit(1)
     return fields
 
 
@@ -172,32 +172,22 @@ def _render_table(body_rows: list, fields: List[str], color: bool = False) -> No
         print("  " + "  ".join(cells))
 
 
-def _sort_callback(sort: str):
-    """Build a click option callback that records sort flags in argv order.
-
-    click fires option callbacks left to right, so the last sort flag seen on
-    the command line is the one that wins — `ls` semantics for `cdir -tS` vs
-    `cdir -St`.
-    """
-    def callback(ctx, value):
-        if value:
-            if ctx.obj is None:
-                ctx.obj = {}
-            ctx.obj.setdefault('sort_flags', []).append(sort)
-        return value
-    return callback
+_SORT_ALIASES = {
+    '-t': 'time', '--time': 'time',
+    '-S': 'size', '-s': 'size', '--size': 'size',
+    '-u': 'ctime', '--ctime': 'ctime',
+}
 
 
-def _resolve_sort(ctx, by_time: bool, by_size: bool, by_ctime: bool) -> str:
-    """Return 'time', 'size', or 'ctime'; the last flag on the command line wins."""
-    sort_flags = (ctx.obj or {}).get('sort_flags')
-    if sort_flags:
-        return sort_flags[-1]
-    if by_ctime:
-        return 'ctime'
-    if by_size:
-        return 'size'
-    return 'time'
+def _resolve_sort(argv: List[str]) -> str:
+    """Return 'time', 'size', or 'ctime'; the last sort flag on the command
+    line wins (ls semantics for `cdir -tS` vs `cdir -St`). Scans the raw argv
+    because the order of boolean flags is what matters, not their set."""
+    last = None
+    for token in argv:
+        if token in _SORT_ALIASES:
+            last = _SORT_ALIASES[token]
+    return last or 'time'
 
 
 def _sort_key(sort: str):
@@ -479,44 +469,67 @@ def _handle_one_ref(path: str, sort: str, reverse: bool, formatter, fields,
                     one_line=one_line, color=color)
 
 
-@app.command()
-def main(
-    ctx: typer.Context,
-    paths: Optional[List[str]] = typer.Argument(None, help="One or more agent or agent/session_id references"),
-    by_time: bool = typer.Option(False, "--time", "-t", callback=_sort_callback('time'), help="Sort by modification time"),
-    by_size: bool = typer.Option(False, "--size", "-S", "-s", callback=_sort_callback('size'), help="Sort by size"),
-    by_ctime: bool = typer.Option(False, "--ctime", "-u", callback=_sort_callback('ctime'), help="Sort by creation time"),
-    reverse: bool = typer.Option(False, "--reverse", "-r", help="Reverse sort order"),
-    recursive: bool = typer.Option(False, "--recursive", "-R", help="Show agent name, recurse all agents if no path given"),
-    long_format: bool = typer.Option(False, "--long", "-l", help="Show details: modified, size, messages, path"),
-    one_line: bool = typer.Option(False, "--one-line", "-1", help="Print one session ID per line, with no header"),
-    color: str = typer.Option("auto", "--color", help="Colorize output: never, auto, or always"),
-    fmt: str = typer.Option("default", "--format", "-f", help="Output format: json, xml, md, or default"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Select output fields (comma-separated). Use 'help' to list available fields."),
-    version: bool = version_option("cdir"),
-):
-    """
-    List agents and their conversation sessions.
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="cdir",
+        description=("List agents and their conversation sessions.\n\n"
+                     "Accepts one or more `agent` or `agent/session_id` "
+                     "references. With no arguments, lists all known agents. "
+                     "With an agent name, lists sessions for that agent. With "
+                     "agent/session_id, shows that session's row (contents live "
+                     "in ccat). With -R and no arguments, recurses all agents. "
+                     "Sort flags are ls-style: -t by time, -S by size, -u by "
+                     "creation time; when several are given the last one wins "
+                     "(-tS == -S)."),
+    )
+    parser.add_argument("paths", nargs="*",
+                        help="One or more agent or agent/session_id references")
+    parser.add_argument("-t", "--time", action="store_true",
+                        help="Sort by modification time")
+    parser.add_argument("-S", "--size", action="store_true", help="Sort by size")
+    parser.add_argument("-s", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("-u", "--ctime", action="store_true",
+                        help="Sort by creation time")
+    parser.add_argument("-r", "--reverse", action="store_true",
+                        help="Reverse sort order")
+    parser.add_argument("-R", "--recursive", action="store_true",
+                        help="Show agent name, recurse all agents if no path given")
+    parser.add_argument("-l", "--long", action="store_true", dest="long_format",
+                        help="Show details: modified, size, messages, path")
+    parser.add_argument("-1", "--one-line", action="store_true",
+                        help="Print one session ID per line, with no header")
+    parser.add_argument("--color", default="auto",
+                        help="Colorize output: never, auto, or always")
+    parser.add_argument("-f", "--format", dest="fmt", default="default",
+                        help="Output format: json, xml, md, or default")
+    parser.add_argument("-o", "--output",
+                        help=("Select output fields (comma-separated). "
+                              "Use 'help' to list available fields."))
+    version_option(parser, "cdir")
+    return parser
 
-    Accepts one or more `agent` or `agent/session_id` references.
 
-    With no arguments, lists all known agents.
-    With an agent name, lists sessions for that agent.
-    With agent/session_id, shows that session's row (contents live in ccat).
-    With many arguments, each is handled in turn (list the exact ids as rows,
-    list the bare agents, filter the globs).
-    With -R and no arguments, recurses all agents.
-    With -l, shows full details (modified, size, message count, path).
-    With -o, selects the output fields shown (see 'cdir -o help').
-    With -1, prints one session ID per line (no header, no tree).
-    Sort flags are ls-style: -t by time, -S by size, -u by creation time,
-    and when several are given the last one wins (-tS == -S).
-    """
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    args = build_parser().parse_args(argv)
+    if (v := handle_version(args)) is not None:
+        return v
+
+    paths = args.paths or None
+    color = args.color
+    fmt = args.fmt
+    output = args.output
+    reverse = args.reverse
+    recursive = args.recursive
+    long_format = args.long_format
+    one_line = args.one_line
+
     if color not in ('never', 'auto', 'always'):
-        raise typer.BadParameter("must be one of: never, auto, always", param_hint="--color")
+        print("Error: --color must be one of: never, auto, always", file=sys.stderr)
+        return 2
 
     fields = _resolve_fields(output)
-    sort = _resolve_sort(ctx, by_time, by_size, by_ctime)
+    sort = _resolve_sort(argv)
     use_color = _use_color(color)
 
     formatter = None
@@ -525,7 +538,7 @@ def main(
             formatter = get_formatter(fmt)
         except ValueError as e:
             console.print(f"[red]{e}[/red]")
-            raise typer.Exit(1)
+            return 1
 
     if not paths:
         if recursive:
@@ -533,7 +546,7 @@ def main(
                                one_line=one_line, color=use_color)
         else:
             _list_agents(formatter)
-        return
+        return 0
 
     def _is_agent_glob(ref: str) -> bool:
         agent, _ = parse_ref(ref)
@@ -572,7 +585,11 @@ def main(
         _sep()
         _handle_one_ref(path, sort, reverse, formatter, fields, long_format,
                         one_line, recursive, use_color)
+    return 0
+
+
+app = main
 
 
 if __name__ == "__main__":
-    app()
+    raise SystemExit(main())
