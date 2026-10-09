@@ -722,13 +722,13 @@ def test_cli_unknown_agent_exit_status():
 # --- Format flag tests ---
 
 def test_cli_format_json_search(tmp_path):
-    """Test --format json for search results."""
+    """Test --type json for search results."""
     create_test_opencode_db(tmp_path, "ses_test123")
     
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["--format", "json", "python", "opencode/ses_test123"])
+        result = runner.invoke(app, ["--type", "json", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         data = json.loads(result.stdout)
         assert len(data) >= 2
@@ -740,13 +740,13 @@ def test_cli_format_json_search(tmp_path):
 
 
 def test_cli_format_xml_search(tmp_path):
-    """Test --format xml for search results."""
+    """Test --type xml for search results."""
     create_test_opencode_db(tmp_path, "ses_test123")
     
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["--format", "xml", "python", "opencode/ses_test123"])
+        result = runner.invoke(app, ["--type", "xml", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         assert '<?xml version="1.0"' in result.stdout
         assert '<matches>' in result.stdout
@@ -756,13 +756,13 @@ def test_cli_format_xml_search(tmp_path):
 
 
 def test_cli_format_md_search(tmp_path):
-    """Test --format md for search results."""
+    """Test --type md for search results."""
     create_test_opencode_db(tmp_path, "ses_test123")
     
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["--format", "md", "python", "opencode/ses_test123"])
+        result = runner.invoke(app, ["--type", "md", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         assert '### opencode/ses_test123' in result.stdout
     finally:
@@ -770,13 +770,13 @@ def test_cli_format_md_search(tmp_path):
 
 
 def test_cli_format_json_list_files(tmp_path):
-    """Test --format json with -l flag."""
+    """Test --type json with -l flag."""
     create_test_opencode_db(tmp_path, "ses_test123")
     
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["--format", "json", "-l", "python", "opencode/ses_test123"])
+        result = runner.invoke(app, ["--type", "json", "-l", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         data = json.loads(result.stdout)
         assert len(data) == 1
@@ -786,13 +786,13 @@ def test_cli_format_json_list_files(tmp_path):
 
 
 def test_cli_format_json_count(tmp_path):
-    """Test --format json with -c flag."""
+    """Test --type json with -c flag."""
     create_test_opencode_db(tmp_path, "ses_test123")
     
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["--format", "json", "-c", "python", "opencode/ses_test123"])
+        result = runner.invoke(app, ["--type", "json", "-c", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         data = json.loads(result.stdout)
         assert 'opencode/ses_test123' in data
@@ -802,13 +802,13 @@ def test_cli_format_json_count(tmp_path):
 
 
 def test_cli_format_xml_list_files(tmp_path):
-    """Test --format xml with -l flag."""
+    """Test --type xml with -l flag."""
     create_test_opencode_db(tmp_path, "ses_test123")
     
     original = AGENTS['opencode'].base_path
     AGENTS['opencode'].base_path = tmp_path
     try:
-        result = runner.invoke(app, ["--format", "xml", "-l", "python", "opencode/ses_test123"])
+        result = runner.invoke(app, ["--type", "xml", "-l", "python", "opencode/ses_test123"])
         assert result.exit_code == 0
         assert '<?xml version="1.0"' in result.stdout
         assert '<files match="true">' in result.stdout
@@ -817,8 +817,8 @@ def test_cli_format_xml_list_files(tmp_path):
 
 
 def test_cli_format_invalid():
-    """Test --format with invalid format."""
-    result = runner.invoke(app, ["--format", "csv", "python", "opencode/*"])
+    """Test --type with invalid format."""
+    result = runner.invoke(app, ["--type", "csv", "python", "opencode/*"])
     assert result.exit_code == 2
     assert "Unknown format" in result.stdout
 

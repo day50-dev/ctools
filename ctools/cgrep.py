@@ -15,6 +15,9 @@ Usage:
     cgrep -c "pattern" "opencode/*" "claude-code/*"
     cgrep -h "pattern" "opencode/ses_abc123"   # drop the session path prefix
     cgrep -q "pattern" "opencode/*"            # exit status only
+    cgrep -f patterns.txt "opencode/*"         # patterns from a file (one per line)
+    cgrep -e "foo" -e "bar" "opencode/*"       # multiple patterns
+    cgrep -t json "pattern" "opencode/*"       # output as json (type: json/xml/md)
 """
 
 import fnmatch
@@ -215,64 +218,91 @@ def _exit_status(errors: bool, has_result: bool) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # GNU-grep-style layout: a Usage line, a tight summary + example up top,
+    # then options grouped the way grep groups them (pattern selection,
+    # output control, context control), then a trailing note on paths and
+    # exit status (like grep's "When FILE is '-'..." paragraph). The
+    # RawDescriptionHelpFormatter keeps our explicit newlines/spaces verbatim
+    # instead of reflowing the description into one wrapped blob.
     parser = argparse.ArgumentParser(
         prog="cgrep",
         add_help=False,
-        description=("Search through agent session content.\n\n"
-                     "Patterns are regex. Paths specify agents and optionally "
-                     "session IDs. Match lines are prefixed with the session "
-                     "path, grep-style; use --no-filename (-h) to suppress "
-                     "that prefix, or --with-filename (-H) to force it back "
-                     "on. Exit status is 0 when anything matched, 1 when "
-                     "nothing did, 2 on error."),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Search for PATTERNS in agent session content.\n"
+            "Example: cgrep -i 'hello world' opencode/* claude-code/*\n\n"
+            "PATTERNS is a regular expression.\n"
+            "Paths are AGENT/SESSION-GLOB pairs (e.g. opencode/ses_abc123);\n"
+            "a bare '*' (or no paths) searches every installed agent."
+        ),
+        epilog=(
+            "Match lines are prefixed with the session path, grep-style;\n"
+            "--no-filename (-h) suppresses that prefix, --with-filename (-H)\n"
+            "forces it on.\n\n"
+            "Exit status is 0 if any line is selected, 1 otherwise; if any\n"
+            "error occurs (bad pattern, unknown agent, missing agent data)\n"
+            "the exit status is 2."
+        ),
     )
-    parser.add_argument("--help", action="help",
-                        help="Show this help message and exit")
-    parser.add_argument("pattern", help="Regex search pattern")
+    parser.add_argument("pattern", nargs="?", default=None,
+                        help="regex search pattern (omit if -f/-e supplies it)")
     parser.add_argument("paths", nargs="*",
-                        help="Agent/session paths (e.g., opencode/*); omit (or pass '*') for all agents")
-    parser.add_argument("-l", "--files-with-matches", action="store_true",
-                        help="Show only session IDs with matches")
-    parser.add_argument("-L", "--files-without-match", action="store_true",
-                        help="Show only session IDs without matches")
-    parser.add_argument("-h", "--no-filename", action="store_true",
-                        help="Suppress the session path prefix")
-    parser.add_argument("-H", "--with-filename", action="store_true",
-                        help="Force the session path prefix (default)")
-    parser.add_argument("-m", "--max-count", type=int,
-                        help="Stop after N matches per session")
-    parser.add_argument("-o", "--only-matching", action="store_true",
-                        help="Print only the matching text, one hit per line")
-    parser.add_argument("-q", "--quiet", action="store_true",
-                        help="Suppress output; rely on the exit status")
-    parser.add_argument("-w", "--word-regexp", action="store_true",
-                        help="Match only whole words")
-    parser.add_argument("-x", "--line-regexp", action="store_true",
-                        help="Match only whole lines")
-    parser.add_argument("-E", "--extended-regexp", action="store_true",
-                        help="Extended regex (the default; accepted for grep compatibility)")
-    parser.add_argument("-F", "--fixed-strings", action="store_true",
-                        help="Treat the pattern as a fixed string, not a regex")
-    parser.add_argument("--include", action="append",
-                        help="Only search sessions matching this glob; repeatable")
-    parser.add_argument("--exclude", action="append",
-                        help="Skip sessions matching this glob; repeatable")
-    parser.add_argument("-a", "--all", action="store_true",
-                        help="Search every installed agent (same as omitting paths)")
-    parser.add_argument("-c", "--count", action="store_true",
-                        help="Show match count per session")
-    parser.add_argument("-v", "--invert-match", action="store_true",
-                        help="Invert match")
-    parser.add_argument("-B", "--before", type=int, default=0,
-                        help="Show N lines before match")
-    parser.add_argument("-A", "--after", type=int, default=0,
-                        help="Show N lines after match")
-    parser.add_argument("-C", "--context", type=int, default=0,
-                        help="Show N lines before and after match")
-    parser.add_argument("-i", "--ignore-case", action="store_true",
-                        help="Ignore case")
-    parser.add_argument("-f", "--format", dest="fmt", default="default",
-                        help="Output format: json, xml, md, or default")
+                        help="AGENT/SESSION paths (e.g. opencode/*); omit or pass '*' for all agents")
+    parser.add_argument("--help", action="help", help="display this help text and exit")
+
+    g = parser.add_argument_group("Pattern selection and interpretation")
+    g.add_argument("-E", "--extended-regexp", action="store_true",
+                   help="PATTERNS are extended regular expressions (the default)")
+    g.add_argument("-F", "--fixed-strings", action="store_true",
+                   help="PATTERNS are literal strings, not a regex")
+    g.add_argument("-e", "--regexp", dest="extra_pattern", metavar="PATTERNS",
+                   action="append",
+                   help="use PATTERNS for matching (repeatable; combined with the pattern argument)")
+    g.add_argument("-f", "--file", dest="pattern_file", metavar="FILE",
+                   help="take PATTERNS from FILE, one pattern per line (repeatable)")
+    g.add_argument("-i", "--ignore-case", action="store_true",
+                   help="ignore case distinctions in patterns and data")
+    g.add_argument("-w", "--word-regexp", action="store_true",
+                   help="match only whole words")
+    g.add_argument("-x", "--line-regexp", action="store_true",
+                   help="match only whole lines")
+
+    g = parser.add_argument_group("Output control")
+    g.add_argument("-c", "--count", action="store_true",
+                   help="print only a count of matches per session")
+    g.add_argument("-l", "--files-with-matches", action="store_true",
+                   help="print only the session IDs with matches")
+    g.add_argument("-L", "--files-without-match", action="store_true",
+                   help="print only the session IDs without matches")
+    g.add_argument("-m", "--max-count", type=int,
+                   help="stop after N matches per session")
+    g.add_argument("-o", "--only-matching", action="store_true",
+                   help="print only the matching text, one hit per line")
+    g.add_argument("-q", "--quiet", "--silent", action="store_true",
+                   help="suppress all normal output (exit status only)")
+    g.add_argument("-h", "--no-filename", action="store_true",
+                   help="suppress the session path prefix")
+    g.add_argument("-H", "--with-filename", action="store_true",
+                   help="force the session path prefix (default)")
+    g.add_argument("--include", action="append",
+                   help="search only sessions matching this glob (repeatable)")
+    g.add_argument("--exclude", action="append",
+                   help="skip sessions matching this glob (repeatable)")
+    g.add_argument("-a", "--all", action="store_true",
+                   help="search every installed agent (same as omitting paths)")
+    g.add_argument("-t", "--type", dest="fmt", default="default",
+                   help="output type: default, json, xml, or md")
+
+    g = parser.add_argument_group("Context control")
+    g.add_argument("-B", "--before-context", dest="before", type=int, default=0, metavar="NUM",
+                   help="print NUM lines of leading context")
+    g.add_argument("-A", "--after-context", dest="after", type=int, default=0, metavar="NUM",
+                   help="print NUM lines of trailing context")
+    g.add_argument("-C", "--context", type=int, default=0, metavar="NUM",
+                   help="print NUM lines before and after each match")
+    g.add_argument("-v", "--invert-match", action="store_true",
+                   help="select non-matching lines")
+
     version_option(parser, "cgrep")
     return parser
 
@@ -285,8 +315,40 @@ def main(argv=None) -> int:
         return 0
     ns = build_parser().parse_args(argv)
 
-    pattern = ns.pattern
-    paths = ns.paths or []
+    # Gather patterns from the positional, -e, and -f (one per line). This
+    # mirrors grep: a pattern can come from the command line, from -e
+    # repeatable arguments, or from a file (or any combination).
+    #
+    # argparse's nargs='?' pattern + nargs='*' paths is greedy: when -f/-e is
+    # present AND no explicit paths were given, a lone trailing token lands in
+    # `pattern` even though the user meant it as a path. Detect and fix that
+    # one ambiguous case: if -f/-e supplied patterns and `paths` is empty, the
+    # `pattern` token was really a path.
+    pattern_arg = ns.pattern
+    paths = list(ns.paths or [])
+    if pattern_arg is not None and paths == [] and (ns.pattern_file or ns.extra_pattern):
+        # The lone token was meant as a path, not a pattern.
+        paths = [pattern_arg]
+        pattern_arg = None
+
+    raw_patterns: List[str] = []
+    if pattern_arg is not None:
+        raw_patterns.append(pattern_arg)
+    if ns.extra_pattern:
+        raw_patterns.extend(ns.extra_pattern)
+    if ns.pattern_file:
+        # -f is a single path (store, not append), so wrap it for the loop.
+        for fname in [ns.pattern_file]:
+            try:
+                with open(fname, "r", encoding="utf-8") as fh:
+                    raw_patterns.extend(
+                        ln.rstrip("\r\n") for ln in fh if ln.strip())
+            except OSError as e:
+                console.print(f"[red]Cannot read pattern file {fname}: {e}[/red]")
+                raise SystemExit(EXIT_ERROR)
+    if not raw_patterns:
+        console.print("[red]No pattern given (use a pattern argument, -e, or -f).[/red]")
+        raise SystemExit(EXIT_ERROR)
     list_files = ns.files_with_matches
     list_files_neg = ns.files_without_match
     no_filename = ns.no_filename
@@ -316,8 +378,16 @@ def main(argv=None) -> int:
         paths = ["*"]
 
     flags = re.IGNORECASE if ignore_case else 0
+    # Combine every pattern into one alternation so the single compiled
+    # pattern works with grep_session / -o unchanged. With -F each line is a
+    # literal string, so escape it first; otherwise each is a regex. Joining
+    # with '|' means a line matches if ANY pattern matches it (grep semantics).
+    # The body is pre-joined/pre-escaped, so pass fixed_string=False to
+    # _compile_pattern and let it only apply the -w / -x wrapping.
+    body = "|".join(
+        (re.escape(p) if fixed_string else p) for p in raw_patterns)
     try:
-        compiled = _compile_pattern(pattern, flags, whole_word, whole_line, fixed_string)
+        compiled = _compile_pattern(body, flags, whole_word, whole_line, fixed_string=False)
     except re.error as e:
         console.print(f"[red]Invalid pattern: {e}[/red]")
         raise SystemExit(EXIT_ERROR)

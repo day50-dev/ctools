@@ -74,8 +74,11 @@ Give as many as you like; they print in order, separated by a blank line.
 .I ssh://[user@]host[:port]/agent/session_id
 A session on a remote host.
 .B ccat
-pulls the agent's storage over ssh and reads it locally, so the remote only
-needs
+fetches it in two tiers: if the remote runs ctools, its own export streams just
+the session's JSON over one ssh; otherwise
+.B ccat
+pulls the agent's storage over ssh and reads it locally, so a bare remote needs
+only
 .B sshd
 and
 .BR tar .

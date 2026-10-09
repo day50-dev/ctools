@@ -92,15 +92,26 @@ ccopy runs over your normal ssh setup (keys,
 .PP
 The remote host does
 .B not
-need ctxttools installed — only
-.B sshd
-and a POSIX
-.BR tar .
-ccopy pulls the remote agent's storage (its sessions directory or its
+need ctxttools installed. ccopy works in
+two tiers: it first probes whether the remote runs ctools. If it does, it takes
+the cheap path: the far side runs ctools itself and only the conversation JSON
+crosses the wire (the source is read with
+.B ccat
+and
+.BR ccopy ,
+the destination seeded with
+.BR ccopy ).
+If it does not, it takes the expensive
+path: it pulls the remote agent's storage (its sessions directory or its
 database) over ssh with a plain
 tar pipe, unpacks it into a local scratch directory, reads or writes the
 conversation with the normal local agent code, and pushes any changed storage
-back the same way. The storage location is anchored at the remote's $HOME
+back the same way. In that path nothing ctools-specific runs on the far side,
+so a bare remote (just
+.B sshd
+and a POSIX
+.BR tar )
+still works. The storage location is anchored at the remote's $HOME
 (the agent's default install root, e.g.
 .IR ~/.local/share/opencode ,
 .IR ~/.pi/agent ),

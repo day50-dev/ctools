@@ -1,9 +1,21 @@
 import json
 import sqlite3
+import subprocess
 import pytest
+from pathlib import Path
 from ctools.testing import Runner
-from ctools.ccopy import app
+from ctools.ccopy import app, import_conversation
 from ctools.lib import AGENTS
+
+
+@pytest.fixture(autouse=True)
+def _clear_probe_cache():
+    """The ccopy remote probe memoizes per-host results in a module dict;
+    clear it so tests don't see a stale answer from a prior test."""
+    import ctools.ccopy as ccopy
+    ccopy._ctools_probes.clear()
+    yield
+    ccopy._ctools_probes.clear()
 
 runner = Runner()
 
@@ -259,7 +271,9 @@ def test_import_json_rejects_garbage(tmp_path):
     try:
         result = runner.invoke(app, ["--import-json", "opencode"], input="{not json")
         assert result.exit_code == 1
-        assert "Invalid JSON" in result.stdout
+        # diagnostics go to stderr; stdout stays clean for the id
+        assert "Invalid JSON" in result.stderr
+        assert "Invalid JSON" not in result.stdout
     finally:
         AGENTS["opencode"].base_path = original
 
@@ -379,12 +393,14 @@ def test_is_json_source(tmp_path):
 # --- Remote transport (pulled storage, ssh mocked) ---
 
 
-def _mock_transport(monkeypatch, remote_home: "object"):
+def _mock_transport(monkeypatch, remote_home: "object", has_ctools: bool = False):
     """Patch ccopy's transport so "ssh to remote" becomes a local file move.
 
     _pull copies `<remote_home>/<agent-dir>/<storage>` into dest_base as
     `<agent-dir>/<storage>`; _push copies it back. This exercises the whole
-    flow (pull -> local agent -> push) with no real network.
+    flow (pull -> local agent -> push) with no real network. When
+    has_ctools=False (the default) the first-pass probe also reports the
+    remote as having no ctools, so the expensive tar path is taken.
     """
     import ctools.ccopy as ccopy
 
@@ -416,6 +432,44 @@ def _mock_transport(monkeypatch, remote_home: "object"):
 
     monkeypatch.setattr(ccopy, "_pull", fake_pull)
     monkeypatch.setattr(ccopy, "_push", fake_push)
+
+    if has_ctools:
+        # First pass: the remote runs ctools. Model it as a local agent
+        # anchored at the remote $HOME (remote_home) so the export/import
+        # wire commands hit the "remote" db, which lives at
+        # remote_home/<storage-relative>.
+        def _mirror(agent):
+            # Mirror the remote layout: anchor the mirror's base_path at
+            # remote_home/<agent-tree> so db_name / files_read resolve to
+            # the remote db location (remote_home/<storage-relative>).
+            rel = Path(ccopy._remote_storage_rel(agent))
+            db_name = getattr(type(agent), 'db_name', None)
+            if db_name:
+                base_rel = rel.parent
+            elif getattr(type(agent), 'files_read', None):
+                base_rel = Path('.')
+            else:
+                base_rel = rel
+            return type(agent)(remote_home / base_rel)
+
+        def fake_has_ctools(remote):
+            return True
+
+        def fake_common_doc(remote, agent, session_id):
+            mirror = _mirror(agent)
+            try:
+                return mirror.to_common(session_id)
+            except Exception:
+                return None
+
+        def fake_import(remote, agent, records):
+            return import_conversation(_mirror(agent), records)
+
+        monkeypatch.setattr(ccopy, "_remote_has_ctools", fake_has_ctools)
+        monkeypatch.setattr(ccopy, "_remote_common_doc", fake_common_doc)
+        monkeypatch.setattr(ccopy, "_remote_import_records", fake_import)
+    else:
+        monkeypatch.setattr(ccopy, "_remote_has_ctools", lambda remote: False)
 
 
 def test_remote_destination_pulls_and_pushes(tmp_path, monkeypatch):
@@ -498,6 +552,8 @@ def test_dry_run_remote_makes_no_transport_calls(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ccopy, "_pull", boom)
     monkeypatch.setattr(ccopy, "_push", boom)
+    monkeypatch.setattr(ccopy, "_remote_common_doc", boom)
+    monkeypatch.setattr(ccopy, "_remote_import_records", boom)
     try:
         result = runner.invoke(app, ["opencode/ses_src", "ssh://chris@remote/codex",
                                      "--dry-run"])
@@ -505,6 +561,170 @@ def test_dry_run_remote_makes_no_transport_calls(tmp_path, monkeypatch):
         assert "Would copy" in result.stdout
     finally:
         AGENTS["opencode"].base_path = original
+
+
+def test_remote_source_first_pass_when_remote_has_ctools(tmp_path, monkeypatch):
+    """When the remote runs ctools, the source is exported there over the
+    wire (one ssh) and the expensive tar pull never happens."""
+    remote_home = tmp_path / "remote"
+    (remote_home / ".local" / "share" / "opencode").mkdir(parents=True)
+    _make_opencode_conversation_db(remote_home / ".local" / "share" / "opencode",
+                                   "ses_pulled")
+    _make_opencode_conversation_db(tmp_path, "ses_dummy")
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    _mock_transport(monkeypatch, remote_home, has_ctools=True)
+    import ctools.ccopy as ccopy
+
+    def no_tar(*a, **kw):
+        raise AssertionError("first pass: the tar transport must not run")
+
+    monkeypatch.setattr(ccopy, "_pull", no_tar)
+    monkeypatch.setattr(ccopy, "_push", no_tar)
+    try:
+        result = runner.invoke(app, ["ssh://chris@remote/opencode/ses_pulled", "opencode"])
+        assert result.exit_code == 0, result.output
+        assert "from opencode/ses_pulled on chris@remote" in result.stdout
+        new_id = result.stdout.strip().split()[-1]
+        msgs = AGENTS["opencode"].messages(new_id)
+        assert msgs[0].content == "Write a fibonacci function"
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
+def test_remote_destination_first_pass_when_remote_has_ctools(tmp_path, monkeypatch):
+    """When the remote runs ctools, the new session is seeded there over the
+    wire (ccopy --import-json) and the pull/push never happen."""
+    _make_opencode_conversation_db(tmp_path, "ses_src")
+    remote_home = tmp_path / "remote"
+    (remote_home / ".local" / "share" / "opencode").mkdir(parents=True)
+    _make_opencode_conversation_db(remote_home / ".local" / "share" / "opencode",
+                                   "ses_remote_existing")
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    _mock_transport(monkeypatch, remote_home, has_ctools=True)
+    import ctools.ccopy as ccopy
+
+    def no_tar(*a, **kw):
+        raise AssertionError("first pass: the tar transport must not run")
+
+    monkeypatch.setattr(ccopy, "_pull", no_tar)
+    monkeypatch.setattr(ccopy, "_push", no_tar)
+    try:
+        result = runner.invoke(app, ["opencode/ses_src", "ssh://chris@remote/opencode"])
+        assert result.exit_code == 0, result.output
+        assert "on chris@remote" in result.stdout
+        # The new session now exists in the REMOTE db.
+        import sqlite3
+        conn = sqlite3.connect(str(remote_home / ".local" / "share" / "opencode" / "opencode.db"))
+        ids = [r[0] for r in conn.execute("SELECT id FROM session")]
+        conn.close()
+        assert "ses_remote_existing" in ids
+        new_id = result.stdout.strip().split()[-1]
+        assert new_id in ids
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
+def test_remote_source_falls_back_to_tar_when_ctools_export_fails(tmp_path, monkeypatch):
+    """If the remote claims to have ctools but the wire export fails (e.g.
+    unknown session there), the copy falls back to the tar storage pull."""
+    remote_home = tmp_path / "remote"
+    (remote_home / ".local" / "share" / "opencode").mkdir(parents=True)
+    _make_opencode_conversation_db(remote_home / ".local" / "share" / "opencode",
+                                   "ses_pulled")
+    _make_opencode_conversation_db(tmp_path, "ses_dummy")
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    _mock_transport(monkeypatch, remote_home, has_ctools=True)
+    import ctools.ccopy as ccopy
+
+    def broken_export(remote, agent, session_id):
+        return None  # remote ctools failed to export
+
+    monkeypatch.setattr(ccopy, "_remote_common_doc", broken_export)
+    try:
+        result = runner.invoke(app, ["ssh://chris@remote/opencode/ses_pulled", "opencode"])
+        assert result.exit_code == 0, result.output
+        assert "from opencode/ses_pulled on chris@remote" in result.stdout
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
+def test_remote_has_ctools_probe(monkeypatch):
+    """_remote_has_ctools: yes/no detection via the `command -v ccopy` probe,
+    and the answer is cached per host."""
+    import ctools.ccopy as ccopy
+    from ctools.cli import Remote
+    from unittest.mock import patch
+
+    ccopy._ctools_probes.clear()
+    remote = Remote(host="probehost")
+
+    def mk(rc, out):
+        return subprocess.CompletedProcess(args=[], returncode=rc, stdout=out, stderr="")
+
+    with patch.object(ccopy, "_run", return_value=mk(0, "ok\n")), \
+            patch.object(ccopy.shutil, "which", return_value="/usr/bin/ssh"):
+        assert ccopy._remote_has_ctools(remote) is True
+        with patch.object(ccopy, "_run") as second:
+            assert ccopy._remote_has_ctools(remote) is True  # cached
+            second.assert_not_called()
+
+    ccopy._ctools_probes.clear()
+    with patch.object(ccopy, "_run", return_value=mk(1, "")), \
+            patch.object(ccopy.shutil, "which", return_value="/usr/bin/ssh"):
+        assert ccopy._remote_has_ctools(remote) is False
+    ccopy._ctools_probes.clear()
+
+
+def test_remote_common_doc_parses_envelope(monkeypatch):
+    """_remote_common_doc parses the envelope JSON the far side streams, and
+    returns None on bad output or a non-zero exit."""
+    import ctools.ccopy as ccopy
+    from ctools.cli import Remote
+    from unittest.mock import patch
+    remote = Remote(host="probehost")
+    agent = AGENTS["opencode"]
+    doc = {'context': [{'role': 'user', 'content': 'hi'}]}
+
+    with patch.object(ccopy, "_run",
+                      return_value=subprocess.CompletedProcess(
+                          args=[], returncode=0, stdout=json.dumps(doc), stderr="")):
+        assert ccopy._remote_common_doc(remote, agent, "ses_x") == doc
+
+    with patch.object(ccopy, "_run",
+                      return_value=subprocess.CompletedProcess(
+                          args=[], returncode=1, stdout="", stderr="nope")):
+        assert ccopy._remote_common_doc(remote, agent, "ses_x") is None
+
+    with patch.object(ccopy, "_run",
+                      return_value=subprocess.CompletedProcess(
+                          args=[], returncode=0, stdout="not json", stderr="")):
+        assert ccopy._remote_common_doc(remote, agent, "ses_x") is None
+
+
+def test_remote_import_records_reads_id(monkeypatch):
+    """_remote_import_records returns the id the far side prints, or None on
+    failure."""
+    import ctools.ccopy as ccopy
+    from ctools.cli import Remote
+    from unittest.mock import patch
+    remote = Remote(host="probehost")
+    agent = AGENTS["opencode"]
+    records = [{'role': 'user', 'content': 'hi'}]
+
+    with patch.object(ccopy, "_run",
+                      return_value=subprocess.CompletedProcess(
+                          args=[], returncode=0, stdout="ses_new_1\n", stderr="")) as call:
+        assert ccopy._remote_import_records(remote, agent, records) == "ses_new_1"
+        # the records were piped in as JSON on stdin
+        assert call.call_args.kwargs["input_text"] == json.dumps(records)
+
+    with patch.object(ccopy, "_run",
+                      return_value=subprocess.CompletedProcess(
+                          args=[], returncode=1, stdout="", stderr="boom")):
+        assert ccopy._remote_import_records(remote, agent, records) is None
 
 
 def test_storage_relative():
@@ -527,6 +747,46 @@ def test_remote_storage_rel_anchors_at_home():
         ".local/share/opencode/opencode.db"
     assert ccopy._remote_storage_rel(get_agent("pi")) == ".pi/agent/sessions"
     assert ccopy._remote_storage_rel(get_agent("claude-code")) == ".claude/projects"
+
+
+class _FakeProc:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_remote_storage_exists_true(monkeypatch):
+    import ctools.ccopy as ccopy
+    from ctools.cli import Remote
+    from ctools.agents import get_agent
+    monkeypatch.setattr(ccopy, "_run", lambda argv, input_text=None: _FakeProc(0, "ok\n"))
+    assert ccopy._remote_storage_exists(Remote(host="_lorenz"), get_agent("pi")) is True
+
+
+def test_remote_storage_exists_false(monkeypatch):
+    import ctools.ccopy as ccopy
+    from ctools.cli import Remote
+    from ctools.agents import get_agent
+    monkeypatch.setattr(ccopy, "_run", lambda argv, input_text=None: _FakeProc(1, ""))
+    assert ccopy._remote_storage_exists(Remote(host="_lorenz"), get_agent("pi")) is False
+
+
+def test_pull_not_installed_is_clean_error(monkeypatch, capsys):
+    """When the agent's storage isn't on the remote, _pull reports it plainly
+    (and points at `cdir`) instead of dumping a raw tar failure."""
+    import ctools.ccopy as ccopy
+    from ctools.cli import Remote
+    from ctools.agents import get_agent
+    monkeypatch.setattr(ccopy, "_remote_storage_exists", lambda remote, agent: False)
+    with pytest.raises(SystemExit) as exc:
+        ccopy._pull(Remote(host="_lorenz"), get_agent("pi"), Path("/tmp/nowhere"))
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "not installed on _lorenz" in out
+    assert "cdir ssh://_lorenz" in out
+
+
 # --- Live ssh roundtrip (skipped unless `ssh localhost` works) ---
 
 def _ssh_localhost_available() -> bool:

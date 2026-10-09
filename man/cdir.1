@@ -152,6 +152,9 @@ Multiple \fIpath\fR arguments are listed as rows (ls \fBfile1 file2\fR
 semantics), sorted like a normal listing. Globs, bare agent names, and
 exact ids may be mixed. A missing id is reported and skipped. This makes cdir the
 end of a \fBcgrep -l | xargs cdir\fR pipeline.
+.PP
+A reference may instead address another host: \fBssh://[user@]host[:port][/agent]\fR
+(see \fBREMOTE HOSTS\fR).
 .SH FILTERING
 Put a glob in the session part to filter sessions by id, name, or working
 directory (any match is shown, case-insensitive):
@@ -183,6 +186,39 @@ $ cdir '*/*ctools*'
   2 session(s)
 .fi
 .RE
+.SH REMOTE HOSTS
+A reference may point at another host, \fBssh://[user@]host[:port][/agent]\fR.
+This answers \fIwhat is on that machine?\fR before you \fBccopy\fR from or to it.
+cdir never lists a remote session's \fIcontents\fR (that is \fBccat\fR's job over
+the same transport), and it runs nothing ctools-related on the far side: a
+single ssh round trip \fBtest -e\fR's each agent's default install location
+against the remote's \fB$HOME\fR.
+.PP
+.RS
+.nf
+$ cdir ssh://_lorenz          # which agents are installed there
+_lorenz:
+Found:
+  claude-code  Claude Code CLI   ~/.claude/projects
+  opencode     Opencode CLI      ~/.local/share/opencode/opencode.db
+Not Found:
+  pi           Pi Coding Agent   ~/.pi/agent/sessions
+
+$ cdir ssh://_lorenz/pi       # just one agent
+_lorenz: pi is NOT installed (no ~/.pi/agent/sessions)
+
+$ cdir ssh://_lorenz -f json  # machine-readable
+[{"name": "opencode", "installed": true}, ...]
+.fi
+.RE
+.PP
+\fBssh://host\fR lists every agent, Found/Not Found, mirroring the local
+\fBcdir\fR. \fBssh://host/agent\fR reports whether that one agent's storage is
+present. \fBssh://host/agent/session_id\fR is a session reference \u2014 cdir defers
+to \fBccat\fR/\fBccopy\fR, where remote sessions are read or moved. An unknown
+agent name is an error, same as locally. This pairs with
+\fBccopy ... ssh://host/agent\fR: if the agent is not installed, ccopy says so
+up front instead of failing with a raw tar error.
 .SH EXAMPLES
 List all known agents:
 .PP

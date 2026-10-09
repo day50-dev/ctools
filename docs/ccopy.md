@@ -63,16 +63,24 @@ cross-host copy, ccopy tells you the new session id and the resume command to ru
 
 ### How it works over the wire
 
-The transport moves the agent's *storage files*, not ctools. ccopy pulls the
-remote agent's storage (its sessions directory, or its database) over ssh with a
-plain `tar` pipe, unpacks it into a local scratch directory, reads or writes the
-conversation with the normal local agent code, and pushes any changed storage
-back the same way. Nothing ctools-specific ever runs on the far side (this is
-what the `ssh://` form does; the pipe form above instead just runs `ccat` there).
+ccopy works in **two tiers**. First it probes the remote: does it run ctools? If
+yes, it takes the **cheap path** — the far side runs ctools itself and only the
+conversation JSON crosses the wire, in one ssh round trip per side: the source
+is read with `ccat --raw AGENT/SESSION` (the lossless envelope) and the
+destination is seeded with `ccopy --import-json AGENT`. If no, it takes the
+**expensive path** — it moves the agent's *storage
+files* instead: it pulls the remote storage (its sessions directory, or its
+database) over ssh with a plain `tar` pipe, unpacks it into a local scratch
+directory, reads or writes the conversation with the normal local agent code, and
+pushes any changed storage back the same way. Nothing ctools-specific runs on the
+far side in that path, so a bare remote still works.
 
 ```sh
-# pull:  ssh host 'tar -cf - -C ~ <agent storage>'   |  untar locally
-# push:  tar -cf - -C <mirror> <agent storage>       |  ssh host 'tar -xf - -C ~'
+# cheap (remote has ctools):  ssh host 'ccat --raw agent/ses'        -> parse envelope
+#                            ssh host 'ccopy --import-json agent' < records
+# expensive (remote has only tar):
+#   pull:  ssh host 'tar -cf - -C ~ <agent storage>'   |  untar locally
+#   push:  tar -cf - -C <mirror> <agent storage>       |  ssh host 'tar -xf - -C ~'
 ```
 
 The storage location is anchored at the remote's `$HOME` (the agent's default

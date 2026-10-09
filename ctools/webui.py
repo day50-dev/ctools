@@ -179,6 +179,18 @@ class Handler(BaseHTTPRequestHandler):
     # --- GET ---------------------------------------------------------------
 
     def do_GET(self):
+        # A top-level guard so a bug in any endpoint returns a clean 500
+        # instead of dropping the connection (curl would see nothing) and
+        # leaving a traceback in the server log.
+        try:
+            self._do_GET()
+        except Exception as e:  # noqa: BLE001 - last-resort handler guard
+            try:
+                self._error(500, f"Internal error: {type(e).__name__}: {e}")
+            except Exception:
+                pass
+
+    def _do_GET(self):
         parts = self._path()
         if not parts:
             return self._send(200, INDEX_HTML.encode("utf-8"),
@@ -210,7 +222,12 @@ class Handler(BaseHTTPRequestHandler):
             name = parts[1]
             q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else {})
             sort = (q.get("sort", ["time"])[0])
-            limit = int(q.get("limit", ["200"])[0])
+            try:
+                limit = int(q.get("limit", ["200"])[0])
+            except (TypeError, ValueError):
+                return self._error(400, "'limit' must be an integer")
+            if limit < 1:
+                return self._error(400, "'limit' must be >= 1")
 
             if name == "all":
                 # Aggregate sessions across every installed agent.
@@ -310,6 +327,10 @@ class Handler(BaseHTTPRequestHandler):
             filter_name = q.get("filter", [""])[0] or None
             filter_config = None
             if filter_name:
+                # Validate like _save_config does so a traversal name can't
+                # read a file outside FILTERS_DIR.
+                if not re.fullmatch(r"[A-Za-z0-9_.-]+", filter_name):
+                    return self._error(400, "Invalid filter name")
                 from ctools.filterlib import FILTERS_DIR
                 fp = FILTERS_DIR / f"{filter_name}.json"
                 if fp.exists():
@@ -374,6 +395,15 @@ class Handler(BaseHTTPRequestHandler):
     # --- POST --------------------------------------------------------------
 
     def do_POST(self):
+        try:
+            self._do_POST()
+        except Exception as e:  # noqa: BLE001 - last-resort handler guard
+            try:
+                self._error(500, f"Internal error: {type(e).__name__}: {e}")
+            except Exception:
+                pass
+
+    def _do_POST(self):
         parts = self._path()
         if not (parts and parts[0] == "api"):
             return self._error(404, "Not found")
@@ -382,13 +412,27 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError:
             return self._error(400, "Invalid JSON body")
+        if not isinstance(body, dict):
+            return self._error(400, "JSON body must be an object")
 
         if parts[1:] == ["search"]:
+            pattern = body.get("pattern", "")
+            if not isinstance(pattern, str):
+                return self._error(400, "'pattern' must be a string")
+            agents = body.get("agents") or ["*"]
+            if not isinstance(agents, list) or not all(isinstance(a, str) for a in agents):
+                return self._error(400, "'agents' must be a list of agent names")
+            try:
+                max_results = int(body.get("max_results", 200))
+            except (TypeError, ValueError):
+                return self._error(400, "'max_results' must be an integer")
+            if max_results < 1:
+                return self._error(400, "'max_results' must be >= 1")
             result, err = _do_search(
-                body.get("pattern", ""),
-                body.get("agents") or ["*"],
+                pattern,
+                agents,
                 bool(body.get("ignore_case")),
-                int(body.get("max_results", 200)),
+                max_results,
                 body.get("fmt", "default"),
             )
             if err:
@@ -396,32 +440,102 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(result)
 
         if parts[1:] == ["copy"]:
+            # Delegate to the ccopy CLI so the full destination syntax works
+            # for free (bare agent, agent/session, ssh://[user@]host[:port]/
+            # agent). The source is the local agent/session we're viewing.
             source = body.get("source", "")
-            dest_name = body.get("destination", "")
-            agent_name, _, session_id = source.lstrip("@").partition("/")
-            src = get_agent(agent_name)
-            dst = get_agent(dest_name)
-            if src is None or dst is None:
-                return self._error(400, "Unknown agent in source or destination")
-            if not src.exists() or not dst.exists():
-                return self._error(400, "Source or destination agent not installed")
-            if copy_conversation is None:
-                return self._error(503, "Copy unavailable (ctools.ccopy failed to import).")
+            dest = body.get("destination", "")
+            if not isinstance(source, str) or not isinstance(dest, str):
+                return self._error(400, "'source' and 'destination' must be strings")
+            dest = dest.strip()
+            if not source or "/" not in source:
+                return self._error(400, "Source must be agent/session_id")
+            if not dest:
+                return self._error(400, "Destination is required")
+            # Reject lone surrogates / undecodable text before it reaches the
+            # subprocess argv (which would otherwise raise UnicodeEncodeError).
             try:
-                new_id, count = copy_conversation(src, session_id, dst)
-            except AgentError as e:
-                return self._error(400, str(e))
-            return self._json({
-                "new_session": new_id,
-                "destination": dst.name,
-                "messages": count,
-                "resume": get_resume_command(dst.name, new_id),
-            })
+                source.encode("utf-8")
+                dest.encode("utf-8")
+            except UnicodeEncodeError:
+                return self._error(400, "Source/destination contains invalid characters")
+            try:
+                import subprocess
+                proc = subprocess.run(
+                    [sys.executable, "-m", "ctools.ccopy", source, dest],
+                    capture_output=True, text=True, timeout=120)
+            except subprocess.TimeoutExpired:
+                return self._error(504, "Copy timed out")
+            except Exception as e:  # pragma: no cover - unexpected subprocess failure
+                return self._error(500, f"Copy failed: {e}")
+            out = proc.stdout or ""
+            # ccopy uses a Rich Console on stdout (stderr is empty) for its normal
+            # errors, but an unhandled exception (e.g. a missing source session)
+            # prints a Python traceback to stderr. Fold both together so the
+            # error is always surfaced. Strip ANSI and surface the best line.
+            ansi = re.compile(r"\x1b\[[0-9;]*m")
+            combined = ansi.sub("", out + ("\n" + (proc.stderr or "")))
+            lines = [l.strip() for l in combined.splitlines() if l.strip()]
+            if proc.returncode != 0:
+                if "Traceback (most recent call last):" in combined:
+                    msg = lines[-1] if lines else "Copy failed"
+                else:
+                    # First line is the actual error message.
+                    msg = lines[0] if lines else "Copy failed"
+                return self._error(400, msg)
+            return self._json(self._parse_copy_result(out, dest))
 
         if parts[1:] == ["strategies"] or parts[1:] == ["filters"]:
             return self._save_config(parts[1], body)
 
         return self._error(404, "Not found")
+
+    def _parse_copy_result(self, out: str, dest: str) -> dict:
+        """Parse ccopy's stdout into {new_session, destination, messages,
+        resume}. ccopy prints Rich output, so strip ANSI first. The success
+        line looks like:
+            Copied N message(s) from <src> to a new <agent> session: <id>
+        followed (optionally) by a resume block:
+            Resume it... with:
+              <resume command>
+        """
+        ansi = re.compile(r"\x1b\[[0-9;]*m")
+        text = ansi.sub("", out)
+        lines = [l.rstrip() for l in text.splitlines() if l.strip()]
+
+        new_id = None
+        count = None
+        m = re.search(r"Copied\s+(\d+)\s+message\(s\)\s+from\s+.+?to a new\s+(\S+)\s+session(?::\s*(\S+))?",
+                      text)
+        if m:
+            count = int(m.group(1))
+            new_id = m.group(3)  # may be None if the id is on the same token
+        # Fallback: the new session id is the last whitespace token on the
+        # "Copied ... session" line.
+        if new_id is None:
+            for l in lines:
+                if l.startswith("Copied") and "session" in l:
+                    new_id = l.split()[-1]
+                    break
+        # Message count fallback.
+        if count is None:
+            cm = re.search(r"Copied\s+(\d+)\s+message", text)
+            if cm:
+                count = int(cm.group(1))
+
+        # Resume command: the indented line after a "Resume" line.
+        resume = None
+        for i, l in enumerate(lines):
+            if "Resume" in l and i + 1 < len(lines):
+                resume = lines[i + 1].strip()
+                break
+
+        return {
+            "new_session": new_id,
+            "destination": dest,
+            "messages": count,
+            "resume": resume,
+        }
 
     def _save_config(self, kind: str, body: dict):
         """Create/update a strategy or filter config by name."""
@@ -584,6 +698,13 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
   align-items: center; }
 .copybanner .muted { color: var(--dim); font-size: 12px; }
 .copied-flash { color: var(--green); font-size: 12px; font-weight: 600; }
+/* Copy destination: a horizontal inline card (label + input + button). */
+.copycard { display: inline-flex; align-items: center; gap: 8px;
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 5px 6px 5px 12px; flex-wrap: wrap; max-width: 100%; }
+.copycard-label { color: var(--dim); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .6px; font-weight: 600; }
+.copycard input { flex: 1; min-width: 220px; background: var(--panel); }
 </style>
 </head>
 <body>
@@ -1070,8 +1191,12 @@ async function openConverse(agent, sid) {
     const d = await api(`/api/agents/${encodeURIComponent(agent)}/sessions/${encodeURIComponent(sid)}`);
     let meta = `<span class="small dim">${d.messages.length} messages
       · ${d.tokens ? (humanTok(d.tokens.total) + (d.estimated ? " tok (est.)" : " tok")) : ""}</span>`;
-    meta += ` <span class="copywrap" style="position:relative;display:inline-block">
-      <button class="primary" data-copy-toggle onclick="toggleCopyMenu(event)">Copy ▾</button>
+    meta += ` <span class="copycard" id="copycard">
+      <span class="copycard-label">Copy to</span>
+      <input id="c-dest" type="text" autocomplete="off" spellcheck="false"
+        placeholder="agent, agent/session, or ssh://user@host/agent"
+        value="" />
+      <button class="primary" onclick="doCopy()">Copy</button>
     </span>`;
     meta += ` <button class="primary" style="background:var(--green)"
       onclick="showConcepts()">Concepts</button>`;
@@ -1079,6 +1204,9 @@ async function openConverse(agent, sid) {
       onclick="showExport()">Export</button>`;
     if (d.resume) meta += ` <code style="margin-left:8px">${esc(d.resume)}</code>`;
     $("#c-meta").innerHTML = meta;
+    $("#c-dest").addEventListener("keydown", e => {
+      if (e.key === "Enter") doCopy();
+    });
     $("#c-body").innerHTML = d.messages.map((m, i) => msgHtml(m, i)).join("");
   } catch (e) {
     $("#c-body").innerHTML = `<div class="err">${esc(e.message)}</div>`;
@@ -1099,46 +1227,19 @@ function msgHtml(m, i) {
 
 // (superseded by the extraction flow below — showConcepts now lives with it)
 
-// Copy dropdown: list installed agents to copy to.
-function toggleCopyMenu(ev) {
+// Copy: read the destination from the horizontal input card and POST it.
+// Any ccopy destination syntax is accepted (bare agent, agent/session, or
+// ssh://[user@]host[:port]/agent) because the backend shells out to ccopy.
+function doCopy() {
   if (!CONV) return;
-  let menu = $("#copy-menu");
-  if (menu) { menu.remove(); return; }
-  const anchor = (ev && ev.target && ev.target.closest) ? ev.target.closest(".copywrap") : null;
-  if (!anchor) return;
-  const installed = AGENTS.filter(a => a.installed && a.name !== CONV.agent);
-  menu = document.createElement("div");
-  menu.id = "copy-menu";
-  const box = document.createElement("div");
-  box.style.cssText = "position:absolute;top:calc(100% + 6px);right:0;min-width:320px;max-width:80vw;"
-    + "background:var(--panel2);border:1px solid var(--border);border-radius:10px;"
-    + "box-shadow:0 8px 24px rgba(0,0,0,.5);overflow:hidden;z-index:11";
-  if (!installed.length) {
-    box.innerHTML = `<div class="dim small" style="padding:10px 14px">No other
-      installed agents to copy to.</div>`;
-  } else {
-    box.innerHTML = installed.map(a => `
-      <div class="copyopt" data-dest="${esc(a.name)}"
-        style="padding:9px 14px;cursor:pointer;border-bottom:1px solid var(--border)">
-        <div style="font-family:var(--mono);font-weight:700;font-size:13px">${esc(a.name)}</div>
-        <div class="dim small" style="font-size:11.5px">${esc(a.description)}
-          · ${a.session_count ?? 0} sessions</div>
-      </div>`).join("");
-    box.querySelectorAll(".copyopt").forEach(el => {
-      el.onmouseenter = () => el.style.background = "var(--border)";
-      el.onmouseleave = () => el.style.background = "";
-      el.onclick = () => { menu.remove(); doCopyTo(el.dataset.dest); };
-    });
+  const input = $("#c-dest");
+  const dest = input ? input.value.trim() : "";
+  if (!dest) {
+    if (input) input.focus();
+    return;
   }
-  menu.appendChild(box);
-  anchor.appendChild(menu);
+  doCopyTo(dest);
 }
-
-document.addEventListener("click", e => {
-  const menu = $("#copy-menu");
-  if (!menu) return;
-  if (!menu.contains(e.target) && !e.target.closest("[data-copy-toggle]")) menu.remove();
-}, true);
 
 async function doCopyTo(dest) {
   if (!CONV) return;
@@ -1156,12 +1257,14 @@ async function doCopyTo(dest) {
                             destination: dest}),
     });
     const resume = d.resume || "";
+    const isRemote = /^ssh:\/\//.test(d.destination);
     const ccopyCmd = `ccopy ${CONV.agent}/${CONV.session_id} ${d.destination}`;
     banner.innerHTML = `
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:start;flex-wrap:wrap">
         <div>
           <div class="notice" style="margin:0">✓ Copied <b>${d.messages}</b> message(s) to a new
-            <b>${esc(d.destination)}</b> session: <span class="mono">${esc(d.new_session)}</span></div>
+            <b>${esc(d.destination)}</b> session${isRemote ? " (on remote host)" : ""}:
+            <span class="mono">${esc(d.new_session)}</span></div>
           ${resume ? `<div class="cmdrow">
             <code>${esc(resume)}</code>
             <button class="primary" data-cp="${esc(resume)}">copy command</button>
@@ -1171,8 +1274,8 @@ async function doCopyTo(dest) {
             <button class="primary" data-cp="${esc(ccopyCmd)}">copy command</button>
           </div>
           <div class="rowbtns">
-            <button class="primary" style="background:var(--panel2)"
-              onclick="openConverse('${esc(d.destination)}','${esc(d.new_session)}')">view new session →</button>
+            ${!isRemote ? `<button class="primary" style="background:var(--panel2)"
+              onclick="openConverse('${esc(d.destination)}','${esc(d.new_session)}')">view new session →</button>` : ""}
             <button class="linkbtn" onclick="dismissBanner()">dismiss</button>
           </div>
         </div>

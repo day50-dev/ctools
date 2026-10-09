@@ -86,9 +86,11 @@ could be printed, the same way `cat` does.
 ## Across hosts
 
 A remote source is addressed as `ssh://[user@]host[:port]/agent/session_id`.
-`ccat` fetches it the same way `ccopy` does — it pulls the agent's storage
-files over ssh and reads them locally — so the remote host only needs `sshd`
-and `tar`, not ctools. The source is never touched.
+`ccat` fetches it in two tiers, the same way `ccopy` does: if the remote runs
+ctools, its own `ccat`-equivalent export streams just the session's JSON over one
+ssh; otherwise `ccat` pulls the agent's storage files over ssh and reads them
+locally, so a bare remote needs only `sshd` and `tar`, not ctools. The source is
+never touched.
 
 ## Related
 

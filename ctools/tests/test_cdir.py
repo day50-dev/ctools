@@ -345,6 +345,105 @@ def test_cli_unknown_agent():
     assert "Unknown agent" in result.stdout
 
 
+# --- remote refs (ssh://host) ------------------------------------------------
+
+def test_cli_remote_lists_agents(monkeypatch):
+    """`cdir ssh://host` reports which agents are installed on the host."""
+    import ctools.cdir as cdir
+    monkeypatch.setattr(cdir, "_remote_agents_installed",
+                        lambda remote: ["opencode", "goose"])
+    result = runner.invoke(app, ["ssh://_lorenz"])
+    assert result.exit_code == 0
+    assert "_lorenz:" in result.stdout
+    assert "Found:" in result.stdout
+    assert "opencode" in result.stdout
+    assert "goose" in result.stdout
+    assert "Not Found:" in result.stdout
+    assert "pi" in result.stdout  # listed under Not Found
+
+
+def test_cli_remote_single_agent_present(monkeypatch):
+    import ctools.cdir as cdir
+    monkeypatch.setattr(cdir, "_remote_agents_installed",
+                        lambda remote: ["opencode"])
+    result = runner.invoke(app, ["ssh://_lorenz/opencode"])
+    assert result.exit_code == 0
+    assert "opencode is installed" in result.stdout
+
+
+def test_cli_remote_single_agent_absent(monkeypatch):
+    import ctools.cdir as cdir
+    monkeypatch.setattr(cdir, "_remote_agents_installed", lambda remote: [])
+    result = runner.invoke(app, ["ssh://_lorenz/pi"])
+    assert result.exit_code == 0
+    assert "pi is NOT installed" in result.stdout
+
+
+def test_cli_remote_deep_ref_points_to_ccat(monkeypatch):
+    """`ssh://host/agent/session` is a session ref -- not a cdir listing."""
+    import ctools.cdir as cdir
+    monkeypatch.setattr(cdir, "_remote_agents_installed",
+                        lambda remote: ["opencode"])
+    result = runner.invoke(app, ["ssh://_lorenz/opencode/ses_abc"])
+    assert result.exit_code == 0
+    assert "ccat/ccopy job" in result.stdout
+
+
+def test_cli_remote_unknown_agent(monkeypatch):
+    import ctools.cdir as cdir
+    monkeypatch.setattr(cdir, "_remote_agents_installed",
+                        lambda remote: ["opencode"])
+    result = runner.invoke(app, ["ssh://_lorenz/foobar"])
+    assert result.exit_code == 1
+    assert "Unknown agent" in result.stdout
+
+
+def test_cli_remote_json(monkeypatch):
+    import ctools.cdir as cdir
+    monkeypatch.setattr(cdir, "_remote_agents_installed",
+                        lambda remote: ["opencode"])
+    result = runner.invoke(app, ["ssh://_lorenz", "-f", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    by_name = {row["name"]: row["installed"] for row in data}
+    assert by_name["opencode"] is True
+    assert by_name["pi"] is False
+
+
+def test_cli_remote_probe_uses_ssh(monkeypatch):
+    """_remote_agents_installed issues one ssh `test -e` per agent, anchored at
+    the remote's $HOME."""
+    import ctools.cdir as cdir
+    captured = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = "opencode\n"
+
+    def fake_probe(remote, command):
+        captured["command"] = command
+        return _Proc()
+
+    monkeypatch.setattr(cdir, "_remote_probe", fake_probe)
+    from ctools.cli import Remote
+    installed = cdir._remote_agents_installed(Remote(host="_lorenz"))
+    assert installed == ["opencode"]
+    cmd = captured["command"]
+    assert "$HOME" in cmd
+    assert "test -e" in cmd
+    assert "opencode" in cmd
+
+
+def test_cli_remote_probe_ssh_unavailable(monkeypatch):
+    """No ssh binary -> _remote_probe returns None -> empty install list."""
+    import ctools.cdir as cdir
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda _p: None)
+    from ctools.cli import Remote
+    assert cdir._remote_agents_installed(Remote(host="_lorenz")) == []
+
+
+
 def test_cli_agent_not_found(tmp_path, monkeypatch):
     """Test with agent that doesn't exist on system."""
     # This would require mocking the base_path, so we just test the error handling

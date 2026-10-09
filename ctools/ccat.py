@@ -21,9 +21,10 @@ Usage:
     ccat opencode/ses_abc | jq .            # it is JSON, so pipe it anywhere
     cgrep -l ctool opencode | xargs ccat    # dump every matching conversation
 
-The source is never touched. A remote source is fetched the same way ccopy
-does (the agent's storage is pulled over ssh and read locally), so the
-remote host only needs sshd and tar.
+The source is never touched. A remote source is fetched in two tiers: if the
+remote host runs ctools, its own `ccat`/`ccopy` exports just the session over
+one ssh; otherwise the agent's storage is pulled over ssh and read locally,
+so the remote host needs nothing but sshd and tar.
 """
 
 import argparse
@@ -38,7 +39,7 @@ from rich.text import Text
 from ctools.agents import REGISTRY as AGENTS, SessionNotFound, get_agent
 from ctools.cli import (handle_version, parse_ref, parse_remote_ref, reporting,
                         version_option)
-from ctools.ccopy import _local_agent, _pull
+from ctools.ccopy import _local_agent, _pull, _remote_common_doc, _remote_has_ctools
 
 __all__ = ['app']
 
@@ -134,7 +135,22 @@ def _fetch(ref: str) -> Tuple[str, List[dict], List[dict], Optional[dict], Optio
                 return ref, [], [], None, f'no such session: {name}/{session_id}'
         return f'{name}/{session_id}', context, raw, info, None
 
-    # Remote: pull the agent's storage over ssh and read it locally.
+    # Remote, first pass: if the remote runs ctools, have it export the
+    # envelope over one ssh (only the session's JSON crosses the wire).
+    doc = None
+    if _remote_has_ctools(remote):
+        doc = _remote_common_doc(remote, agent, session_id)
+    if doc is not None:
+        context = doc.get('context') or []
+        raw = doc.get('raw') or []
+        info = {k: doc[k] for k in ('model', 'created', 'modified') if doc.get(k)} or None
+        label = f'{name}/{session_id} on {remote.target}'
+        if not context:
+            return label, [], [], None, f'no conversation in {label}'
+        return label, context, raw, info, None
+
+    # Remote, second pass: pull the agent's storage over ssh and read it
+    # locally.
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
         try:

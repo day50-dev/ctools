@@ -27,6 +27,7 @@ cextract = "ctools.cextract:app"
 cdu = "ctools.cdu:app"
 cconnect = "ctools.cconnect:app"
 crm = "ctools.crm:app"
+crecover = "ctools.crecover:app"
 ctools-mcp = "ctools.ctools_mcp:main"
 ctools-web = "ctools.webui:main"
 

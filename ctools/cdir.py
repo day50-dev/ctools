@@ -26,8 +26,8 @@ from typing import List, Optional, Tuple
 from rich.console import Console
 
 from ctools.agents import Session, REGISTRY as AGENTS
-from ctools.cli import (handle_version, parse_ref, reporting,
-                        require_installed, version_option)
+from ctools.cli import (Remote, handle_version, parse_ref, parse_remote_ref,
+                        reporting, require_installed, version_option)
 from ctools.lib import format_datetime, format_size, get_formatter
 
 __all__ = ['app']
@@ -298,6 +298,110 @@ def _list_agents(formatter) -> None:
             print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path}/{files_read}")
 
 
+def _remote_agents_installed(remote: Remote) -> list:
+    """Which agents have their storage present on `remote`?
+
+    One ssh round trip: the far side just `test -e`'s each agent's default
+    install location (anchored at its $HOME), so nothing ctools-related runs
+    there. Returns the list of agent names whose storage exists.
+    """
+    import shlex
+    checks = []
+    for name, agent in AGENTS.items():
+        rel = agent.storage_relative()
+        checks.append(f"test -e \"$HOME/{rel}\" && printf '%s\\n' {shlex.quote(name)}")
+    cmd = "\n".join(checks) + "\ntrue"
+    proc = _remote_probe(remote, cmd)
+    if proc is None:
+        return []
+    return proc.stdout.split()
+
+
+def _remote_probe(remote: Remote, command: str):
+    """Run `command` on `remote`, returning the CompletedProcess, or None if
+    ssh itself is unavailable/failed to even start."""
+    import shutil
+    import subprocess
+    if shutil.which("ssh") is None:
+        return None
+    try:
+        return subprocess.run(remote.ssh_command(command),
+                              capture_output=True, text=True)
+    except OSError:
+        return None
+
+
+def _list_remote_agents(remote: Remote, formatter) -> None:
+    """`cdir ssh://host` — list which agents are installed on the remote.
+
+    Mirrors the local `cdir` (Found/Not Found) but resolves the storage
+    presence on the far side, so you can see what a host actually has before
+    a `ccopy ... ssh://host/agent`.
+    """
+    if formatter:
+        installed = _remote_agents_installed(remote)
+        print(json.dumps([{"name": n, "installed": n in installed}
+                          for n in AGENTS], indent=2))
+        return
+
+    installed = _remote_agents_installed(remote)
+    installed_set = set(installed)
+    rows = [(name, agent.description, agent.storage_relative(), name in installed_set)
+            for name, agent in AGENTS.items()]
+    w_name = max(len(r[0]) for r in rows)
+    w_desc = max(len(r[1]) for r in rows)
+    print(f"{remote.target}:")
+    for label, group in (("Found:", [r for r in rows if r[3]]),
+                         ("Not Found:", [r for r in rows if not r[3]])):
+        if not group:
+            continue
+        print(label)
+        for name, desc, rel, _ in group:
+            print(f"  {name:<{w_name}}  {desc:<{w_desc}}  ~/{rel}")
+
+
+def _handle_remote_ref(ref: str, formatter) -> None:
+    """Dispatch a `ssh://[user@]host[:port][/agent]` reference.
+
+    `ssh://host` lists the agents installed on the host (the "what's there?"
+    check before a `ccopy ... ssh://host/agent`). A bare `ssh://host/agent` is
+    the same listing filtered to that agent. Deeper paths (`.../agent/session`)
+    are session refs -- ccat/ccopy's domain -- so cdir points there.
+    """
+    remote, path = parse_remote_ref(ref)
+    parts = [p for p in path.split("/") if p]
+    if len(parts) >= 2:
+        console.print(f"[dim]Session reference {ref} is a ccat/ccopy job, "
+                      "not a cdir listing.[/dim]")
+        return
+    if parts:
+        agent_name = parts[0]
+        if agent_name not in AGENTS:
+            console.print(f"[red]Unknown agent: {agent_name}[/red]")
+            console.print(f"[dim]Available agents: {', '.join(AGENTS)}[/dim]")
+            raise SystemExit(1)
+        _list_remote_agent(remote, agent_name, formatter)
+    else:
+        _list_remote_agents(remote, formatter)
+
+
+def _list_remote_agent(remote: Remote, agent_name: str, formatter) -> None:
+    """`cdir ssh://host/agent` — is this one agent's storage present there?"""
+    installed = _remote_agents_installed(remote)
+    present = agent_name in installed
+    if formatter:
+        print(json.dumps({"name": agent_name, "installed": present,
+                          "path": f"~/{AGENTS[agent_name].storage_relative()}"},
+                         indent=2))
+        return
+    if present:
+        print(f"{remote.target}: {agent_name} is installed "
+              f"(~/{AGENTS[agent_name].storage_relative()})")
+    else:
+        print(f"{remote.target}: {agent_name} is NOT installed "
+              f"(no ~/{AGENTS[agent_name].storage_relative()})")
+
+
 def _list_all_sessions(sort, reverse, formatter, fields,
                        one_line=False, color=False) -> None:
     """List every installed agent's sessions, newest first, agent-prefixed."""
@@ -556,9 +660,10 @@ def main(argv=None) -> int:
         _, sid = parse_ref(ref)
         return bool(sid) and not any(c in sid for c in "*?[")
 
-    agent_globs = [p for p in paths if _is_agent_glob(p)]
-    exact = [p for p in paths if not _is_agent_glob(p) and _is_exact(p)]
-    rest = [p for p in paths if not _is_agent_glob(p) and not _is_exact(p)]
+    # Remote references (ssh://...) are handled before the local agent glob /
+    # exact split, which assumes an `agent[/session]` local shape.
+    remotes = [p for p in paths if p.startswith("ssh://")]
+    local = [p for p in paths if not p.startswith("ssh://")]
 
     emitted = False
 
@@ -567,6 +672,14 @@ def main(argv=None) -> int:
         if emitted and not (one_line or formatter):
             print()
         emitted = True
+
+    for ref in remotes:
+        _sep()
+        _handle_remote_ref(ref, formatter)
+
+    agent_globs = [p for p in local if _is_agent_glob(p)]
+    exact = [p for p in local if not _is_agent_glob(p) and _is_exact(p)]
+    rest = [p for p in local if not _is_agent_glob(p) and not _is_exact(p)]
 
     # Cross-agent globs (*/..., p*/...) list matching sessions as rows.
     if agent_globs:

@@ -162,3 +162,41 @@ Not Found:
   freebuff      Freebuff (Codebuff)         ~/.config/freebuff/projects/
   openclaw      OpenClaw personal assistant ~/.openclaw/agents/
 ```
+
+## Remote hosts
+
+A reference can point at another host: `ssh://[user@]host[:port][/agent]`. This
+answers the question *what is on that machine?* before you `ccopy` from or to
+it. Only the host (and optionally one agent) is understood here — `cdir` never
+lists a remote session's *contents* (that is `ccat`'s job over the same
+transport), and it runs nothing ctools-related on the far side: a single ssh
+round trip `test -e`'s each agent's default install location against the
+remote's `$HOME`.
+
+```sh
+$ cdir ssh://_lorenz          # which agents are installed there
+_lorenz:
+Found:
+  claude-code  Claude Code CLI   ~/.claude/projects
+  opencode     Opencode CLI      ~/.local/share/opencode/opencode.db
+  ...
+Not Found:
+  pi           Pi Coding Agent   ~/.pi/agent/sessions
+  ...
+
+$ cdir ssh://_lorenz/pi       # just one agent
+_lorenz: pi is NOT installed (no ~/.pi/agent/sessions)
+
+$ cdir ssh://_lorenz -f json  # machine-readable
+[{"name": "opencode", "installed": true}, ...]
+```
+
+- `ssh://host` lists every agent, Found/Not Found, mirroring the local
+  `cdir` (no path).
+- `ssh://host/agent` reports whether that one agent's storage is present.
+- `ssh://host/agent/session_id` is a *session* reference — `cdir` says so and
+  defers to `ccat`/`ccopy`, which is where remote sessions are read or moved.
+- An unknown agent name (`ssh://host/foobar`) is an error, same as locally.
+- This pairs with `ccopy ... ssh://host/agent`: if the probe reports the agent
+  is NOT installed, `ccopy` tells you the same thing up front instead of
+  failing with a raw tar error.

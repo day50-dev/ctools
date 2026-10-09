@@ -326,3 +326,104 @@ def test_opencode_session_info(tmp_path):
         assert "created" in info and "modified" in info
     finally:
         AGENTS["opencode"].base_path = original
+
+
+# --- Remote source: first pass (remote has ctools) vs second pass (tar) ---
+
+def _remote_opencode_home(tmp_path, session_id):
+    """Lay out a fake remote $HOME with an opencode db holding session_id."""
+    remote_home = tmp_path / "remote"
+    (remote_home / ".local" / "share" / "opencode").mkdir(parents=True)
+    _make_opencode_conv_db(remote_home / ".local" / "share" / "opencode",
+                           session_id, DEFAULT_CONV)
+    return remote_home
+
+
+def test_ccat_remote_first_pass_when_remote_has_ctools(tmp_path, monkeypatch):
+    """When the remote runs ctools, ccat exports the envelope there over one
+    ssh (the tar pull never happens)."""
+    import ctools.ccat as ccat
+    import ctools.ccopy as ccopy
+    from pathlib import Path
+    remote_home = _remote_opencode_home(tmp_path, "ses_a")
+    _make_opencode_conv_db(tmp_path, "ses_dummy", DEFAULT_CONV)
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+
+    # Model the remote ctools as a local agent anchored at the remote home.
+    rel = Path(ccopy._remote_storage_rel(AGENTS["opencode"]))
+    db_name = getattr(type(AGENTS["opencode"]), "db_name", None)
+    mirror = type(AGENTS["opencode"])(remote_home / (rel.parent if db_name else rel))
+
+    monkeypatch.setattr(ccat, "_remote_has_ctools", lambda r: True)
+    monkeypatch.setattr(ccat, "_remote_common_doc",
+                        lambda r, agent, sid: mirror.to_common(sid))
+
+    def no_tar(*a, **kw):
+        raise AssertionError("first pass: the tar transport must not run")
+    monkeypatch.setattr(ccat, "_pull", no_tar)
+    try:
+        result = _run_ccat(tmp_path, ["ssh://chris@remote/opencode/ses_a"])
+        assert result.exit_code == 0, result.output
+        doc = json.loads(result.stdout)
+        assert doc[0]["content"] == "Write a fibonacci function"
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
+def test_ccat_remote_first_pass_raw_envelope(tmp_path, monkeypatch):
+    """--raw over a ctools-equipped remote returns the envelope (context,
+    raw, metadata) from the remote's own export."""
+    import ctools.ccat as ccat
+    import ctools.ccopy as ccopy
+    from pathlib import Path
+    remote_home = _remote_opencode_home(tmp_path, "ses_a")
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    rel = Path(ccopy._remote_storage_rel(AGENTS["opencode"]))
+    db_name = getattr(type(AGENTS["opencode"]), "db_name", None)
+    mirror = type(AGENTS["opencode"])(remote_home / (rel.parent if db_name else rel))
+    monkeypatch.setattr(ccat, "_remote_has_ctools", lambda r: True)
+    monkeypatch.setattr(ccat, "_remote_common_doc",
+                        lambda r, agent, sid: mirror.to_common(sid))
+    monkeypatch.setattr(ccat, "_pull", lambda *a, **kw: (_ for _ in ()).throw(
+        AssertionError("first pass: the tar transport must not run")))
+    try:
+        result = _run_ccat(tmp_path, ["--raw", "ssh://chris@remote/opencode/ses_a"])
+        assert result.exit_code == 0, result.output
+        doc = json.loads(result.stdout)
+        assert isinstance(doc["context"], list)
+        assert doc["source"] == "opencode/ses_a on chris@remote"
+        assert "created" in doc and "modified" in doc
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
+def test_ccat_remote_falls_back_to_tar_when_no_ctools(tmp_path, monkeypatch):
+    """When the remote has no ctools, ccat pulls the storage over ssh and
+    reads it locally (the existing expensive path)."""
+    import ctools.ccat as ccat
+    import ctools.ccopy as ccopy
+    remote_home = _remote_opencode_home(tmp_path, "ses_a")
+    _make_opencode_conv_db(tmp_path, "ses_dummy", DEFAULT_CONV)
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+
+    # No ctools on the remote -> second pass. Model _pull as a local file
+    # copy of the remote db into the temp mirror.
+    monkeypatch.setattr(ccat, "_remote_has_ctools", lambda r: False)
+
+    def fake_pull(remote, agent, dest_base):
+        rel = ccopy._remote_storage_rel(agent)
+        src = remote_home / rel
+        dst = dest_base / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(src.read_bytes())
+    monkeypatch.setattr(ccat, "_pull", fake_pull)
+    try:
+        result = _run_ccat(tmp_path, ["ssh://chris@remote/opencode/ses_a"])
+        assert result.exit_code == 0, result.output
+        doc = json.loads(result.stdout)
+        assert doc[0]["content"] == "Write a fibonacci function"
+    finally:
+        AGENTS["opencode"].base_path = original
