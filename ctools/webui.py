@@ -1072,8 +1072,7 @@ function applyRoute() {
   if (r.view === "search") {
     if (r.q != null && r.q !== "") {
       if (r.q !== $("#q").value) $("#q").value = r.q;
-      $("#qi").checked = !!r.ic;
-      runGlobalSearch(); // fetches only if the pattern/case changed
+      runGlobalSearch(); // fetches only if the pattern changed
     } else if (LAST_SEARCH) {
       renderSearch();
     }
@@ -1535,10 +1534,6 @@ $("header h1").addEventListener("click", () => navigate(""));
 $("#ver").addEventListener("click", () =>
   window.open("https://github.com/day50-dev/ctools", "_blank", "noopener"));
 $("#q").addEventListener("keydown", e => { if (e.key === "Enter") runGlobalSearch(); });
-$("#qi").addEventListener("change", () => {
-  // toggling case re-runs the search, but only when results are on screen
-  if (parseHash().view === "search" && $("#q").value.trim()) runGlobalSearch();
-});
 // / or Ctrl/Cmd+K focuses the search bar from anywhere
 document.addEventListener("keydown", e => {
   const t = document.activeElement;
