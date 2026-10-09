@@ -12,8 +12,6 @@
 
 It supports [Claude Desktop](https://claude.com/download), [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [Hermes](https://github.com/NousResearch/hermes-agent), [Goose](https://github.com/aaif-goose/goose), [Kilo](https://github.com/Kilo-Org/kilocode), [FreeBuff](https://github.com/CodebuffAI/freebuff), [Cline](https://github.com/cline/cline), [omp](https://github.com/can1357/oh-my-pi), and [OpenClaw](https://openclaw.ai/).
 
-Your work travels with you. The source is never touched, so it's a true copy. And when the destination is on another machine, it's just `ccopy opencode/ses_abc123 ssh://chris@remote/codex`. It pulls the agent's storage over your normal ssh (the remote only needs `sshd` and `tar`).
-
 Here's an example:
 
 > I look for mentions of snake game in opencode using cgrep
@@ -42,32 +40,6 @@ Resume it with:
 </pre>
 
 As you can see, these are unix-friendly tools using simple paradigms that you are already familiar with.
-
-----
-
-### 1. `cgrep` — find it in your past conversations
-
-You already know the answer is in a session you had months ago. You just don't remember which one. `cgrep` searches **every session you ever had, across every agent you use**, with a plain regex:
-
-```shell
-$ cgrep -i "ssl"
-claude-code/a351eedf:142:assistant: … the TLS handshake fails with SSL wrong version number …
-opencode/ses_000d460f:16:user: ok graflex has an erorr in the check. i see this: … [[SSL: WRONG_VERSION_NUMBER] …
-opencode/ses_000d460f:34:assistant: Found it. Root cause: `_check_host` (graflex/__init__.py:128) tries `http`, and …
-```
-
-No agent argument? It searches **every installed agent**.
-
-### 2. `ccopy` — move your project from one tool to another
-
-Switched from opencode to Claude Code mid-project? You don't have to start from zero. Copy the whole conversation — context, decisions, the lot — into a fresh session in the other tool:
-
-```shell
-$ ccopy opencode/ses_abc123 claude-code
-Copied 128 message(s) from opencode/ses_abc123 to a new claude-code session: 1a2b3c
-Resume it with:
-  claude-code --resume 1a2b3c
-```
 
 ## Tools
 
