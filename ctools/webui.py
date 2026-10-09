@@ -207,7 +207,42 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"version": __version__, "agents": out})
 
         if len(parts) == 3 and parts[0] == "agents" and parts[2] == "sessions":
-            agent = get_agent(parts[1])
+            name = parts[1]
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else {})
+            sort = (q.get("sort", ["time"])[0])
+            limit = int(q.get("limit", ["200"])[0])
+
+            if name == "all":
+                # Aggregate sessions across every installed agent.
+                merged = []
+                for brief in (_agent_brief(a) for a in REGISTRY.values()):
+                    if not brief["installed"]:
+                        continue
+                    agent = get_agent(brief["name"])
+                    try:
+                        sessions = agent.sessions()
+                    except AgentError:
+                        continue
+                    for s in sessions:
+                        sb = _session_brief(s)
+                        sb["agent"] = agent.name
+                        merged.append(sb)
+
+                def _sort_key(sb):
+                    if sort == "size":
+                        return sb["size"] or 0
+                    if sort == "tokens":
+                        return sb["tokens"] or 0
+                    m = sb["mtime"] or sb["ctime"]
+                    return m or ""
+                merged.sort(key=_sort_key, reverse=True)
+                return self._json({
+                    "agent": "all",
+                    "sessions": merged[:limit],
+                    "total": len(merged),
+                })
+
+            agent = get_agent(name)
             if agent is None:
                 return self._error(404, f"Unknown agent: {name}")
             if not agent.exists():
@@ -216,8 +251,6 @@ class Handler(BaseHTTPRequestHandler):
                 sessions = agent.sessions()
             except AgentError as e:
                 return self._error(500, str(e))
-            q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else {})
-            sort = (q.get("sort", ["time"])[0])
             if sort == "size":
                 sessions.sort(key=lambda s: s.size, reverse=True)
             elif sort == "tokens":
@@ -225,7 +258,6 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 sessions.sort(key=lambda s: s.mtime or s.ctime or datetime.min,
                               reverse=True)
-            limit = int(q.get("limit", ["200"])[0])
             return self._json({
                 "agent": agent.name,
                 "sessions": [_session_brief(s) for s in sessions[:limit]],
@@ -485,6 +517,8 @@ button.primary:disabled { opacity: .5; cursor: default; }
 table { width: 100%; border-collapse: collapse; }
 th { text-align: left; color: var(--dim); font-size: 11px; text-transform: uppercase;
   letter-spacing: .6px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+th.sorth { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sorth:hover { color: var(--accent); }
 td { padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 13px;
   vertical-align: top; }
 tr.click { cursor: pointer; } tr.click:hover td { background: var(--panel2); }
@@ -891,7 +925,8 @@ async function loadOverview() {
       if ($("#q").value.trim()) doSearch();
     });
   // sessions select
-  $("#s-agent").innerHTML = AGENTS.filter(a => a.installed)
+  $("#s-agent").innerHTML = `<option value="all">all agents</option>` +
+    AGENTS.filter(a => a.installed)
     .map(a => `<option value="${esc(a.name)}">${esc(a.name)}</option>`).join("");
 }
 
@@ -920,6 +955,7 @@ async function listSessions() {
     const d = await api(`/api/agents/${encodeURIComponent(name)}/sessions?sort=${sort}`);
     if (seq !== sessSeq) return;  // a newer request superseded this one
     LAST_SESSIONS = {agent: name, sessions: d.sessions, total: d.total};
+    window._sessSort = {col: "mtime", dir: -1};  // server returns newest-first by default
     renderSessions();
   } catch (e) {
     if (seq !== sessSeq) return;
@@ -931,27 +967,61 @@ function renderSessions() {
   if (!LAST_SESSIONS) return;
   const {agent, sessions, total} = LAST_SESSIONS;
   const f = $("#s-filter").value.trim().toLowerCase();
+  const isAll = agent === "all";
   const shown = f ? sessions.filter(s =>
     (s.id || "").toLowerCase().includes(f) ||
     (s.name || "").toLowerCase().includes(f) ||
-    (s.path || "").toLowerCase().includes(f)) : sessions;
-  const rows = shown.map(s => `
-      <tr class="click" onclick="openConverse('${esc(agent)}','${esc(s.id)}')">
+    (s.path || "").toLowerCase().includes(f) ||
+    (s.agent || "").toLowerCase().includes(f)) : sessions;
+  const rows = shown.map(s => {
+    const a = s.agent || agent;
+    return `
+      <tr class="click" onclick="openConverse('${esc(a)}','${esc(s.id)}')">
         <td style="max-width:280px"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.name || s.id)}</div>
         <div class="sub mono">${esc(s.id)}</div></td>
+        ${isAll ? `<td class="mono">${esc(s.agent || "")}</td>` : ""}
         <td>${esc(s.mtime ? s.mtime.slice(0,16).replace("T"," ") : "-")}</td>
-        <td class="mono" style="max-width:340px"><span title="${esc(s.path || "")}
-          onclick="event.stopPropagation();copyToClipboard('${esc(s.path || "")}',this)">
-          ${esc(s.path || "-")}</span></td>
+        <td class="mono" style="max-width:340px"><span title="${esc(s.path || "")}"
+          onclick="event.stopPropagation();copyToClipboard('${esc(s.path || "")}',this)"
+          >${esc(s.path || "-")}</span></td>
         <td class="mono">${s.message_count ?? "-"}</td>
-      </tr>`).join("");
+      </tr>`;
+  }).join("");
+  const sort = window._sessSort || {col: "mtime", dir: -1};  // default: newest first
+  const arrow = (col) => col === sort.col
+    ? (sort.dir === -1 ? " ↓" : " ↑") : "";
+  const th = (col, label) =>
+    `<th class="sorth" onclick="sortSessions('${col}')" title="Click to sort">${label}${arrow(col)}</th>`;
+  const agentTh = isAll ? th("agent", "Agent") : "";
+  const colspan = isAll ? 5 : 4;
   $("#s-result").innerHTML = `
-      <table><thead><tr><th>Session</th><th>Modified</th><th>Path</th>
-      <th>Msgs</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="4" class="dim">No sessions match “${esc(f)}”.</td></tr>`}</tbody></table>
+      <table><thead><tr>${th("name","Session")}${agentTh}${th("mtime","Modified")}${th("path","Path")}${th("message_count","Msgs")}</tr></thead>
+      <tbody>${rows || `<tr><td colspan="${colspan}" class="dim">No sessions match “${esc(f)}”.</td></tr>`}</tbody></table>
       <div class="pager">${total} session(s)${total > sessions.length
         ? " — first " + sessions.length + " loaded" : ""}${f
         ? ` · ${shown.length} match(es)` : ""}</div>`;
+}
+
+// Click-to-sort on the Sessions table columns (client-side, works for “all” too).
+function sortSessions(col) {
+  if (!LAST_SESSIONS) return;
+  const cur = window._sessSort || {col: "mtime", dir: -1};
+  const dir = (cur.col === col) ? -cur.dir : -1;  // toggle if same col, else newest/largest first
+  window._sessSort = {col, dir};
+  const s = LAST_SESSIONS.sessions;
+  const key = {
+    name:  (x) => (x.name || x.id || "").toLowerCase(),
+    agent: (x) => (x.agent || "").toLowerCase(),
+    mtime: (x) => x.mtime || x.ctime || "",
+    path:  (x) => (x.path || "").toLowerCase(),
+    message_count: (x) => (x.message_count ?? 0),
+  }[col];
+  s.sort((a, b) => {
+    const av = key(a), bv = key(b);
+    if (av === bv) return 0;
+    return (av > bv ? 1 : -1) * dir;
+  });
+  renderSessions();
 }
 
 async function doSearch() {

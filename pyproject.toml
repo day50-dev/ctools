@@ -9,7 +9,6 @@ description = "CLI tools for LLM conversations"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "typer>=0.9.0",
     "rich>=13.0.0",
     "tiktoken>=0.5.0",
     "structlog>=24.0",
