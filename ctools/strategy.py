@@ -88,13 +88,18 @@ class Strategy:
         console.print(f"[dim]Searched: ./{local_path.name}, {global_path}[/dim]")
         raise SystemExit(1)
 
-    def extract(self, messages: list) -> list:
+    def extract(self, messages: list, trace: Optional[dict] = None) -> list:
         """Use this strategy to extract concepts from messages.
-        
+
         This calls the LLM with the strategy's prompt and returns
         the extracted concepts as a list of dicts.
+
+        If a ``trace`` dict is passed, it is filled in with what actually
+        happened (model, host, size of the request, the model's raw reply,
+        wall time) so callers can show the user the pipeline.
         """
         import requests
+        import time
 
         # Build the conversation for the LLM
         conversation = []
@@ -106,6 +111,12 @@ class Strategy:
 
         # Add the extraction prompt
         conversation.append({"role": "user", "content": self.prompt})
+
+        if trace is not None:
+            trace["host"] = self.host
+            trace["model"] = self.model
+            trace["messages_sent"] = len(conversation)
+            trace["chars_sent"] = sum(len(m["content"]) for m in conversation)
 
         # Make the API call
         headers = {
@@ -124,6 +135,7 @@ class Strategy:
             "temperature": 0.0,
         }
 
+        t0 = time.monotonic()
         try:
             r = requests.post(
                 f"{base_url}/chat/completions",
@@ -134,6 +146,9 @@ class Strategy:
             r.raise_for_status()
             resp = r.json()
             content = resp["choices"][0]["message"]["content"]
+            if trace is not None:
+                trace["ms"] = int((time.monotonic() - t0) * 1000)
+                trace["raw"] = content
 
             # Parse JSON from response (may be wrapped in markdown)
             if "```json" in content:
@@ -147,6 +162,8 @@ class Strategy:
             return concepts
 
         except Exception as e:
+            if trace is not None:
+                trace["error"] = str(e)
             console.print(f"[red]Strategy extraction failed: {e}[/red]")
             return []
 

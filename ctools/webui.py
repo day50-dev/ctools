@@ -437,6 +437,7 @@ class Handler(BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else {})
             concept_type = q.get("type", [""])[0]
             strategy = q.get("strategy", [""])[0] or None
+            explain = q.get("explain", [""])[0] == "1"
             filter_name = q.get("filter", [""])[0] or None
             filter_config = None
             if filter_name:
@@ -447,14 +448,14 @@ class Handler(BaseHTTPRequestHandler):
                 from ctools.filterlib import FILTERS_DIR
                 fp = FILTERS_DIR / f"{filter_name}.json"
                 if fp.exists():
-                    try:
-                        filter_config = fp.read_text(encoding="utf-8")
-                    except OSError:
-                        filter_config = None
+                    # session_concepts takes a PATH and reads it itself.
+                    filter_config = str(fp)
             if session_concepts is None:
                 return self._error(503, "Concept extraction unavailable (ctools.cextract failed to import).")
+            trace = {} if explain else None
             try:
-                concepts = session_concepts(agent, sid, strategy, filter_config)
+                concepts = session_concepts(agent, sid, strategy, filter_config,
+                                            trace=trace)
             except AgentError as e:
                 return self._error(404, str(e))
             except SystemExit as e:
@@ -463,8 +464,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(500, f"Concept extraction failed: {e}")
             if concept_type:
                 concepts = [c for c in concepts if c.get("type") == concept_type]
-            return self._json({"agent": agent.name, "session_id": sid,
-                               "concepts": concepts})
+            result = {"agent": agent.name, "session_id": sid,
+                      "concepts": concepts}
+            if explain and trace is not None:
+                # The trace stores the filter's path; show its name instead.
+                if filter_name and isinstance(trace.get("filter"), dict):
+                    trace["filter"]["name"] = filter_name
+                result["pipeline"] = trace
+            return self._json(result)
 
         # --- strategies & filters -----------------------------------------
         if parts == ["strategies"]:
@@ -678,6 +685,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   --border: #262d3d; --text: #dbe2ef; --dim: #8b95ab;
   --accent: #5aa9ff; --green: #57c78a; --red: #e5695e;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text);
@@ -688,7 +696,8 @@ header { display: flex; align-items: center; gap: 14px; padding: 12px 22px;
 header h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: .3px; cursor: pointer; }
 header h1:hover { color: var(--accent); }
 header h1 span { color: var(--accent); }
-header .ver { color: var(--dim); font-size: 12px; font-family: var(--mono); cursor: pointer; }
+header .ver { color: var(--dim); font-size: 12px; font-family: var(--mono); cursor: pointer;
+  align-self: flex-end; margin-bottom: 6px; }
 header .ver:hover { color: var(--accent); text-decoration: underline; }
 .navsearch { display: flex; align-items: center; gap: 4px; margin-left: auto;
   background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
@@ -710,6 +719,28 @@ nav button.on { color: var(--text); background: var(--panel2);
   border-color: var(--border); }
 main { padding: 20px 22px 60px; max-width: 1100px; margin: 0 auto; }
 .view { display: none; } .view.on { display: block; }
+/* --- concepts (configs) page: a light vertical flow --- */
+.cfg { max-width: 760px; }
+.diagram { max-width: 760px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px;
+  margin: 18px 0 30px; }
+.diagram svg { display: block; width: 100%; height: auto; }
+.diagram .dlabel { font-size: 13px; font-weight: 700; fill: var(--text);
+  text-anchor: middle; font-family: var(--sans, sans-serif); }
+.diagram .ddim { font-size: 11px; fill: var(--dim); text-anchor: middle;
+  font-family: var(--sans, sans-serif); }
+.diagram .dout { font-size: 12px; font-weight: 700; fill: var(--bg);
+  text-anchor: middle; font-family: var(--sans, sans-serif); }
+.diagram .dor { font-size: 13px; fill: var(--accent); text-anchor: middle;
+  font-family: var(--mono); font-style: italic; }
+.cfg-step { background: var(--panel); border: 1px solid var(--border);
+  border-radius: 14px; padding: 22px 26px; }
+.cfg-gap { height: 26px; }
+.cfg-head { display: flex; gap: 14px; align-items: flex-start; }
+.cfg-head h3 { margin: 0 0 5px; font-size: 15px; color: var(--text); font-weight: 700; }
+.cfg-head p { margin: 0; line-height: 1.55; }
+.cfg-step h4 { margin: 24px 0 10px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: .8px; color: var(--dim); font-weight: 600; }
 h2 { font-size: 15px; margin: 22px 0 10px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .8px; font-weight: 600; }
 h2:first-child { margin-top: 0; }
@@ -801,6 +832,27 @@ td .sub { color: var(--dim); font-size: 11px; }
   text-transform: uppercase; letter-spacing: .6px; }
 .concept pre { margin: 4px 0 0; white-space: pre-wrap; font-family: var(--mono);
   font-size: 12px; }
+.pipe { margin: 16px 0 20px; }
+.pipe .stage { background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 14px; }
+.pipe .stage-head { font-size: 11px; font-weight: 700; letter-spacing: .5px;
+  text-transform: uppercase; color: var(--accent); }
+.pipe .stage-body { font-size: 13px; margin-top: 5px; line-height: 1.5; }
+.pipe .stage-body code { font-family: var(--mono); font-size: 12px;
+  background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
+.pipe .stage details { margin-top: 8px; }
+.pipe .stage summary { cursor: pointer; font-size: 12px; color: var(--dim);
+  font-family: var(--mono); }
+.pipe .stage summary:hover { color: var(--text); }
+.pipe .pipe-pre { margin: 6px 0 0; padding: 10px 12px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px; font-family: var(--mono);
+  font-size: 12px; white-space: pre-wrap; max-height: 300px; overflow: auto; }
+.pipe .pipe-arrow { text-align: center; color: var(--dim); font-size: 11px;
+  padding: 3px 0; line-height: 1; }
+.pipe .droplist { margin: 6px 0 0; padding-left: 18px; font-size: 12px;
+  line-height: 1.7; }
+.pipe .droplist li { margin: 2px 0; }
+.pipe .droplist .dim { color: var(--dim); }
 .notice { background: rgba(87,199,138,.1); border: 1px solid rgba(87,199,138,.4);
   color: var(--green); padding: 10px 14px; border-radius: 8px; margin: 12px 0;
   font-size: 13px; }
@@ -853,7 +905,7 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
     <button data-view="overview">Overview</button>
     <button data-view="sessions">Sessions</button>
     <button data-view="converse">Conversation</button>
-    <button data-view="configs">Strategies &amp; Filters</button>
+    <button data-view="configs">Concepts</button>
   </nav>
 </header>
 <main>
@@ -905,23 +957,83 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
   </section>
 
   <section id="view-configs" class="view">
-    <div style="display:flex;gap:24px;flex-wrap:wrap">
-      <div style="flex:1;min-width:320px">
-        <h2>Extraction strategies</h2>
-        <p class="dim small">Point an LLM at a conversation and have it chunk
-          the concepts (the <b>LLM</b> path). Stored in
-          <code>~/.config/ctools/strategies/</code>.</p>
-        <div id="strat-list" class="grid" style="margin-bottom:12px"></div>
-        <div class="explain"><b>What is a strategy?</b>
-          A strategy tells ctools how to <b>chunk a conversation into concepts</b>
-          using an LLM. During extraction the model is asked to read the
-          conversation and return the key points — goals, constraints,
-          decisions, open questions. <span class="dim">The alternative is the built-in
-          regex path ("none" in the Concepts panel), which uses pattern
-          matching and no model. The saved file is plain JSON — the form below
-          just writes it for you.</span>
+    <h2>Concepts</h2>
+    <p class="dim small">The <b>Concepts</b> panel turns a conversation into
+      concepts. <b>Strategies</b> and <b>filters</b> are two independent options
+      on that path — use either, both, or neither.</p>
+
+    <div class="diagram">
+      <svg viewBox="0 0 760 300" width="100%" height="300" role="img"
+           aria-label="Conversation, then a strategy or the built-in regex extracts concepts, then an optional filter keeps a subset, giving the final concepts.">
+        <defs>
+          <marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="4.5"
+                  orient="auto" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L8,4.5 L0,9 Z" fill="var(--dim)"></path>
+          </marker>
+        </defs>
+        <!-- input -->
+        <g class="dnode">
+          <rect x="16" y="118" width="150" height="64" rx="12"
+                fill="var(--panel2)" stroke="var(--border)"></rect>
+          <text x="91" y="146" class="dlabel">conversation</text>
+          <text x="91" y="164" class="ddim">your session</text>
+        </g>
+        <!-- two extraction options, stacked -->
+        <g class="dnode">
+          <rect x="250" y="40" width="190" height="64" rx="12"
+                fill="var(--panel)" stroke="var(--accent)"></rect>
+          <text x="345" y="68" class="dlabel">strategy <tspan class="ddim">(LLM)</tspan></text>
+          <text x="345" y="86" class="ddim">a saved prompt + model</text>
+        </g>
+        <g class="dnode">
+          <rect x="250" y="196" width="190" height="64" rx="12"
+                fill="var(--panel)" stroke="var(--border)"></rect>
+          <text x="345" y="224" class="dlabel">built-in regex</text>
+          <text x="345" y="242" class="ddim">“none” — no model</text>
+        </g>
+        <!-- filter (optional) -->
+        <g class="dnode">
+          <rect x="510" y="118" width="150" height="64" rx="12"
+                fill="var(--panel)" stroke="var(--border)" stroke-dasharray="5 4"></rect>
+          <text x="585" y="146" class="dlabel">filter</text>
+          <text x="585" y="164" class="ddim">optional · keep / drop</text>
+        </g>
+        <!-- output -->
+        <g class="dnode">
+          <rect x="690" y="118" width="62" height="64" rx="12"
+                fill="var(--green)" stroke="none"></rect>
+          <text x="721" y="146" class="dout">concept</text>
+          <text x="721" y="164" class="dout">s</text>
+        </g>
+        <!-- connectors -->
+        <g class="dlink" stroke="var(--dim)" fill="none" stroke-width="1.5">
+          <path d="M166,144 C 200,144 210,72 248,72" marker-end="url(#arw)"></path>
+          <path d="M166,160 C 200,160 210,228 248,228" marker-end="url(#arw)"></path>
+          <path d="M440,72 C 475,72 470,140 508,140" marker-end="url(#arw)"></path>
+          <path d="M440,228 C 475,228 470,160 508,160" marker-end="url(#arw)"></path>
+          <path d="M660,150 L 686,150" marker-end="url(#arw)"></path>
+        </g>
+        <!-- the “or” between the two extraction paths -->
+        <text x="345" y="150" class="dor">or</text>
+        <!-- the “optional” skip line from extraction straight to concepts -->
+        <path d="M470,150 L 508,150" class="dskip" stroke="var(--dim)"
+              stroke-dasharray="2 4" fill="none" stroke-width="1.2"
+              marker-end="url(#arw)"></path>
+      </svg>
+    </div>
+
+    <div class="cfg">
+      <div class="cfg-step">
+        <div class="cfg-head">
+          <div>
+            <h3>Strategies <span class="dim small">— extraction</span></h3>
+            <p class="dim small">Point an LLM at a conversation to chunk it into
+              concepts. Or leave the panel on <b>none (regex)</b> for built-in
+              pattern matching — no model, no server.</p>
+          </div>
         </div>
-        <details class="examplebox"><summary>Example strategy file (what gets saved)</summary>
+        <div id="strat-list" class="grid" style="margin:16px 0 18px"></div>
+        <details class="examplebox"><summary>Show example JSON</summary>
 <pre>{
   "host": "http://localhost:11434",   // any OpenAI-compatible server (Ollama default)
   "model": "qwen2.5:3b",              // model name on that server
@@ -929,64 +1041,49 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
   "prompt": "Extract the key concepts..."  // instructions to the LLM
 }</pre>
         </details>
-        <h2 style="font-size:12px">New strategy</h2>
-        <div id="strat-form" class="card" style="margin-bottom:8px"></div>
-        <div style="display:flex;gap:8px">
-          <button class="primary" onclick="saveStrategy()">Create strategy</button>
-        </div>
+        <h4>New strategy</h4>
+        <div id="strat-form" class="card" style="margin-bottom:10px"></div>
+        <button class="primary" onclick="saveStrategy()">Create strategy</button>
       </div>
-      <div style="flex:1;min-width:320px">
-        <h2>Filters</h2>
-        <p class="dim small">Select which extracted concepts pass through. Three
-          backends: <b>decision model</b> (local classifier via Ollama
-          systemone/chat), <b>built-in</b> (type &amp; substring match, no
-          server), and <b>JSON-RPC</b> (your own subprocess). Stored in
-          <code>~/.config/ctools/filters/</code>.</p>
-        <div id="filter-list" class="grid" style="margin-bottom:12px"></div>
-        <div class="explain"><b>What is a filter?</b>
-          After concepts are extracted (by a strategy or the regex path),
-          a filter decides <b>which ones pass through</b>. Three backends:
-          <span class="dim">
-          <b>decision model</b> — a local classifier (e.g. a systemone model on
-          Ollama) answers yes/no or picks a label per concept;
-          <b>built-in</b> — pure code: keep by concept type and/or required
-          substring, no server needed;
-          <b>JSON-RPC</b> — your own subprocess implements
-          <code>notify</code>/<code>request</code> methods over stdin/stdout. Like
-          strategies, filters are plain JSON files.</span>
-        </div>
-        <details class="examplebox"><summary>Example filter files</summary>
-<pre>// decision model — ask a local classifier per concept
-{
-  "type": "systemone",
-  "host": "http://localhost:11434",
-  "model": "tev1",
-  "endpoint": "systemone",     // or "chat" for OpenAI-compatible
-  "instructions": "Is this about security?",
-  "mode": "noul",              // or "choice" for routing
-  "threshold": 0.6
-}
 
-// built-in — no server: keep by type and/or substring
+      <div class="cfg-gap"></div>
+
+      <div class="cfg-step">
+        <div class="cfg-head">
+          <div>
+            <h3>Filters <span class="dim small">— keep / drop</span></h3>
+            <p class="dim small">After extraction, choose which concepts pass
+              through. Three backends: <b>decision model</b> (a local classifier),
+              <b>built-in</b> (match by type &amp; substring — no server), or
+              <b>JSON-RPC</b> (your own subprocess).</p>
+          </div>
+        </div>
+        <div id="filter-list" class="grid" style="margin:16px 0 18px"></div>
+        <details class="examplebox"><summary>Show example JSON</summary>
+<pre>// built-in — no server: keep by type and/or substring
 {
   "types": ["constraint", "goal"],
   "exclude_types": [],
   "prompt": "ssl"              // require this substring
 }
 
+// decision model — ask a local classifier per concept
+{
+  "type": "systemone",
+  "model": "tev1",
+  "instructions": "Is this about security?"
+}
+
 // JSON-RPC — your own subprocess over stdin/stdout
 {
   "type": "jsonrpc",
   "command": ["python", "filter.py"],
-  "method": "classify",
-  "timeout": 30
+  "method": "classify"
 }</pre>
         </details>
-        <h2 style="font-size:12px">New filter</h2>
-        <div id="filter-form" class="card" style="margin-bottom:8px"></div>
-        <div style="display:flex;gap:8px">
-          <button class="primary" onclick="saveFilter()">Create filter</button>
-        </div>
+        <h4>New filter</h4>
+        <div id="filter-form" class="card" style="margin-bottom:10px"></div>
+        <button class="primary" onclick="saveFilter()">Create filter</button>
       </div>
     </div>
   </section>
@@ -1023,14 +1120,13 @@ function parseHash() {
   if (!h) return {view: "overview"};
   const parts = h.split("/");
   if (parts[0] === "search" || parts[0].startsWith("search?")) {
-    let q = null, ic = false;
+    let q = null;
     const qi = parts[0].indexOf("?");
     if (qi >= 0) (parts[0].slice(qi + 1).split("&")).forEach(kv => {
       const [k, v] = kv.split("=");
       if (k === "q" && v !== "") q = v;
-      if (k === "i") ic = v === "1";
     });
-    return {view: "search", q, ic};
+    return {view: "search", q};
   }
   if (parts[0] === "configs") return {view: "configs"};
   if (parts[0] === "sessions" && parts[1]) {
@@ -1839,6 +1935,13 @@ let EXTRACTION = {strategy: null, filter: null};
 
 async function showConcepts() {
   if (!CONV) return;
+  if (!STRATEGIES.length && !FILTERS.length) {
+    // Dropdowns only populate via loadConfigs() on the configs view;
+    // make sure they're filled when we jump straight to a conversation.
+    const [s, f] = await Promise.all([api("/api/strategies"), api("/api/filters")]);
+    STRATEGIES = s.strategies || [];
+    FILTERS = f.filters || [];
+  }
   const {agent, session_id: sid} = CONV;
   const box = document.createElement("div");
   box.id = "concept-box";
@@ -1852,13 +1955,22 @@ async function showConcepts() {
       <select id="ex-strat">${stratOpts}</select>
       <select id="ex-filter">${filterOpts}</select>
       <button class="primary" onclick="runExtraction()">Extract</button>
+      <label class="small dim" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="ex-how" checked style="width:auto"> how it works
+      </label>
     </div>
     <p class="dim small">Strategy = how to chunk concepts (LLM). Filter = which
-      concepts pass through (decision model, built-in, or JSON-RPC).</p>
+      concepts pass through (decision model, built-in, or JSON-RPC).
+      <b>How it works</b> shows the pipeline: what goes in, what the model
+      says, what the filter drops.</p>
     <div id="ex-results"></div>`;
   $("#c-body").prepend(box);
   $("#ex-strat").value = EXTRACTION.strategy || "";
   $("#ex-filter").value = EXTRACTION.filter || "";
+  $("#ex-how").addEventListener("change", () => {
+    if ($("#ex-how").checked) runExtraction();
+    else { const pipe = $("#ex-results .pipe"); if (pipe) pipe.remove(); }
+  });
   runExtraction();
 }
 
@@ -1870,17 +1982,21 @@ async function runExtraction() {
   EXTRACTION = {strategy: strat || null, filter: flt || null};
   const res = $("#ex-results");
   res.innerHTML = `<p class="dim">Extracting${strat ? " with strategy “" + esc(strat) + "”" : ""}${flt ? " + filter “" + esc(flt) + "”" : ""}…</p>`;
+  const how = $("#ex-how") ? $("#ex-how").checked : true;
   let qs = "?";
   if (strat) qs += "strategy=" + encodeURIComponent(strat) + "&";
-  if (flt) qs += "filter=" + encodeURIComponent(flt);
+  if (flt) qs += "filter=" + encodeURIComponent(flt) + "&";
+  if (how) qs += "explain=1";
   try {
     const d = await api(`/api/agents/${encodeURIComponent(agent)}/sessions/${encodeURIComponent(sid)}/concepts${qs}`);
+    let pipe = "";
+    if (d.pipeline) pipe = renderPipeline(d.pipeline, d.concepts.length);
     if (!d.concepts.length) {
-      res.innerHTML = `<div class="notice" style="color:var(--dim)">No concepts found.
+      res.innerHTML = pipe + `<div class="notice" style="color:var(--dim)">No concepts found.
         ${flt ? "The filter may have dropped everything." : ""}</div>`;
       return;
     }
-    res.innerHTML = d.concepts.map(c => `
+    res.innerHTML = pipe + d.concepts.map(c => `
       <div class="concept">
         <span class="type">${esc(c.type || "concept")}</span>
         <pre>${esc(c.short || c.medium || c.long || c.description || JSON.stringify(c))}</pre>
@@ -1888,6 +2004,62 @@ async function runExtraction() {
   } catch (e) {
     res.innerHTML = `<div class="err">${esc(e.message)}</div>`;
   }
+}
+
+// Render the extraction pipeline the backend traced: conversation →
+// extraction (LLM or regex) → filter (optional) → concepts.
+function renderPipeline(p, finalCount) {
+  const kb = n => n >= 1048576 ? (n/1048576).toFixed(1) + " MB" : (n/1024).toFixed(1) + " KB";
+  const stages = [];
+  stages.push(`<div class="stage">
+      <div class="stage-head">1 · conversation</div>
+      <div class="stage-body">${p.messages ?? "?"} messages · ${kb(p.chars || 0)} of text</div>
+    </div>`);
+  if (p.path === "llm") {
+    const llm = p.llm || {}, s = p.strategy || {};
+    let body = `<b>${esc(s.model || "?")}</b> @ ${esc(s.host || "?")}`;
+    if (llm.messages_sent != null) body += ` · sent ${llm.messages_sent} messages (${kb(llm.chars_sent || 0)} incl. prompt)`;
+    if (llm.ms != null) body += ` · replied in ${(llm.ms/1000).toFixed(1)}s`;
+    let extra = "";
+    if (s.prompt) extra += `<details><summary>extraction prompt (sent to the model)</summary><pre class="pipe-pre">${esc(s.prompt)}</pre></details>`;
+    if (llm.raw) extra += `<details><summary>raw model reply</summary><pre class="pipe-pre">${esc(llm.raw)}</pre></details>`;
+    if (llm.error) extra += `<div class="err">${esc(llm.error)}</div>`;
+    stages.push(`<div class="stage">
+      <div class="stage-head">2 · extraction — strategy “${esc(s.name || "")}” (LLM)</div>
+      <div class="stage-body">${body}</div>${extra}</div>`);
+  } else {
+    stages.push(`<div class="stage">
+      <div class="stage-head">2 · extraction — built-in regex</div>
+      <div class="stage-body">scanned every line for <code>Use the following (constraint|goal|preference|observation|reference): …</code></div>
+    </div>`);
+  }
+  let n = 3;
+  if (p.filter && typeof p.filter === "object") {
+    const f = p.filter;
+    let kind;
+    if (f.kind === "decision") kind = `decision model <b>${esc(f.model || "?")}</b>: “${esc(f.instructions || "")}”`;
+    else {
+      kind = "built-in rules";
+      if (f.types && f.types.length) kind += ` · types: ${f.types.map(esc).join(", ")}`;
+      if (f.prompt) kind += ` · text must contain “${esc(f.prompt)}”`;
+    }
+    const dropped = (f.dropped || []).length;
+    let extra = "";
+    if (dropped) extra = `<details><summary>what got dropped (${dropped})</summary><ul class="droplist">` +
+      (f.dropped || []).map(d =>
+        `<li><b>${esc(d.type || "concept")}</b> ${esc(d.short || "")}
+         <span class="dim">— ${esc(d.reason || "")}</span></li>`).join("") +
+      "</ul></details>";
+    stages.push(`<div class="stage">
+      <div class="stage-head">${n} · filter — “${esc(f.name || "")}”</div>
+      <div class="stage-body">${kind} · ${f.before ?? "?"} in → <b>${f.after ?? "?"} kept</b>, ${dropped} dropped</div>${extra}</div>`);
+    n++;
+  }
+  stages.push(`<div class="stage">
+      <div class="stage-head">${n} · concepts</div>
+      <div class="stage-body">${finalCount} shown below</div>
+    </div>`);
+  return `<div class="pipe">` + stages.join(`<div class="pipe-arrow">▼</div>`) + `</div>`;
 }
 
 loadOverview().then(applyRoute).catch(e =>
@@ -2056,6 +2228,23 @@ def _render_banner(host: str, port: int, animate: bool) -> None:
 # ---------------------------------------------------------------------------
 # Entry point
 
+def _port_occupant(host: str, port: int) -> str:
+    """If something answers on the port, say what it is ('ctools', a server
+    banner, or ''). '' means no HTTP answer — the occupant isn't a web server
+    we can identify."""
+    import urllib.request
+    target = host if host in ("0.0.0.0", "::") else "127.0.0.1"
+    try:
+        with urllib.request.urlopen(f"http://{target}:{port}/api/agents",
+                                    timeout=1.5) as r:
+            body = r.read(4096).decode(errors="replace")
+        if '"version"' in body and '"agents"' in body:
+            return "ctools"
+        return "a web server"
+    except Exception:
+        return ""
+
+
 def main():
     parser = argparse.ArgumentParser(description="ctools web dashboard")
     parser.add_argument("--port", type=int, default=8765, help="port (default 8765)")
@@ -2064,9 +2253,24 @@ def main():
     parser.add_argument("--no-logo", action="store_true",
                         help="skip the animated startup banner")
     args = parser.parse_args()
-
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}"
+
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), Handler)
+    except OSError as e:
+        if e.errno == 98 or "Address already in use" in str(e):
+            who = _port_occupant(args.host, args.port)
+            print(f"Port {args.port} is already in use.")
+            if who == "ctools":
+                print(f"A ctools dashboard is already running here: {url}")
+                print("Open that, or stop the other instance first (fuser -k %s/tcp)." % args.port)
+            elif who:
+                print(f"Something else ({who}) is listening on {args.port}.")
+                print(f"Try another one, e.g.:  ctools-web --port {args.port + 1}")
+            else:
+                print(f"Try another one, e.g.:  ctools-web --port {args.port + 1}")
+            raise SystemExit(1)
+        raise
 
     if not args.no_logo:
         _render_banner(args.host, args.port, animate=True)

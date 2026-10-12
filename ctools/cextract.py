@@ -86,13 +86,21 @@ def _decision_filter(filter_config: dict):
     )
 
 
-def _filter_concepts(concepts: list, filter_config: dict) -> list:
+def _filter_concepts(concepts: list, filter_config: dict,
+                     trace: Optional[dict] = None) -> list:
     """Filter concepts based on filter configuration.
 
     A decision-model config (one with a ``model`` and no ``command``) routes
     each concept through a local decision model. Anything else uses the
     built-in type/prompt filter.
+
+    If a ``trace`` dict is passed it is filled in with ``kind``, ``before``,
+    ``after`` and ``dropped`` (a list of {type, short, reason}) so callers
+    can show the user what the filter kept and what it threw away.
     """
+    if trace is not None:
+        trace["before"] = len(concepts)
+
     if not filter_config:
         return concepts
 
@@ -100,12 +108,32 @@ def _filter_concepts(concepts: list, filter_config: dict) -> list:
         decision = _decision_filter(filter_config)
         if decision is None:
             return concepts
+        if trace is not None:
+            trace["kind"] = "decision"
+            trace["model"] = filter_config.get("model")
+            trace["instructions"] = filter_config.get("instructions")
+            trace["dropped"] = []
         kept = []
         for c in concepts:
             text = concept_text(c)
             if decision.filter(text):
                 kept.append(c)
+            elif trace is not None:
+                trace["dropped"].append({
+                    "type": c.get("type", ""),
+                    "short": concept_text(c)[:120],
+                    "reason": "decision model said no",
+                })
+        if trace is not None:
+            trace["after"] = len(kept)
         return kept
+
+    if trace is not None:
+        trace["kind"] = "builtin"
+        trace["types"] = filter_config.get("types", [])
+        trace["exclude_types"] = filter_config.get("exclude_types", [])
+        trace["prompt"] = filter_config.get("prompt", "")
+        trace["dropped"] = []
 
     prompt = (filter_config.get("prompt") or "").lower()
     types = filter_config.get("types", [])
@@ -118,20 +146,31 @@ def _filter_concepts(concepts: list, filter_config: dict) -> list:
 
         if types and ctype not in types:
             log.debug("concept_filtered", reason="type_not_included", type=ctype, short=short)
+            if trace is not None:
+                trace["dropped"].append({"type": ctype, "short": short,
+                                         "reason": f"type not in {types}"})
             continue
 
         if exclude_types and ctype in exclude_types:
             log.debug("concept_filtered", reason="type_excluded", type=ctype, short=short)
+            if trace is not None:
+                trace["dropped"].append({"type": ctype, "short": short,
+                                         "reason": f"type in exclude list {exclude_types}"})
             continue
 
         if prompt and prompt not in c.get("description", "").lower() \
                 and prompt not in c.get("short", "").lower():
             log.debug("concept_filtered", reason="prompt_no_match", prompt=prompt, short=short)
+            if trace is not None:
+                trace["dropped"].append({"type": ctype, "short": short,
+                                         "reason": f"“{prompt}” not in text"})
             continue
 
         log.debug("concept_passed", type=ctype, short=short)
         filtered.append(c)
 
+    if trace is not None:
+        trace["after"] = len(filtered)
     return filtered
 
 
@@ -297,8 +336,15 @@ def load_strategy(strategy_path: Optional[str] = None) -> Strategy:
 # --- Session I/O ---
 
 def session_concepts(agent: Agent, session_id: str, strategy: Optional[str],
-                     filter_config: Optional[str]) -> list:
-    """Read a session and return the concepts it yields, filtered."""
+                     filter_config: Optional[str],
+                     trace: Optional[dict] = None) -> list:
+    """Read a session and return the concepts it yields, filtered.
+
+    If a ``trace`` dict is passed it is filled in with the pipeline details
+    (message count/size, which extraction path ran, the strategy used and
+    the model's raw reply, and what the filter kept/dropped) so callers can
+    show the user how the result was produced.
+    """
     with reporting():
         messages = agent.raw_messages(session_id)
     if not messages:
@@ -306,10 +352,27 @@ def session_concepts(agent: Agent, session_id: str, strategy: Optional[str],
         raise SystemExit(1)
     log.debug("messages_loaded", agent=agent.name, session=session_id, count=len(messages))
 
+    if trace is not None:
+        trace["messages"] = len(messages)
+        trace["chars"] = sum(len(m.content or "") for m in messages)
+
     if strategy:
         strat = load_strategy(strategy)
-        concepts = strat.extract([{"role": m.role, "content": m.content} for m in messages])
+        if trace is not None:
+            trace["path"] = "llm"
+            trace["strategy"] = {
+                "name": strategy,
+                "host": strat.host,
+                "model": strat.model,
+                "prompt": strat.prompt,
+            }
+            trace["llm"] = {}
+        concepts = strat.extract(
+            [{"role": m.role, "content": m.content} for m in messages],
+            trace=trace.get("llm") if trace is not None else None)
     else:
+        if trace is not None:
+            trace["path"] = "regex"
         concepts = extract_concepts_from_messages(messages)
 
     log.info("concepts_extracted", source=f"{agent.name}/{session_id}", count=len(concepts))
@@ -319,8 +382,12 @@ def session_concepts(agent: Agent, session_id: str, strategy: Optional[str],
         if filter_path.exists():
             with open(filter_path) as f:
                 filter_data = json.load(f)
+            if trace is not None:
+                trace["filter"] = {"name": filter_config}
             before = len(concepts)
-            concepts = _filter_concepts(concepts, filter_data)
+            concepts = _filter_concepts(
+                concepts, filter_data,
+                trace=trace.get("filter") if trace is not None else None)
             log.info("filter_applied", config=filter_config, input_count=before,
                      output_count=len(concepts), dropped=before - len(concepts))
 
