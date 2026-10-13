@@ -863,8 +863,19 @@ nav button.on { color: var(--text); background: var(--panel2);
 .power:disabled { opacity: .5; cursor: default; }
 main { padding: 20px 22px 60px; max-width: 1100px; margin: 0 auto; }
 .view { display: none; } .view.on { display: block; }
+/* the Concepts expansion lives in its own labeled container so it reads as a
+   tool/panel, distinct from the .msg conversation cards below it */
+#concept-box { border: 1px solid var(--border); border-top: 3px solid var(--accent);
+  border-radius: 12px; background: var(--panel); margin-bottom: 24px;
+  overflow: hidden; }
+#concept-box .cp-head { display: flex; align-items: baseline; gap: 10px;
+  padding: 10px 16px; background: var(--panel2); border-bottom: 1px solid var(--border); }
+#concept-box .cp-title { font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .8px; color: var(--accent); }
+#concept-box .cp-sub { font-size: 11px; color: var(--dim); }
+#concept-box .cp-body { padding: 14px 16px; }
 /* first-time onboarding card in the Concepts panel (conversation view) */
-.onboard { background: var(--panel); border: 1px solid var(--border);
+.onboard { background: var(--panel2); border: 1px solid var(--border);
   border-left: 3px solid var(--accent); border-radius: 10px; padding: 12px 14px;
   font-size: 13px; line-height: 1.55; color: var(--text); margin-bottom: 14px; }
 .onboard b { color: var(--text); }
@@ -2269,20 +2280,26 @@ async function showConcepts() {
          class="onboard-link">Set up your first →</a>
     </div>` : "";
   box.innerHTML = `
-    ${onboard}
-    <div class="toolbar">
-      <select id="ex-strat">${stratOpts}</select>
-      <select id="ex-filter">${filterOpts}</select>
-      <button class="primary" onclick="runExtraction()">Extract</button>
-      <label class="small dim" style="display:flex;align-items:center;gap:6px;cursor:pointer">
-        <input type="checkbox" id="ex-how" checked style="width:auto"> how it works
-      </label>
+    <div class="cp-head">
+      <span class="cp-title">Concepts</span>
+      <span class="cp-sub">extract &amp; filter</span>
     </div>
-    <p class="dim small">Strategy = how to chunk concepts (LLM). Filter = which
-      concepts pass through (decision model, built-in, or JSON-RPC).
-      <b>How it works</b> shows the pipeline: what goes in, what the model
-      says, what the filter drops.</p>
-    <div id="ex-results"></div>`;
+    <div class="cp-body">
+      ${onboard}
+      <div class="toolbar">
+        <select id="ex-strat">${stratOpts}</select>
+        <select id="ex-filter">${filterOpts}</select>
+        <button class="primary" onclick="runExtraction()">Extract</button>
+        <label class="small dim" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="ex-how" checked style="width:auto"> how it works
+        </label>
+      </div>
+      <p class="dim small">Strategy = how to chunk concepts (LLM). Filter = which
+        concepts pass through (decision model, built-in, or JSON-RPC).
+        <b>How it works</b> shows the pipeline: what goes in, what the model
+        says, what the filter drops.</p>
+      <div id="ex-results"></div>
+    </div>`;
   $("#c-body").prepend(box);
   $("#ex-strat").value = EXTRACTION.strategy || "";
   $("#ex-filter").value = EXTRACTION.filter || "";
