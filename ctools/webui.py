@@ -838,9 +838,6 @@ header { display: flex; align-items: center; gap: 14px; padding: 12px 22px;
 header h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: .3px; cursor: pointer; }
 header h1:hover { color: var(--accent); }
 header h1 span { color: var(--accent); }
-header .ver { color: var(--dim); font-size: 12px; font-family: var(--mono); cursor: pointer;
-  align-self: flex-end; margin-bottom: 6px; }
-header .ver:hover { color: var(--accent); text-decoration: underline; }
 .navsearch { display: flex; align-items: center; gap: 4px; margin-left: auto;
   background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
   padding: 3px 6px 3px 10px; flex: 0 1 340px; min-width: 170px; }
@@ -866,6 +863,21 @@ nav button.on { color: var(--text); background: var(--panel2);
 .power:disabled { opacity: .5; cursor: default; }
 main { padding: 20px 22px 60px; max-width: 1100px; margin: 0 auto; }
 .view { display: none; } .view.on { display: block; }
+/* first-time onboarding card in the Concepts panel (conversation view) */
+.onboard { background: var(--panel); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); border-radius: 10px; padding: 12px 14px;
+  font-size: 13px; line-height: 1.55; color: var(--text); margin-bottom: 14px; }
+.onboard b { color: var(--text); }
+.onboard-link { display: inline-block; margin-top: 8px; color: var(--accent);
+  font-weight: 600; text-decoration: none; cursor: pointer; }
+.onboard-link:hover { text-decoration: underline; }
+/* highlight a create-form when jumped to from the onboarding link */
+.flash { animation: flash 2.4s ease; border-radius: 12px; }
+@keyframes flash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(90,169,255,0); }
+  12%, 48% { box-shadow: 0 0 0 3px rgba(90,169,255,0.5);
+    background: rgba(90,169,255,0.06); }
+}
 /* --- concepts (configs) page: a light vertical flow --- */
 .cfg { max-width: 760px; }
 .diagram { max-width: 760px; background: var(--panel);
@@ -937,6 +949,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .field textarea { min-height: 90px; resize: vertical; }
 .fgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
 @media (max-width: 640px) { .fgrid { grid-template-columns: 1fr; } }
+/* On phones, drop the search next to the brand (it keeps the auto-margin /
+   right-alignment on wider screens). */
+@media (max-width: 720px) { .navsearch { margin-left: 0; flex: 1 1 auto; min-width: 0; } }
 textarea#st-prompt, textarea#fl-instr, textarea#fl-cmd { min-height: 150px; }
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .toolbar input[type=text], .toolbar input[type=search] { flex: 1; min-width: 200px; }
@@ -1058,7 +1073,6 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
 </div>
 <header>
   <h1>ctools<span>.</span></h1>
-  <span class="ver" id="ver"></span>
   <div class="navsearch" title="Search sessions and conversations — / to focus, Ctrl+K also works">
     <input type="search" id="q" placeholder="search sessions & conversations…" autocomplete="off" spellcheck="false">
     <button id="qbtn" title="Search (Enter)" aria-label="Search">⌕</button>
@@ -1204,7 +1218,7 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
 }</pre>
         </details>
         <h4>New strategy</h4>
-        <div id="strat-form" class="card" style="margin-bottom:10px"></div>
+        <div id="strat-form" style="margin-bottom:10px"></div>
         <button class="primary" onclick="saveStrategy()">Create strategy</button>
       </div>
 
@@ -1244,7 +1258,7 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
 }</pre>
         </details>
         <h4>New filter</h4>
-        <div id="filter-form" class="card" style="margin-bottom:10px"></div>
+        <div id="filter-form" style="margin-bottom:10px"></div>
         <button class="primary" onclick="saveFilter()">Create filter</button>
       </div>
     </div>
@@ -1313,7 +1327,15 @@ function parseHash() {
     });
     return {view: "search", q};
   }
-  if (parts[0] === "configs") return {view: "configs"};
+  if (parts[0] === "configs" || parts[0].startsWith("configs?")) {
+    let focus = null;
+    const qi = parts[0].indexOf("?");
+    if (qi >= 0) (parts[0].slice(qi + 1).split("&")).forEach(kv => {
+      const [k, v] = kv.split("=");
+      if (k === "focus" && (v === "strategy" || v === "filter")) focus = v;
+    });
+    return {view: "configs", focus};
+  }
   if (parts[0] === "sessions" && parts[1]) {
     const seg = parts[1].split("?");
     let sort = "time";
@@ -1336,12 +1358,33 @@ function navigate(hash) {
   applyRoute();
 }
 
+// Scroll a create-form into view and flash it — used when a first-time user
+// follows the “set up your first …” link from the Concepts panel.
+function focusForm(kind) {
+  if (!kind) return;
+  const el = document.getElementById(kind === "strategy" ? "strat-form" : "filter-form");
+  if (!el) return;
+  // small delay so the view has laid out before we scroll to it (robust in
+  // background tabs / headless, where requestAnimationFrame may not fire)
+  setTimeout(() => {
+    el.scrollIntoView({behavior: "smooth", block: "center"});
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 2400);
+    const inp = el.querySelector("input");
+    if (inp) setTimeout(() => inp.focus({preventScroll: true}), 400);
+  }, 60);
+}
+
 function applyRoute() {
   const r = parseHash();
   switchView(r.view);
-  if (r.view === "configs" && !window._configsLoaded) {
-    window._configsLoaded = true;
-    loadConfigs().then(() => { stratFormFields(); filterFormFields(); });
+  if (r.view === "configs") {
+    if (!window._configsLoaded) {
+      window._configsLoaded = true;
+      loadConfigs().then(() => { stratFormFields(); filterFormFields(); focusForm(r.focus); });
+    } else if (r.focus) {
+      focusForm(r.focus);
+    }
   }
   if (r.view === "sessions") {
     const known = [...$("#s-agent").options].some(o => o.value === r.agent);
@@ -1421,7 +1464,6 @@ async function copyToClipboard(text, el) {
 
 async function loadOverview() {
   const data = await api("/api/agents");
-  $("#ver").textContent = "v" + data.version;
   AGENTS = data.agents;
   const grid = $("#agent-grid");
   const gridMissing = $("#agent-grid-missing");
@@ -1810,10 +1852,8 @@ function sessionsChange() {
 
 // events
 $("#qbtn").addEventListener("click", () => runGlobalSearch());
-// logo → overview; version → GitHub repo
+// logo → overview
 $("header h1").addEventListener("click", () => navigate(""));
-$("#ver").addEventListener("click", () =>
-  window.open("https://github.com/day50-dev/ctools", "_blank", "noopener"));
 $("#q").addEventListener("keydown", e => { if (e.key === "Enter") runGlobalSearch(); });
 // / or Ctrl/Cmd+K focuses the search bar from anywhere
 document.addEventListener("keydown", e => {
@@ -2218,7 +2258,18 @@ async function showConcepts() {
     STRATEGIES.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
   const filterOpts = `<option value="">none</option>` +
     FILTERS.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+  // First-time guidance: no strategy and no filter yet → point them at the
+  // Concepts page and offer to jump straight to the create form.
+  const onboard = (!STRATEGIES.length && !FILTERS.length) ? `
+    <div class="onboard">
+      <b>Nothing set up yet.</b> Concepts are currently extracted with the
+      built-in regex patterns. To extract with an LLM and/or narrow the results,
+      create a strategy and/or a filter.
+      <a href="#" onclick="navigate('configs?focus=strategy');return false"
+         class="onboard-link">Set up your first →</a>
+    </div>` : "";
   box.innerHTML = `
+    ${onboard}
     <div class="toolbar">
       <select id="ex-strat">${stratOpts}</select>
       <select id="ex-filter">${filterOpts}</select>
