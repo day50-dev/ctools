@@ -499,6 +499,56 @@ def test_webui_get_unknown_agent(webui):
     _api_error(status, body, "Unknown agent")
 
 
+def test_webui_filter_payload_decision_systemone(webui):
+    """/api/filter-payload builds the real systemone request body (no network)."""
+    import json as _json
+    status, body = _get(
+        webui, "/api/filter-payload?backend=decision&model=tev1"
+        "&instructions=Is+this+security&endpoint=systemone&mode=noul")
+    assert status == 200
+    d = _json.loads(body)
+    assert d["backend"] == "decision"
+    assert d["example"]["endpoint"] == "POST /v1/systemone"
+    payload = d["example"]["payload"]
+    assert payload["model"] == "tev1"
+    assert payload["questions"]["relevant"]["type"] == "noul"
+    assert "security" in payload["questions"]["relevant"]["instructions"]
+    assert "Traceback" not in body
+
+
+def test_webui_filter_payload_decision_chat(webui):
+    """The chat endpoint renders a lettered prompt instead of typed questions."""
+    import json as _json
+    status, body = _get(
+        webui, "/api/filter-payload?backend=decision&model=tev1"
+        "&instructions=Is+this+security&endpoint=chat")
+    assert status == 200
+    d = _json.loads(body)
+    assert d["example"]["endpoint"] == "POST /v1/chat/completions"
+    content = d["example"]["payload"]["messages"][0]["content"]
+    assert "Decision task" in content
+    assert "A) Yes." in content and "B) No." in content
+
+
+def test_webui_filter_payload_builtin(webui):
+    """Built-in filters return the rules + how sample concepts fare."""
+    import json as _json
+    status, body = _get(
+        webui, "/api/filter-payload?backend=builtin&types=goal&prompt=ssl")
+    assert status == 200
+    d = _json.loads(body)
+    assert d["backend"] == "builtin"
+    assert d["example"]["rules"]["types"] == ["goal"]
+    assert "sample_results" in d["example"]
+
+
+def test_webui_filter_payload_decision_requires_model(webui):
+    """A decision filter with no model is a clean 400, not a 500."""
+    status, body = _get(
+        webui, "/api/filter-payload?backend=decision&model=&instructions=x")
+    _api_error(status, body, "Set a model")
+
+
 def test_webui_models_down_host_is_clean_502(webui):
     """An unreachable host must yield a clean 502 with a reason — never a
     traceback, a dropped connection, or a 500."""

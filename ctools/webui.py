@@ -19,6 +19,7 @@ import argparse
 import json
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -48,6 +49,7 @@ try:
 except Exception:  # pragma: no cover - depends on repo state
     _compile_pattern = None
 from ctools.cdu import _session_tokens, format_tokens, get_session_tokens
+from ctools.filterlib import load_filter
 from ctools.lib import get_formatter
 
 
@@ -237,6 +239,7 @@ class Handler(BaseHTTPRequestHandler):
         return status, parsed, None
 
     def _get_models(self):
+
         """List the models a server at ``?host=`` advertises.
 
         Tries Ollama's native ``/api/tags`` first (returns model *names*),
@@ -279,6 +282,92 @@ class Handler(BaseHTTPRequestHandler):
         detail = "; ".join(reasons) or "no model list returned"
         return self._error(502, f"Could not fetch models from {host}. {detail}")
 
+    def _filter_payload(self):
+        """Show exactly what a filter would send, for a sample concept.
+
+        Reads the in-progress filter form values from the query string and
+        builds the real outbound payload (no network call). For decision
+        models this is the systemone or chat request body; for built-in and
+        JSON-RPC it's a rule/method summary. Returns
+        ``{backend, description, example: {...}}``.
+        """
+        q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else {})
+        g = lambda k, d="": (q.get(k, [d])[0] or d).strip()
+        backend = g("backend", "decision")
+        sample = g("sample", "Is this concept about security?") or "Is this concept about security?"
+
+        if backend == "decision":
+            model = g("model")
+            instructions = g("instructions")
+            if not model or not instructions:
+                return self._error(400, "Set a model and instructions to preview the payload.")
+            cfg = {
+                "type": "systemone",
+                "host": g("host", "http://localhost:11434") or "http://localhost:11434",
+                "model": model,
+                "endpoint": g("endpoint", "systemone") or "systemone",
+                "instructions": instructions,
+                "mode": g("mode", "noul") or "noul",
+                "threshold": float(g("threshold", "0.6") or "0.6"),
+            }
+            try:
+                f = load_filter(cfg)
+            except Exception as e:
+                return self._error(400, f"Invalid decision filter: {e}")
+            ex = f.example_payload(sample)
+            note = ("The model returns a calibrated probability per option; "
+                    f"the concept is kept when {cfg['mode']} >= threshold."
+                    if cfg["endpoint"] == "systemone" else
+                    "The typed question is rendered into a lettered prompt and the "
+                    "model's lettered reply is parsed. No probabilities — only the "
+                    "chosen option is available.")
+            return self._json({"backend": "decision", "description": note,
+                               "example": ex})
+
+        if backend == "builtin":
+            types = [t for t in g("types").split(",") if t.strip()]
+            excl = [t for t in g("exclude").split(",") if t.strip()]
+            prompt = g("prompt")
+            rule = {}
+            if types: rule["types"] = types
+            if excl: rule["exclude_types"] = excl
+            if prompt: rule["prompt"] = prompt
+            # Walk a couple of sample concepts through the real logic.
+            samples = [
+                {"type": types[0] if types else "goal", "short": sample},
+                {"type": "noise", "short": "unrelated"},
+            ]
+            results = []
+            for c in samples:
+                ct = c["type"]
+                short = c["short"]
+                kept = True; reason = "kept"
+                if types and ct not in types:
+                    kept = False; reason = f"type {ct!r} not in {types}"
+                elif excl and ct in excl:
+                    kept = False; reason = f"type {ct!r} excluded"
+                elif prompt and prompt.lower() not in short.lower() and prompt.lower() not in c.get("description"," ").lower():
+                    kept = False; reason = f"no match for {prompt!r}"
+                results.append({"concept": {"type": ct, "short": short},
+                                "kept": kept, "reason": reason})
+            return self._json({"backend": "builtin",
+                               "description": "Pure code — no server. Each concept is kept when its type is allowed and its text matches.",
+                               "example": {"rules": rule, "sample_results": results}})
+
+        if backend == "jsonrpc":
+            cmd = [c for c in g("command").split() if c]
+            if not cmd:
+                return self._error(400, "Set a command to preview the payload.")
+            return self._json({"backend": "jsonrpc",
+                               "description": "Your subprocess is spawned and asked over JSON-RPC on stdin/stdout.",
+                               "example": {"command": cmd,
+                                           "method": g("method", "classify") or "classify",
+                                           "call": {"jsonrpc": "2.0", "id": 1,
+                                                     "method": g("method", "classify") or "classify",
+                                                     "params": {"text": sample}}}})
+
+        return self._error(400, f"Unknown backend: {backend}")
+
     def _path(self) -> tuple:
         parts = [p for p in self.path.split("?", 1)[0].strip("/").split("/") if p]
         return parts
@@ -303,7 +392,9 @@ class Handler(BaseHTTPRequestHandler):
     def _do_GET(self):
         parts = self._path()
         if not parts:
-            return self._send(200, INDEX_HTML.encode("utf-8"),
+            token = getattr(Handler, "_shutdown_token", "") or ""
+            page = INDEX_HTML.replace("__SHUTDOWN_TOKEN__", token)
+            return self._send(200, page.encode("utf-8"),
                               "text/html; charset=utf-8")
 
         if parts[0] == "api":
@@ -313,6 +404,9 @@ class Handler(BaseHTTPRequestHandler):
     def api_get(self, parts):
         if parts == ["models"]:
             return self._get_models()
+
+        if parts == ["filter-payload"]:
+            return self._filter_payload()
 
         if parts == ["agents"]:
             out = []
@@ -523,6 +617,35 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+    def _do_shutdown(self, body):
+        """Cleanly stop the server from inside the page.
+
+        Requires the per-process token (embedded in the page HTML at startup)
+        so a stray request or a different instance can't kill this server.
+        Responds first, then shuts down after a short delay so the client
+        gets the confirmation before the socket closes.
+        """
+        token = body.get("token")
+        expected = getattr(Handler, "_shutdown_token", None)
+        server = getattr(Handler, "_server", None)
+        if not expected or not server:
+            return self._error(503, "Shutdown not available.")
+        if not isinstance(token, str) or token != expected:
+            return self._error(403, "Invalid or missing shutdown token.")
+        self._json({"ok": True, "message": "Shutting down.", "delay": 0.5})
+
+        def _later():
+            import time
+            time.sleep(0.5)  # let the response flush
+            print("\nbye.")
+            try:
+                server.shutdown()
+            except Exception:
+                pass
+
+        threading.Thread(target=_later, daemon=True).start()
+        return None
+
     def _do_POST(self):
         parts = self._path()
         if not (parts and parts[0] == "api"):
@@ -534,6 +657,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, "Invalid JSON body")
         if not isinstance(body, dict):
             return self._error(400, "JSON body must be an object")
+
+        if parts[1:] == ["shutdown"]:
+            return self._do_shutdown(body)
 
         if parts[1:] == ["search"]:
             pattern = body.get("pattern", "")
@@ -690,6 +816,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+/* initial-load overlay: shown until the first agent scan finishes */
+.bootload { position: fixed; inset: 0; background: var(--bg); z-index: 50;
+  display: flex; flex-direction: column; align-items: center; justify-content:
+  center; gap: 18px; transition: opacity .3s ease; }
+.bootload.gone { opacity: 0; pointer-events: none; }
+.bootload .spin { width: 34px; height: 34px; border: 3px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%; animation: spin .8s
+  linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.bootload .bootmsg { color: var(--dim); font-size: 14px; letter-spacing: .2px; }
+/* lightweight inline spinner for per-view fetches */
+.loading { display: inline-flex; align-items: center; gap: 8px; color: var(--dim);
+  font-size: 13px; padding: 10px 0; }
+.loading .spin { width: 15px; height: 15px; border: 2px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%; animation: spin .8s
+  linear infinite; }
 header { display: flex; align-items: center; gap: 14px; padding: 12px 22px;
   border-bottom: 1px solid var(--border); background: var(--panel);
   position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
@@ -717,6 +859,11 @@ nav button { background: none; border: 1px solid transparent; color: var(--dim);
 nav button:hover { color: var(--text); background: var(--panel2); }
 nav button.on { color: var(--text); background: var(--panel2);
   border-color: var(--border); }
+.power { margin-left: 8px; background: none; border: 1px solid var(--border);
+  color: var(--dim); width: 34px; height: 34px; border-radius: 9px; cursor: pointer;
+  font-size: 16px; line-height: 1; flex: 0 0 auto; }
+.power:hover { color: var(--red); border-color: var(--red); background: var(--panel2); }
+.power:disabled { opacity: .5; cursor: default; }
 main { padding: 20px 22px 60px; max-width: 1100px; margin: 0 auto; }
 .view { display: none; } .view.on { display: block; }
 /* --- concepts (configs) page: a light vertical flow --- */
@@ -741,6 +888,17 @@ main { padding: 20px 22px 60px; max-width: 1100px; margin: 0 auto; }
 .cfg-head p { margin: 0; line-height: 1.55; }
 .cfg-step h4 { margin: 24px 0 10px; font-size: 12px; text-transform: uppercase;
   letter-spacing: .8px; color: var(--dim); font-weight: 600; }
+/* live "under the hood" payload preview */
+.payloadbox { margin-top: 18px; border: 1px dashed var(--border); border-radius: 10px;
+  padding: 12px 14px; background: var(--bg); }
+.payloadbox .payload-head { font-size: 11px; font-weight: 700; letter-spacing: .8px;
+  text-transform: uppercase; color: var(--dim); margin-bottom: 6px; }
+.payloadbox .payload-desc { margin: 0 0 8px; font-size: 12.5px; color: var(--text);
+  line-height: 1.5; }
+.payloadbox .payload-pre { margin: 0; background: var(--panel); border: 1px solid
+  var(--border); border-radius: 8px; padding: 12px 14px; font-family: var(--mono);
+  font-size: 12px; white-space: pre-wrap; max-height: 320px; overflow: auto;
+  color: var(--text); }
 h2 { font-size: 15px; margin: 22px 0 10px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .8px; font-weight: 600; }
 h2:first-child { margin-top: 0; }
@@ -894,6 +1052,10 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
 </style>
 </head>
 <body>
+<div class="bootload" id="bootload">
+  <div class="spin"></div>
+  <div class="bootmsg">scanning your agents…</div>
+</div>
 <header>
   <h1>ctools<span>.</span></h1>
   <span class="ver" id="ver"></span>
@@ -904,9 +1066,10 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
   <nav>
     <button data-view="overview">Overview</button>
     <button data-view="sessions">Sessions</button>
-    <button data-view="converse">Conversation</button>
     <button data-view="configs">Concepts</button>
   </nav>
+  <button id="power" class="power" title="Shut down the dashboard" aria-label="Shut down"
+          onclick="shutdown()">⏻</button>
 </header>
 <main>
   <section id="view-overview" class="view on">
@@ -1000,10 +1163,9 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
         </g>
         <!-- output -->
         <g class="dnode">
-          <rect x="690" y="118" width="62" height="64" rx="12"
+          <rect x="678" y="118" width="78" height="64" rx="12"
                 fill="var(--green)" stroke="none"></rect>
-          <text x="721" y="146" class="dout">concept</text>
-          <text x="721" y="164" class="dout">s</text>
+          <text x="717" y="155" class="dout">concepts</text>
         </g>
         <!-- connectors -->
         <g class="dlink" stroke="var(--dim)" fill="none" stroke-width="1.5">
@@ -1011,7 +1173,7 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
           <path d="M166,160 C 200,160 210,228 248,228" marker-end="url(#arw)"></path>
           <path d="M440,72 C 475,72 470,140 508,140" marker-end="url(#arw)"></path>
           <path d="M440,228 C 475,228 470,160 508,160" marker-end="url(#arw)"></path>
-          <path d="M660,150 L 686,150" marker-end="url(#arw)"></path>
+          <path d="M660,150 L 674,150" marker-end="url(#arw)"></path>
         </g>
         <!-- the “or” between the two extraction paths -->
         <text x="345" y="150" class="dor">or</text>
@@ -1107,11 +1269,34 @@ let STRATEGIES = [];
 let FILTERS = [];
 let CONV = null;   // {agent, session_id}
 let LAST_SESSIONS = null;
+const SHUTDOWN_TOKEN = "__SHUTDOWN_TOKEN__";
+
+// Shut the dashboard down from the page. Asks first, then calls the token-
+//guarded endpoint. The server confirms and stops ~0.5s later.
+async function shutdown() {
+  if (!confirm("Shut down the ctools dashboard?\n\nOpen conversations keep their data; this just stops the web server.")) return;
+  const btn = $("#power");
+  if (btn) { btn.disabled = true; btn.textContent = "…"; }
+  try {
+    await api("/api/shutdown", { method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({token: SHUTDOWN_TOKEN}) });
+    document.body.innerHTML =
+      `<div style="display:flex;align-items:center;justify-content:center;
+        height:100vh;font-size:18px;color:var(--dim)">bye — the dashboard is stopping.</div>`;
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = "⏻"; }
+    alert("Could not shut down: " + e.message);
+  }
+}
 
 function switchView(name) {
   document.querySelectorAll(".view").forEach(v => v.classList.remove("on"));
+  // A conversation is a drill-down from Sessions, so keep Sessions lit while
+  // one is open — no nav button is left orphaned / nothing highlighted.
+  const navName = (name === "converse") ? "sessions" : name;
   document.querySelectorAll("nav button").forEach(b =>
-    b.classList.toggle("on", b.dataset.view === name));
+    b.classList.toggle("on", b.dataset.view === navName));
   $("#view-" + name).classList.add("on");
 }
 // --- hash routing: #, #search, #sessions/<agent>[?sort=x], #session/<agent>/<sid>, #configs ---
@@ -1335,7 +1520,7 @@ async function listSessions() {
   const sort = $("#s-sort").value;
   const seq = ++sessSeq;
   window._shownSessKey = name + "|" + sort;
-  $("#s-result").innerHTML = `<p class="dim">Loading…</p>`;
+  $("#s-result").innerHTML = `<div class="loading"><span class="spin"></span>loading sessions…</div>`;
   try {
     const d = await api(`/api/agents/${encodeURIComponent(name)}/sessions?sort=${sort}`);
     if (seq !== sessSeq) return;  // a newer request superseded this one
@@ -1428,7 +1613,7 @@ async function runGlobalSearch() {
   if (!pattern) return;
   const fresh = !LAST_SEARCH || LAST_SEARCH.q !== pattern;
   if (fresh) {
-    $("#q-result").innerHTML = `<p class="dim">Searching sessions & conversations…</p>`;
+    $("#q-result").innerHTML = `<div class="loading"><span class="spin"></span>searching sessions &amp; conversations…</div>`;
     $("#q-sessions").innerHTML = "";
     $("#q-summary").textContent = "";
     try {
@@ -1507,7 +1692,7 @@ async function openConverse(agent, sid) {
   $("#c-title").innerHTML =
     `<a class="crumb" href="#" onclick="openSessions('${esc(agent)}');return false">${esc(agent)}</a>
      <span class="dim"> / </span><span class="crumb-sid" title="${esc(sid)}">${esc(sid)}</span>`;
-  $("#c-body").innerHTML = `<p class="dim">Loading…</p>`;
+  $("#c-body").innerHTML = `<div class="loading" style="padding:20px 0"><span class="spin"></span>loading conversation…</div>`;
   $("#c-meta").innerHTML = "";
   dismissBanner();
   CONV = {agent, session_id: sid};
@@ -1821,14 +2006,15 @@ function filterFormFields() {
         <option value="jsonrpc">JSON-RPC — your own subprocess</option>
       </select>
       <div class="hint" id="fl-backend-hint"></div></div>
-    <div id="fl-body"></div>`;
+    <div id="fl-body"></div>
+    <div class="payloadbox" id="fl-payload"></div>`;
   filterBackend();
 }
 function filterBackend() {
   const b = $("#fl-backend").value;
   const hint = $("#fl-backend-hint");
   if (b === "decision") {
-    hint.textContent = "A local model (e.g. systemone on Ollama) answers yes/no or picks a label for every concept; concepts passing the threshold are kept.";
+    hint.textContent = "A local model answers yes/no or picks a label for every concept; passing concepts are kept.";
     $("#fl-body").innerHTML = `
       <div class="fgrid">
         <div class="field"><label for="fl-host">Server host</label>
@@ -1843,11 +2029,11 @@ function filterBackend() {
           <div class="hint">A trained decision model on that server.
             “fetch models” lists what the server has, or use <code>ollama list</code>.</div></div>
         <div class="field"><label for="fl-endpoint">Endpoint</label>
-          <select id="fl-endpoint">
-            <option value="systemone">systemone (typed, Ollama)</option>
-            <option value="chat">chat (OpenAI-compatible)</option>
+          <select id="fl-endpoint" onchange="filterEndpoint()">
+            <option value="systemone">systemone — structured output</option>
+            <option value="chat">chat — prompt engineering</option>
           </select>
-          <div class="hint">How the model is queried.</div></div>
+          <div class="hint" id="fl-endpoint-hint"></div></div>
         <div class="field"><label for="fl-mode">Mode</label>
           <select id="fl-mode">
             <option value="noul">noul — yes / no</option>
@@ -1860,10 +2046,8 @@ function filterBackend() {
         <textarea id="fl-instr" rows="3" placeholder='e.g. Is this concept about security?'></textarea>
         <div class="hint">The question asked for each concept. Be specific —
           “Is this a hard requirement the implementation must satisfy?”</div></div>
-      <div class="field"><label for="fl-thresh">Threshold <span>0–1, noul/systemone only</span></label>
-        <input id="fl-thresh" type="number" step="0.05" min="0" max="1" value="0.6">
-        <div class="hint">Confidence needed to keep a concept. 0.6 is a safe start;
-          raise to drop borderline matches, lower to keep more.</div></div>`;
+      <div id="fl-thresh-wrap"></div>`;
+    filterEndpoint();
   } else if (b === "builtin") {
     hint.textContent = "No model, no server — pure code. Concepts pass when their type matches (and their text contains the required substring, if set).";
     $("#fl-body").innerHTML = `
@@ -1895,6 +2079,87 @@ function filterBackend() {
           <div class="hint">Give up waiting for your program after this long.</div></div>
       </div>`;
   }
+  // wire live payload preview for all backends
+  $("#fl-body").querySelectorAll("input,select,textarea").forEach(el => {
+    el.addEventListener("input", updatePayload);
+    el.addEventListener("change", updatePayload);
+  });
+  updatePayload();
+}
+
+// Show/hide the threshold field based on the selected endpoint.
+// systemone returns probabilities → threshold makes sense.
+// chat returns a letter → threshold is meaningless.
+function filterEndpoint() {
+  const ep = $("#fl-endpoint");
+  const wrap = $("#fl-thresh-wrap");
+  const hint = $("#fl-endpoint-hint");
+  if (!ep || !wrap) return;
+  const val = ep.value;
+  if (val === "systemone") {
+    hint.innerHTML = "Structured output: the model returns typed answers with calibrated " +
+      "probabilities — no prompt engineering, nothing to parse. " +
+      "The threshold gates the probability.";
+    wrap.innerHTML = `
+      <div class="field"><label for="fl-thresh">Threshold <span>0–1</span></label>
+        <input id="fl-thresh" type="number" step="0.05" min="0" max="1" value="0.6">
+        <div class="hint">Keep the concept when the model's confidence is ≥ this value.
+          0.6 is a safe start; raise to drop borderline matches, lower to keep more.</div></div>`;
+  } else {
+    hint.innerHTML = "Prompt engineering: the question is rendered into a lettered prompt " +
+      "and the model's text reply is parsed for a letter. No probabilities — only the " +
+      "chosen option is available, so there is no threshold to tune.";
+    wrap.innerHTML = "";
+  }
+  // re-wire the threshold field if it appeared
+  const t = $("#fl-thresh");
+  if (t) {
+    t.addEventListener("input", updatePayload);
+    t.addEventListener("change", updatePayload);
+  }
+  // updatePayload is called by filterBackend() after filterEndpoint() returns,
+  // but if the user changes the endpoint directly (not via filterBackend),
+  // we need to refresh the payload too.
+  updatePayload();
+}
+
+// Show the exact request a filter would send (or the rules it applies), so the
+// user can see what's happening under the hood. Live-updates as the form is
+// edited. No network call — the backend just builds the payload.
+async function updatePayload() {
+  const box = $("#fl-payload");
+  if (!box) return;
+  const b = $("#fl-backend");
+  if (!b) return;
+  const backend = b.value;
+  const g = id => { const e = $(id); return e ? e.value.trim() : ""; };
+  const params = new URLSearchParams();
+  params.set("backend", backend);
+  if (backend === "decision") {
+    params.set("model", g("#fl-model"));
+    params.set("instructions", g("#fl-instr"));
+    params.set("host", g("#fl-host") || "http://localhost:11434");
+    params.set("endpoint", g("#fl-endpoint") || "systemone");
+    params.set("mode", g("#fl-mode") || "noul");
+    params.set("threshold", g("#fl-thresh") || "0.6");
+  } else if (backend === "builtin") {
+    params.set("types", g("#fl-types"));
+    params.set("exclude", g("#fl-excl"));
+    params.set("prompt", g("#fl-prompt"));
+  } else {
+    params.set("command", g("#fl-cmd"));
+    params.set("method", g("#fl-method") || "classify");
+  }
+  try {
+    const d = await api("/api/filter-payload?" + params.toString());
+    box.innerHTML = `
+      <div class="payload-head">under the hood</div>
+      <p class="payload-desc">${esc(d.description)}</p>
+      <pre class="payload-pre">${esc(JSON.stringify(d.example, null, 2))}</pre>`;
+  } catch (e) {
+    box.innerHTML = `<div class="payload-head">under the hood</div>
+      <p class="payload-desc dim">${esc(e.message)}</p>`;
+  }
 }
 function saveFilter() {
   const name = $("#fl-name").value.trim();
@@ -1905,10 +2170,13 @@ function saveFilter() {
   if (b === "decision") {
     if (!g("#fl-model")) return alert("A decision filter needs a model.");
     if (!g("#fl-instr")) return alert("A decision filter needs instructions.");
+    const endpoint = g("#fl-endpoint") || "systemone";
     cfg = { type: "systemone", host: g("#fl-host") || "http://localhost:11434",
-      model: g("#fl-model"), endpoint: g("#fl-endpoint") || "systemone",
-      instructions: g("#fl-instr"), mode: g("#fl-mode") || "noul",
-      threshold: parseFloat(g("#fl-thresh") || "0.6") };
+      model: g("#fl-model"), endpoint: endpoint,
+      instructions: g("#fl-instr"), mode: g("#fl-mode") || "noul" };
+    // threshold only matters for systemone (probabilities); chat is letter-based
+    if (endpoint === "systemone")
+      cfg.threshold = parseFloat(g("#fl-thresh") || "0.6");
   } else if (b === "builtin") {
     const types = g("#fl-types").split(",").map(s=>s.trim()).filter(Boolean);
     const excl = g("#fl-excl").split(",").map(s=>s.trim()).filter(Boolean);
@@ -2062,8 +2330,22 @@ function renderPipeline(p, finalCount) {
   return `<div class="pipe">` + stages.join(`<div class="pipe-arrow">▼</div>`) + `</div>`;
 }
 
-loadOverview().then(applyRoute).catch(e =>
-  document.body.innerHTML = `<div class="err" style="margin:40px">${esc(e.message)}</div>`);
+function hideBootload() {
+  const el = $("#bootload");
+  if (!el) return;
+  el.classList.add("gone");
+  setTimeout(() => el.remove(), 350);  // let the fade finish
+}
+loadOverview()
+  .then(applyRoute)
+  .then(hideBootload)
+  .catch(e => {
+    hideBootload();
+    const grid = $("#agent-grid");
+    if (grid) grid.innerHTML = `<div class="card dim">Could not load agents: ${esc(e.message)}</div>`;
+  });
+// safety net: never leave the spinner up forever
+setTimeout(hideBootload, 15000);
 </script>
 </body>
 </html>
@@ -2272,11 +2554,17 @@ def main():
             raise SystemExit(1)
         raise
 
+    # A random value this process chose at startup. The in-page shutdown button
+    # must present it, so a stray request (or a different ctools instance) can't
+    # kill this server. It lives in the page HTML only — never in logs.
+    import secrets
+    Handler._server = server
+    Handler._shutdown_token = secrets.token_urlsafe(16)
+
     if not args.no_logo:
         _render_banner(args.host, args.port, animate=True)
     else:
         print(f"ctools {__version__} dashboard: {url}")
-    print("      Ctrl-C to stop.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

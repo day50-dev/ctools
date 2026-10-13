@@ -185,25 +185,34 @@ web server (Python stdlib only, no web dependencies) with the same library
 underneath. Same on macOS, Windows, and Linux:
 
 ```sh
-$ ctools-web                 # or: python -m ctools.webui
+$ ctools-web                 # installed command
+# or, straight from a checkout, no install needed:
+$ python3 ctools/ctools-web.py        # or: python -m ctools.webui
 ctools 0.2.1 dashboard: http://127.0.0.1:8765
 ```
 
-Open the URL. You get four views:
+Open the URL. The navbar has **Overview**, **Sessions**, and **Concepts**, plus
+a search box (press <b>/</b>) and a power button to stop the server. Clicking a
+session anywhere opens its **Conversation** view:
 
 - **Overview** — every supported agent, installed or not, with session counts
   and total tokens, and a jump into each agent's sessions.
-- **Search** — `cgrep` in the browser: one regex box, per-agent chips, live
-  matches; click any match to open that conversation.
-- **Sessions** — `cdir` for one agent: newest, largest, or by token usage.
-- **Conversation** — `ccat` with the source session's messages, token usage,
-  the resume command, concept extraction (`cextract`), a markdown export,
-  and **Copy** — `ccopy` to any other installed agent, which creates a fresh
+- **Search** — `cgrep` in the browser: one box, searches session ids, names,
+  paths <b>and</b> the content of every conversation at once; click a match to
+  open that conversation.
+- **Sessions** — `cdir` for one agent (or all of them): newest, largest, or by
+  token usage, filterable.
+- **Conversation** — `ccat` with the session's messages, token usage, the
+  resume command, concept extraction (`cextract`), a markdown export, and
+  **Copy** — `ccopy` to any other installed agent, which creates a fresh
   session there (source untouched) and tells you how to resume it.
 
 The server binds to `127.0.0.1` by default, so nothing is exposed to your
 network unless you pass `--host 0.0.0.0`. There is one write operation:
 Copy. Everything else is read-only against the agents' storage.
+
+Stop it with **Ctrl-C**, or with the **power button** (⏻) in the top-right of
+the page — it asks for confirmation, then shuts the server down cleanly.
 
 ```sh
 ctools-web --port 9000

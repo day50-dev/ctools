@@ -309,6 +309,37 @@ class SystemOneFilter(Filter):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
+    def example_payload(self, sample: str = "Is this about security?") -> Dict[str, Any]:
+        """Build the exact request payload that would be sent to the model for a
+        sample concept, without making the network call.
+
+        Returns a small description dict so the UI can pretty-print "what would
+        be sent":
+
+        * systemone: ``{"endpoint": "POST /v1/systemone", "payload": {...}}``
+        * chat:      ``{"endpoint": "POST /v1/chat/completions", "payload": {...}}``
+
+        The sample stands in for the real concept text.
+        """
+        if self.endpoint == "systemone":
+            return {
+                "endpoint": "POST /v1/systemone",
+                "url": f"{self.host}/v1/systemone",
+                "payload": {"model": self.model, "state": sample,
+                            "questions": self._questions()},
+            }
+        return {
+            "endpoint": "POST /v1/chat/completions",
+            "url": f"{self.host}/v1/chat/completions",
+            "payload": {
+                "model": self.model,
+                "messages": [{"role": "user",
+                              "content": self._chat_prompt(sample)}],
+                "temperature": 0,
+                "max_tokens": self.max_tokens,
+            },
+        }
+
     def _call_systemone(self, in_str: str, log) -> bool:
         payload = {"model": self.model, "state": in_str,
                    "questions": self._questions()}
