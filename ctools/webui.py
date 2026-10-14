@@ -954,6 +954,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .field > label { font-size: 12px; font-weight: 600; color: var(--text); }
 .field > label span { color: var(--dim); font-weight: 400; }
 .field > .hint { font-size: 11.5px; color: var(--dim); line-height: 1.45; }
+.field > .ferr { font-size: 11.5px; color: var(--red); margin-top: 4px; }
+.field > .ferr:empty { display: none; }
 .field input, .field select, .field textarea { width: 100%; font-size: 14px;
   padding: 9px 12px; background: var(--bg); }
 .field textarea { min-height: 90px; resize: vertical; }
@@ -1964,24 +1966,18 @@ async function viewConfig(kind, name) {
 function stratFormFields() {
   $("#strat-form").innerHTML = `
     <div class="field"><label for="st-name">Name</label>
-      <input id="st-name" placeholder="e.g. gemma4">
-      <div class="hint">File name without extension — becomes
-        <code>~/.config/ctools/strategies/&lt;name&gt;.json</code> and the option in the
-        Concepts dropdown.</div></div>
+      <input id="st-name" placeholder="e.g. gemma4"></div>
     <div class="fgrid">
       <div class="field"><label for="st-host">LLM server <span>host</span></label>
         <input id="st-host" value="http://localhost:11434">
-        <div class="hint">Any OpenAI-compatible chat server. Ollama's default is
-          <code>http://localhost:11434</code>.</div></div>
+        <div class="hint">Any OpenAI-compatible chat server.</div></div>
       <div class="field"><label for="st-model">Model</label>
         <div class="modelrow">
           <input id="st-model" list="st-models" placeholder="e.g. qwen2.5:3b">
           <button type="button" id="st-fetch" onclick="fetchModels('st-model','st-host','st-models','st-fetch')">fetch models</button>
         </div>
         <datalist id="st-models"></datalist>
-        <div class="hint">Must exist on that server — hit “fetch models” to list what
-          the server has (Ollama <code>/api/tags</code> or OpenAI <code>/v1/models</code>),
-          or check with <code>ollama list</code>.</div></div>
+        <div class="ferr" id="st-model-err"></div></div>
     </div>
     <div class="field"><label for="st-key">API key <span>optional</span></label>
       <input id="st-key" type="password" placeholder="leave empty for Ollama">
@@ -2008,26 +2004,30 @@ async function fetchModels(inputId, hostId, listId, btnId) {
   const hostEl = $("#" + hostId);
   const listEl = $("#" + listId);
   const btn = $("#" + btnId);
+  const errEl = $("#" + inputId + "-err");
   const host = hostEl ? hostEl.value.trim() : "";
+  const keyId = inputId === "st-model" ? "st-key" : null;
+  const key = keyId ? $("#" + keyId).value.trim() : "";
+  const done = (label) => { if (btn) { btn.disabled = false; btn.textContent = label; } };
   if (btn) { btn.disabled = true; btn.textContent = "fetching…"; }
+  if (errEl) errEl.textContent = "";
+  let data;
   try {
-    const keyId = inputId === "st-model" ? "st-key" : null;
-    const key = keyId ? $("#" + keyId).value.trim() : "";
-    const data = await api("/api/models?host=" + encodeURIComponent(host)
+    data = await api("/api/models?host=" + encodeURIComponent(host)
       + (key ? "&api_key=" + encodeURIComponent(key) : ""));
-    const names = data.models || [];
-    if (!names.length) throw new Error(data.error || "server returned no models");
-    listEl.innerHTML = names.map(m => `<option value="${esc(m)}">`).join("");
-    const input = $("#" + inputId);
-    if (input && !input.value.trim() && names.length === 1) input.value = names[0];
-    if (btn) btn.textContent = `${names.length} models`;
   } catch (e) {
-    alert("Could not fetch models: " + e.message);
-    if (btn) btn.textContent = "fetch models";
-  } finally {
-    if (btn) btn.disabled = false;
-    if (btn && !btn.textContent.includes("models")) btn.textContent = "fetch models";
+    if (errEl) errEl.textContent = "couldn't connect to " + (host || "the server");
+    return done("fetch models");
   }
+  const names = data.models || [];
+  if (!names.length) {
+    if (errEl) errEl.textContent = "no models on " + (host || "that server");
+    return done("fetch models");
+  }
+  listEl.innerHTML = names.map(m => `<option value="${esc(m)}">`).join("");
+  const input = $("#" + inputId);
+  if (input && !input.value.trim() && names.length === 1) input.value = names[0];
+  return done(names.length + " models");
 }
 function saveStrategy() {
   const name = $("#st-name").value.trim();
@@ -2079,6 +2079,7 @@ function filterBackend() {
             <button type="button" id="fl-fetch" onclick="fetchModels('fl-model','fl-host','fl-models','fl-fetch')">fetch models</button>
           </div>
           <datalist id="fl-models"></datalist>
+          <div class="ferr" id="fl-model-err"></div>
           <div class="hint">A trained decision model on that server.
             “fetch models” lists what the server has, or use <code>ollama list</code>.</div></div>
         <div class="field"><label for="fl-endpoint">Endpoint</label>
