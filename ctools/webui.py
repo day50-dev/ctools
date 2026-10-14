@@ -882,12 +882,11 @@ main { padding: 20px 22px 60px; max-width: 1100px; margin: 0 auto; }
 .onboard-link { display: inline-block; margin-top: 8px; color: var(--accent);
   font-weight: 600; text-decoration: none; cursor: pointer; }
 .onboard-link:hover { text-decoration: underline; }
-/* highlight a create-form when jumped to from the onboarding link */
-.flash { animation: flash 2.4s ease; border-radius: 12px; }
+/* highlight a section card when jumped to from the onboarding link */
+.flash { animation: flash 2.4s ease; }
 @keyframes flash {
   0%, 100% { box-shadow: 0 0 0 0 rgba(90,169,255,0); }
-  12%, 48% { box-shadow: 0 0 0 3px rgba(90,169,255,0.5);
-    background: rgba(90,169,255,0.06); }
+  12%, 48% { box-shadow: 0 0 0 3px rgba(90,169,255,.55); }
 }
 /* --- concepts (configs) page: a light vertical flow --- */
 .cfg { max-width: 760px; }
@@ -1375,12 +1374,15 @@ function focusForm(kind) {
   if (!kind) return;
   const el = document.getElementById(kind === "strategy" ? "strat-form" : "filter-form");
   if (!el) return;
+  // flash the whole section card (the form's parent .cfg-step), not just the
+  // form — it reads as “look at this section” rather than a small highlight
+  const container = el.closest(".cfg-step") || el.parentElement;
   // small delay so the view has laid out before we scroll to it (robust in
   // background tabs / headless, where requestAnimationFrame may not fire)
   setTimeout(() => {
     el.scrollIntoView({behavior: "smooth", block: "center"});
-    el.classList.add("flash");
-    setTimeout(() => el.classList.remove("flash"), 2400);
+    container.classList.add("flash");
+    setTimeout(() => container.classList.remove("flash"), 2400);
     const inp = el.querySelector("input");
     if (inp) setTimeout(() => inp.focus({preventScroll: true}), 400);
   }, 60);
