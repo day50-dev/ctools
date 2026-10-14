@@ -1221,14 +1221,6 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
           </div>
         </div>
         <div id="strat-list" class="grid" style="margin:16px 0 18px"></div>
-        <details class="examplebox"><summary>Show example JSON</summary>
-<pre>{
-  "host": "http://localhost:11434",   // any OpenAI-compatible server (Ollama default)
-  "model": "qwen2.5:3b",              // model name on that server
-  "api_key": null,                    // leave null for Ollama; set for OpenAI etc.
-  "prompt": "Extract the key concepts..."  // instructions to the LLM
-}</pre>
-        </details>
         <h4>New strategy</h4>
         <div id="strat-form" style="margin-bottom:10px"></div>
         <button class="primary" onclick="saveStrategy()">Create strategy</button>
@@ -1989,16 +1981,40 @@ function stratFormFields() {
         default asks for concept types (goal, constraint, decision, question,
         action, …) with a short text each — keep that shape so filters can
         match on types.</div></div>
-    <button class="linkbtn" onclick="fillDefaultPrompt()">use default prompt</button>`;
+    <button class="linkbtn" onclick="fillDefaultPrompt()">use default prompt</button>
+    <div class="payloadbox" id="st-payload"></div>`;
   fillDefaultPrompt();
+  $("#strat-form").querySelectorAll("input,textarea").forEach(el => {
+    el.addEventListener("input", updateStratPayload);
+    el.addEventListener("change", updateStratPayload);
+  });
+  updateStratPayload();
 }
 function fillDefaultPrompt() {
   const el = $("#st-prompt");
-  if (el && !el.value) el.value =
-    'Extract the key concepts from this conversation. For each concept, output a '
-    + 'JSON object with fields: type (constraint|goal|preference|observation|reference), '
-    + 'description (<20 words), short (<250 chars), medium (<1000 chars), long (full text). '
-    + 'Output a JSON array. No other text.';
+  if (el && !el.value) {
+    el.value =
+      'Extract the key concepts from this conversation. For each concept, output a '
+      + 'JSON object with fields: type (constraint|goal|preference|observation|reference), '
+      + 'description (<20 words), short (<250 chars), medium (<1000 chars), long (full text). '
+      + 'Output a JSON array. No other text.';
+    updateStratPayload();
+  }
+}
+// Live "equivalent JSON": the exact file a strategy would save, built from the
+// current form fields. No network call.
+function updateStratPayload() {
+  const box = $("#st-payload");
+  if (!box) return;
+  const cfg = {
+    host: $("#st-host").value.trim() || "http://localhost:11434",
+    model: $("#st-model").value.trim(),
+    api_key: $("#st-key").value.trim() || null,
+    prompt: $("#st-prompt").value.trim(),
+  };
+  box.innerHTML = `
+    <div class="payload-head">equivalent JSON</div>
+    <pre class="payload-pre">${esc(JSON.stringify(cfg, null, 2))}</pre>`;
 }
 async function fetchModels(inputId, hostId, listId, btnId) {
   const hostEl = $("#" + hostId);
