@@ -926,6 +926,8 @@ h2 { font-size: 15px; margin: 22px 0 10px; color: var(--dim);
 h2:first-child { margin-top: 0; }
 .crumb { color: var(--accent); text-decoration: none; cursor: pointer; }
 .crumb:hover { text-decoration: underline; }
+#c-title .crumb-sid { font-family: var(--mono); font-size: 15px; font-weight: 500; }
+#c-sub { margin: 2px 0 14px; font-size: 12px; color: var(--dim); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
   gap: 12px; }
 .card { background: var(--panel); border: 1px solid var(--border);
@@ -1076,6 +1078,9 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
 .copycard-label { color: var(--dim); font-size: 11px; text-transform: uppercase;
   letter-spacing: .6px; font-weight: 600; }
 .copycard input { flex: 1; min-width: 220px; background: var(--panel); }
+.copycard select { flex: 1; min-width: 220px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 5px 8px; font-size: 12.5px; font-family: var(--mono);
+  color: var(--text); max-width: 360px; }
 </style>
 </head>
 <body>
@@ -1270,6 +1275,7 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
 
   <section id="view-converse" class="view">
     <h2 id="c-title">Conversation</h2>
+    <div id="c-sub"></div>
     <div id="c-banner" class="copybanner" style="display:none"></div>
     <div id="c-meta" class="toolbar" style="align-items:center"></div>
     <div id="c-body"></div>
@@ -1741,19 +1747,22 @@ async function openConverse(agent, sid) {
   $("#c-title").innerHTML =
     `<a class="crumb" href="#" onclick="openSessions('${esc(agent)}');return false">${esc(agent)}</a>
      <span class="dim"> / </span><span class="crumb-sid" title="${esc(sid)}">${esc(sid)}</span>`;
+  $("#c-sub").textContent = "";
   $("#c-body").innerHTML = `<div class="loading" style="padding:20px 0"><span class="spin"></span>loading conversation…</div>`;
   $("#c-meta").innerHTML = "";
   dismissBanner();
   CONV = {agent, session_id: sid};
   try {
     const d = await api(`/api/agents/${encodeURIComponent(agent)}/sessions/${encodeURIComponent(sid)}`);
-    let meta = `<span class="small dim">${d.messages.length} messages
+    $("#c-sub").innerHTML = `<span class="small dim">${d.messages.length} messages
       · ${d.tokens ? (humanTok(d.tokens.total) + (d.estimated ? " tok (est.)" : " tok")) : ""}</span>`;
+    let meta = "";
     meta += ` <span class="copycard" id="copycard">
       <span class="copycard-label">Copy to</span>
-      <input id="c-dest" type="text" autocomplete="off" spellcheck="false"
-        placeholder="agent, agent/session, or ssh://user@host/agent"
-        value="" />
+      <select id="c-dest">
+        <option value="">choose a destination…</option>
+        ${destOptions(agent)}
+      </select>
       <button class="primary" onclick="doCopy()">Copy</button>
     </span>`;
     meta += ` <button class="primary" style="background:var(--green)"
@@ -1769,6 +1778,15 @@ async function openConverse(agent, sid) {
   } catch (e) {
     $("#c-body").innerHTML = `<div class="err">${esc(e.message)}</div>`;
   }
+}
+
+// Destination choices for the copy dropdown: every installed agent except the
+// source (copying to the same agent is a no-op). Built from AGENTS, which is
+// loaded at startup before any conversation opens.
+function destOptions(sourceAgent) {
+  return AGENTS.filter(a => a.installed && a.name !== sourceAgent)
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(a => `<option value="${esc(a.name)}">${esc(a.name)}</option>`).join("");
 }
 
 function msgHtml(m, i) {
