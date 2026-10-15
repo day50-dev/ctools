@@ -1026,6 +1026,19 @@ td .sub { color: var(--dim); font-size: 11px; }
 .md th, .md td { border: 1px solid var(--border); padding: 4px 8px;
   text-align: left; }
 .md th { background: var(--panel2); }
+/* Resume panel: shown at the very bottom of a conversation so you can pick up
+   the session back up in the client it came from. */
+.resume-panel { margin: 26px 0 8px; background: var(--panel2); border: 1px solid
+  var(--border); border-left: 3px solid var(--accent); border-radius: 10px;
+  padding: 14px 16px; }
+.resume-panel .rp-title { font-size: 11px; font-weight: 700; letter-spacing: .6px;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 4px; }
+.resume-panel .rp-sub { font-size: 12.5px; color: var(--text); margin-bottom: 10px; }
+.resume-panel .rp-sub b { font-family: var(--mono); font-weight: 600; }
+.resume-panel .rp-row { display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap; }
+.resume-panel .rp-row code { flex: 1; min-width: 0; white-space: nowrap;
+  overflow-x: auto; padding: 9px 12px; font-size: 13px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px; }
 .match { padding: 8px 12px; border-bottom: 1px solid var(--border);
   font-family: var(--mono); font-size: 12px; }
 .match .ref { color: var(--accent); cursor: pointer; }
@@ -1795,13 +1808,16 @@ async function openConverse(agent, sid) {
       onclick="showConcepts()">Concepts</button>`;
     meta += ` <button class="primary" style="background:var(--panel2)"
       onclick="showExport()">Export</button>`;
-    if (d.resume) meta += ` <code style="margin-left:8px">${esc(d.resume)}</code>`;
     $("#c-meta").innerHTML = meta;
     window._lastMessages = d.messages;   // kept for showExport()
     $("#c-dest").addEventListener("keydown", e => {
       if (e.key === "Enter") doCopy();
     });
-    $("#c-body").innerHTML = d.messages.map((m, i) => msgHtml(m, i)).join("");
+    $("#c-body").innerHTML = d.messages.map((m, i) => msgHtml(m, i)).join("")
+      + resumePanel(agent, sid, d.resume);
+    // wire the copy-command buttons in the resume panel
+    $("#c-body").querySelectorAll(".resume-panel [data-cp]").forEach(b =>
+      b.onclick = () => copyToClipboard(b.dataset.cp, b));
   } catch (e) {
     $("#c-body").innerHTML = `<div class="err">${esc(e.message)}</div>`;
   }
@@ -1814,6 +1830,28 @@ function destOptions(sourceAgent) {
   return AGENTS.filter(a => a.installed && a.name !== sourceAgent)
     .sort((a, b) => a.name.localeCompare(b.name))
     .map(a => `<option value="${esc(a.name)}">${esc(a.name)}</option>`).join("");
+}
+
+// Resume panel at the very bottom of a conversation: the single most useful
+// thing after reading a session is picking it back up in the client it came
+// from. `resume` is the client-specific command (e.g. `pi --session <id>`);
+// when the agent has no resume mapping we show the universal cdir form.
+function resumePanel(agent, sid, resume) {
+  const cdir = `cdir ${agent}`;
+  const rows = [];
+  if (resume) rows.push(`<div class="rp-row">
+      <code>${esc(resume)}</code>
+      <button class="primary" data-cp="${esc(resume)}">copy command</button>
+    </div>`);
+  rows.push(`<div class="rp-row">
+      <code>${esc(cdir)}</code>
+      <button class="primary" data-cp="${esc(cdir)}">copy command</button>
+    </div>`);
+  return `<div class="resume-panel">
+    <div class="rp-title">Resume this session</div>
+    <div class="rp-sub">Pick it back up in <b>${esc(agent)}</b>${resume ? " with the command below" : " by listing its sessions (this client has no resume mapping)"}.</div>
+    ${rows.join("")}
+  </div>`;
 }
 
 // Markdown rendering: use marked when it loaded, else fall back to a plain
