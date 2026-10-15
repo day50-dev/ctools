@@ -1003,6 +1003,29 @@ td .sub { color: var(--dim); font-size: 11px; }
 .msg.collapsed pre { display: none; }
 .msg .expand { color: var(--accent); font-size: 11px; cursor: pointer;
   font-family: var(--mono); }
+.md { font-family: var(--sans); font-size: 13.5px; line-height: 1.55;
+  color: var(--text); overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 10px; }
+.md h1, .md h2, .md h3, .md h4 { margin: 14px 0 8px; font-size: 1em;
+  line-height: 1.3; }
+.md h1 { font-size: 1.25em; } .md h2 { font-size: 1.15em; }
+.md ul, .md ol { margin: 0 0 10px; padding-left: 22px; }
+.md li { margin: 2px 0; }
+.md code { font-family: var(--mono); font-size: .85em; background: var(--panel2);
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+.md pre { margin: 0 0 10px; background: var(--panel2); border: 1px solid
+  var(--border); border-radius: 8px; padding: 10px 12px; overflow-x: auto;
+  font-family: var(--mono); font-size: 12px; line-height: 1.5; white-space: pre; }
+.md pre code { background: none; border: none; padding: 0; font-size: inherit; }
+.md blockquote { margin: 0 0 10px; padding: 2px 12px; border-left: 3px solid
+  var(--border); color: var(--dim); }
+.md a { color: var(--accent); }
+.md table { border-collapse: collapse; margin: 0 0 10px; font-size: .9em; }
+.md th, .md td { border: 1px solid var(--border); padding: 4px 8px;
+  text-align: left; }
+.md th { background: var(--panel2); }
 .match { padding: 8px 12px; border-bottom: 1px solid var(--border);
   font-family: var(--mono); font-size: 12px; }
 .match .ref { color: var(--accent); cursor: pointer; }
@@ -1084,6 +1107,9 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
 </style>
 </head>
 <body>
+<!-- markdown rendering: marked (off the shelf, MIT). Loaded before the app
+     script; md() below falls back to plain <pre> if the CDN is unreachable. -->
+<script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
 <div class="bootload" id="bootload">
   <div class="spin"></div>
   <div class="bootmsg">scanning your agents…</div>
@@ -1279,8 +1305,8 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
     <div id="c-banner" class="copybanner" style="display:none"></div>
     <div id="c-meta" class="toolbar" style="align-items:center"></div>
     <div id="c-body"></div>
-    <pre id="c-export" style="display:none;background:var(--panel);border:1px solid
-      var(--border);border-radius:10px;padding:14px;font-size:12px;max-height:60vh;overflow:auto"></pre>
+    <div id="c-export" style="display:none;background:var(--panel);border:1px solid
+      var(--border);border-radius:10px;padding:14px;font-size:12px;max-height:60vh;overflow:auto"></div>
   </section>
 </main>
 
@@ -1771,6 +1797,7 @@ async function openConverse(agent, sid) {
       onclick="showExport()">Export</button>`;
     if (d.resume) meta += ` <code style="margin-left:8px">${esc(d.resume)}</code>`;
     $("#c-meta").innerHTML = meta;
+    window._lastMessages = d.messages;   // kept for showExport()
     $("#c-dest").addEventListener("keydown", e => {
       if (e.key === "Enter") doCopy();
     });
@@ -1789,16 +1816,51 @@ function destOptions(sourceAgent) {
     .map(a => `<option value="${esc(a.name)}">${esc(a.name)}</option>`).join("");
 }
 
+// Markdown rendering: use marked when it loaded, else fall back to a plain
+// <pre>. Conversations are full of code blocks and lists, so rendered
+// markdown reads far better than a wall of monospace text.
+function md(text) {
+  if (window.marked) {
+    try {
+      const div = document.createElement("div");
+      div.className = "md";
+      div.innerHTML = window.marked.parse(text, {breaks: true, gfm: true});
+      return div;
+    } catch (e) { /* fall through to the plain-text path */ }
+  }
+  const pre = document.createElement("pre");
+  pre.textContent = text;
+  return pre;
+}
+
 function msgHtml(m, i) {
   const full = m.content;
   const long = full.length > 900;
-  const shown = long ? full.slice(0, 900) + " …" : full;
+  const wrap = document.createElement("div");
+  if (long) {
+    const pre = document.createElement("pre");
+    pre.dataset.full = full;
+    pre.textContent = full.slice(0, 900) + " …";
+    wrap.appendChild(pre);
+  } else {
+    wrap.appendChild(md(full));
+  }
   return `<div class="msg">
     <div style="display:flex;justify-content:space-between;gap:12px">
       <span class="role ${esc(m.role)}">${esc(m.role)}</span>
       ${long ? `<span class="expand">show more ▾</span>` : ""}
-    </div>
-    <pre data-full="${esc(full)}">${esc(shown)}</pre></div>`;
+    </div>${wrap.outerHTML}</div>`;
+}
+
+// Export: show the whole conversation as one markdown document in a
+// monospace pre block (keeps it easy to copy out as-is).
+function showExport() {
+  const el = $("#c-export");
+  if (!el || !CONV || !window._lastMessages) return;
+  const doc = window._lastMessages.map(m =>
+    `### ${m.role}\n\n${(m.content || "").trim()}`).join("\n\n---\n\n");
+  el.textContent = `# ${CONV.agent} / ${CONV.session_id}\n\n` + doc;
+  el.style.display = "block";
 }
 
 // (superseded by the extraction flow below — showConcepts now lives with it)
@@ -1900,13 +1962,29 @@ $("#s-filter").addEventListener("input", renderSessions);
 document.addEventListener("click", e => {
   const el = e.target.closest(".expand");
   if (!el) return;
-  const pre = el.closest(".msg").querySelector("pre");
-  const full = pre.dataset.full || pre.textContent;
-  if (el.textContent.startsWith("show")) {
-    pre.textContent = full;
+  const pre = el.closest(".msg").querySelector("pre[data-full]");
+  const body = el.closest(".msg").querySelector("> div > .md");
+  const isExpanded = !!body && !pre;
+  if (!pre && !body) return;
+  const full = (pre && pre.dataset.full) || (body ? body.textContent : "");
+  const swap = (node) => {
+    const host = pre ? pre.parentNode : body.parentNode;
+    const ref = pre ? pre : body;
+    host.insertBefore(node, ref);
+    ref.remove();
+  };
+  if (!isExpanded) {
+    // expand: swap the truncated <pre> for the full rendered markdown
+    const wrap = document.createElement("div");
+    wrap.appendChild(md(full));
+    swap(wrap);
     el.textContent = "collapse ▴";
   } else {
-    pre.textContent = full.slice(0, 900) + " …";
+    // collapse: swap back to a truncated plain <pre>
+    const p = document.createElement("pre");
+    p.dataset.full = full;
+    p.textContent = full.slice(0, 900) + " …";
+    swap(p);
     el.textContent = "show more ▾";
   }
 });
