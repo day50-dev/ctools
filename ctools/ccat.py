@@ -37,6 +37,7 @@ from rich.console import Console
 from rich.text import Text
 
 from ctools.agents import REGISTRY as AGENTS, SessionNotFound, get_agent
+from ctools.lib import install_clean_sigint
 from ctools.cli import (handle_version, parse_ref, parse_remote_ref, reporting,
                         version_option)
 from ctools.ccopy import _local_agent, _pull, _remote_common_doc, _remote_has_ctools
@@ -210,6 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    install_clean_sigint()
     args = build_parser().parse_args(argv)
     if (v := handle_version(args)) is not None:
         return v

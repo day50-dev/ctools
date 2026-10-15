@@ -31,7 +31,7 @@ from ctools.agents import (Session, RESUME_COMMANDS, _resume_override,
                           REGISTRY as AGENTS)
 from ctools.cli import (Remote, handle_version, parse_ref, parse_remote_ref,
                         reporting, require_installed, version_option)
-from ctools.lib import format_datetime, format_size, get_formatter
+from ctools.lib import format_datetime, format_size, get_formatter, install_clean_sigint
 
 __all__ = ['app']
 
@@ -688,6 +688,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    install_clean_sigint()
     argv = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
     if (v := handle_version(args)) is not None:

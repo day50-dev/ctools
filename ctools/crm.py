@@ -16,6 +16,7 @@ from rich.prompt import Confirm
 from ctools.agents import Message
 from ctools.cextract import concept_text, load_strategy, read_concepts_from_file
 from ctools.cli import reporting, require_session, version_option
+from ctools.lib import install_clean_sigint
 
 console = Console()
 
@@ -189,6 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    install_clean_sigint()
     argv = list(sys.argv[1:] if argv is None else argv)
     if "--version" in argv:
         from ctools import __version__

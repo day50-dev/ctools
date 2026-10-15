@@ -30,6 +30,7 @@ from rich.console import Console
 
 from ctools.agents import REGISTRY, Agent, AgentError, Match, get_agent
 from ctools.cli import version_option
+from ctools.lib import install_clean_sigint
 from ctools.lib import get_formatter
 
 __all__ = ['app', 'parse_path_pattern', 'sessions_for_pattern', 'grep_session',
@@ -308,6 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    install_clean_sigint()
     argv = list(sys.argv[1:] if argv is None else argv)
     if "--version" in argv:
         from ctools import __version__

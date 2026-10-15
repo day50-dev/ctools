@@ -30,6 +30,7 @@ from ctools.agents import Agent, Message
 from ctools.cli import reporting, require_session, version_option
 from ctools.filterlib import SystemOneFilter
 from ctools.log import configure_logging, get_logger
+from ctools.lib import install_clean_sigint
 from ctools.strategy import Strategy, DEFAULT_STRATEGY
 
 console = Console()
@@ -440,6 +441,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    install_clean_sigint()
     argv = list(sys.argv[1:] if argv is None else argv)
     # --version wins over the required `args` positional (GNU style): the flag is
     # scanned before parsing so `cextract --version` works without a session.

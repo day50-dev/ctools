@@ -24,6 +24,7 @@ from ctools.agents import REGISTRY, AgentError, get_agent
 from ctools.backup import (Backup, Backups, BackupError, restore_backup,
                            verify_storage, session_count)
 from ctools.cli import handle_version, version_option
+from ctools.lib import install_clean_sigint
 from ctools.log import configure_logging
 from rich.console import Console
 
@@ -210,6 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    install_clean_sigint()
     args = build_parser().parse_args(argv)
     if (v := handle_version(args)) is not None:
         return v

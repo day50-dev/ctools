@@ -606,3 +606,63 @@ def test_webui_models_ollama_and_openai_shapes(webui):
         assert d["models"] == ["gpt-4o", "gpt-4o-mini"]
     finally:
         sa.shutdown()
+
+
+# --- Clean Ctrl-C (SIGINT) handling ---
+
+def test_cgrep_sigint_exits_cleanly_no_traceback(tmp_path):
+    """Ctrl-C during a cgrep run must exit cleanly (130) with no
+    KeyboardInterrupt traceback, even when the signal lands deep inside a
+    sqlite query (the original bug)."""
+    import json, os, signal, sqlite3, sys, time
+    from pathlib import Path
+
+    db = tmp_path / "opencode.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute('''CREATE TABLE session (
+        id TEXT PRIMARY KEY, title TEXT, time_created INTEGER,
+        time_updated INTEGER, directory TEXT)''')
+    conn.execute('''CREATE TABLE message (
+        id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER,
+        time_updated INTEGER, data TEXT)''')
+    conn.execute('''CREATE TABLE part (
+        id TEXT, message_id TEXT, time_created INTEGER, data TEXT)''')
+    now = int(time.time() * 1000)
+    conn.execute("INSERT INTO session VALUES ('ses_big','big',?,?,'/tmp')", (now, now))
+    msg_id = "msg_big"
+    conn.execute("INSERT INTO message VALUES (?,?,?,?,?)",
+                 (msg_id, "ses_big", now, now, json.dumps({"role": "user"})))
+    big = "filler " * 2000
+    for i in range(300):
+        for j in range(20):
+            data = json.dumps({"type": "text",
+                               "text": big + (" needle" if j == 0 else "")})
+            conn.execute("INSERT INTO part VALUES (?,?,?,?)",
+                         (f"p_{i}_{j}", msg_id, now + i, data))
+    conn.commit(); conn.close()
+
+    code = (
+        "import sys\n"
+        "sys.argv=['cgrep','needle','opencode/ses_big']\n"
+        f"from ctools.agents import REGISTRY; "
+        f"REGISTRY['opencode'].base_path=__import__('pathlib').Path(r'{tmp_path}')\n"
+        "from ctools.cgrep import app\n"
+        "print('READY', flush=True)\n"
+        "app()\n"
+    )
+    proc = subprocess.Popen([sys.executable, "-c", code],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, bufsize=0)
+    try:
+        assert proc.stdout.readline().strip() == "READY"
+        # Let the handler install and the grep start, then interrupt.
+        time.sleep(0.2)
+        proc.send_signal(signal.SIGINT)
+        out, err = proc.communicate(timeout=15)
+        # Clean exit: never a traceback or a raw KeyboardInterrupt.
+        assert "Traceback" not in err, f"traceback leaked:\n{err}"
+        assert "KeyboardInterrupt" not in err, f"KI leaked:\n{err}"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate()

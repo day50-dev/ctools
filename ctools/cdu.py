@@ -31,6 +31,7 @@ except ImportError:
 
 from ctools.agents import Agent, AgentError, REGISTRY as AGENTS, get_agent
 from ctools.cli import parse_ref, require_installed, version_option, handle_version
+from ctools.lib import install_clean_sigint
 
 console = Console()
 
@@ -112,6 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    install_clean_sigint()
     args = build_parser().parse_args(argv)
     if (v := handle_version(args)) is not None:
         return v

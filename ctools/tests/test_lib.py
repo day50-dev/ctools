@@ -312,3 +312,39 @@ def test_agent_fields():
         assert agent.description
         assert agent.base_path
         assert agent.storage_format in ('json', 'sqlite', 'jsonl')
+
+
+# --- Clean Ctrl-C handler ---
+
+def test_install_clean_sigint_sets_custom_handler():
+    """install_clean_sigint replaces the default SIGINT handler so Ctrl-C
+    exits cleanly (130) instead of raising KeyboardInterrupt."""
+    import signal
+    from ctools.lib import install_clean_sigint
+    install_clean_sigint()
+    h = signal.getsignal(signal.SIGINT)
+    assert h is not signal.default_int_handler
+
+
+def test_clean_sigint_exits_130():
+    """Invoking the installed handler exits with status 130 (128+SIGINT)."""
+    import signal
+    from ctools.lib import install_clean_sigint
+    install_clean_sigint()
+    handler = signal.getsignal(signal.SIGINT)
+    with pytest.raises(SystemExit) as exc:
+        handler(signal.SIGINT, None)
+    assert exc.value.code == 130
+
+
+def test_clean_sigint_second_press_restores_default():
+    """A second Ctrl-C reverts to the default handler, so a wedged process
+    can still be force-killed."""
+    import signal
+    from ctools.lib import install_clean_sigint
+    install_clean_sigint()
+    handler = signal.getsignal(signal.SIGINT)
+    with pytest.raises(SystemExit):
+        handler(signal.SIGINT, None)
+    # After the first handler fires, it reset itself to the default.
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler

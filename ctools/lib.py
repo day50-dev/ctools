@@ -8,6 +8,8 @@ everything they need for presentation from one place.
 """
 
 import json
+import signal
+import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import List, Optional, Dict
@@ -28,7 +30,30 @@ __all__ = [
     'RESUME_COMMANDS', 'get_resume_command',
     'format_size', 'format_datetime', 'get_formatter',
     'OutputFormatter', 'JsonFormatter', 'XmlFormatter', 'MarkdownFormatter',
+    'install_clean_sigint',
 ]
+
+
+# --- Clean Ctrl-C ---
+
+def _clean_sigint_handler(signum, frame):
+    # Convert SIGINT into a clean exit instead of a KeyboardInterrupt
+    # traceback (which fires mid-iteration, e.g. deep inside a sqlite query).
+    # Two Ctrl-C in a row re-raises, so a wedged process can still be killed.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    sys.stderr.write("\ninterrupted\n")
+    sys.exit(130)  # 128 + SIGINT, the conventional "terminated by Ctrl-C" code
+
+
+def install_clean_sigint() -> None:
+    """Make Ctrl-C exit cleanly (status 130, \"interrupted\") instead of
+    printing a KeyboardInterrupt traceback. Every ctool's main() calls this
+    first. A second Ctrl-C reverts to the default handler and hard-kills.
+    No-op where signal handlers can't be set (e.g. non-main thread)."""
+    try:
+        signal.signal(signal.SIGINT, _clean_sigint_handler)
+    except (ValueError, OSError):
+        pass
 
 
 # --- Helper Functions ---

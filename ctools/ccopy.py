@@ -38,6 +38,7 @@ from ctools.agents import (
     Agent, Message, REGISTRY,
     get_agent, get_resume_command, SessionNotFound, UnsupportedOperation,
 )
+from ctools.lib import install_clean_sigint
 from ctools.cli import (Remote, handle_version, parse_ref, parse_remote_ref,
                         version_option)
 from ctools.backup import guard_write, BackupError
@@ -475,6 +476,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    install_clean_sigint()
     args = build_parser().parse_args(argv)
     if (v := handle_version(args)) is not None:
         return v
