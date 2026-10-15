@@ -1026,8 +1026,23 @@ td .sub { color: var(--dim); font-size: 11px; }
 .md th, .md td { border: 1px solid var(--border); padding: 4px 8px;
   text-align: left; }
 .md th { background: var(--panel2); }
-/* Resume panel: shown at the very bottom of a conversation so you can pick up
-   the session back up in the client it came from. */
+/* Welcome mat: the first thing a newcomer sees. Frames ctools around the
+   everyday uses — find a session, pick it back up, share it. */
+.welcome { background: var(--panel2); border: 1px solid var(--border);
+  border-top: 3px solid var(--accent); border-radius: 12px; padding: 18px 20px;
+  margin-bottom: 22px; }
+.welcome h2 { margin: 0; font-size: 16px; }
+.welcome-sub { color: var(--text); font-size: 13px; line-height: 1.55;
+  margin: 6px 0 14px; }
+.welcome-usecases { display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 12px; }
+.wc { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; cursor: pointer; transition: border-color .15s, transform .15s; }
+.wc:hover { border-color: var(--accent); transform: translateY(-1px); }
+.wc-icon { font-size: 20px; line-height: 1; }
+.wc h3 { margin: 7px 0 3px; font-size: 13px; font-weight: 700; }
+.wc p { margin: 0; color: var(--dim); font-size: 12.5px; line-height: 1.45; }
+@media (max-width: 720px) { .welcome-usecases { grid-template-columns: 1fr; } }
 .resume-panel { margin: 26px 0 8px; background: var(--panel2); border: 1px solid
   var(--border); border-left: 3px solid var(--accent); border-radius: 10px;
   padding: 14px 16px; }
@@ -1143,16 +1158,38 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
 </header>
 <main>
   <section id="view-overview" class="view on">
-    <h2>Installed agents</h2>
-    <p class="dim small">Sorted by conversation volume. Click a card to browse its sessions.</p>
+    <div class="welcome">
+      <h2>Where are my conversations?</h2>
+      <p class="welcome-sub">Every session from every AI coding tool on this machine,
+        in one place. Find it, pick it back up, and take it anywhere.</p>
+      <div class="welcome-usecases">
+        <div class="wc" onclick="goWelcome('resume')">
+          <div class="wc-icon">🔎</div>
+          <h3>Find &amp; continue a session</h3>
+          <p>Jump into your most recent conversation — the resume command shows at its bottom.</p>
+        </div>
+        <div class="wc" onclick="goWelcome('continue')">
+          <div class="wc-icon">▶️</div>
+          <h3>Browse sessions</h3>
+          <p>See every conversation from every tool, sorted by recency or size.</p>
+        </div>
+        <div class="wc" onclick="goWelcome('share')">
+          <div class="wc-icon">📤</div>
+          <h3>Share it</h3>
+          <p>Copy a session to another tool, or move it between machines.</p>
+        </div>
+      </div>
+    </div>
+    <h2>Your tools</h2>
+    <p class="dim small" id="agent-intro">Sorted by conversation volume. Click a card to browse its sessions.</p>
     <div id="agent-grid" class="grid" style="margin-bottom:26px"></div>
     <h2>Not found on this machine</h2>
     <p class="dim small">Supported by ctools, but no storage found yet. They light up here as soon as you use them.</p>
     <div id="agent-grid-missing" class="grid"></div>
     <p class="dim small" style="margin-top:18px">
-      ctools moves memory between context windows. The source is never touched.
-      Everything here is read-only except <b>Copy</b>, which creates a new session
-      in the destination agent.
+      ctools reads your sessions — it never modifies them. The one thing it can
+      write is <b>Copy</b>, which makes a fresh session in the destination tool or
+      on another machine.
     </p>
   </section>
 
@@ -1361,6 +1398,49 @@ function switchView(name) {
   document.querySelectorAll("nav button").forEach(b =>
     b.classList.toggle("on", b.dataset.view === navName));
   $("#view-" + name).classList.add("on");
+}
+
+// Welcome-mat use-case cards: each jumps straight to the everyday task it
+// describes, so a newcomer lands on something concrete instead of a wall of
+// tools. 'continue' opens the most recent session (the resume command shows
+// at its bottom); 'share' opens the Sessions view to pick a source.
+function goWelcome(which) {
+  const installed = AGENTS.filter(a => a.installed)
+    .sort((x, y) => ((y.total_msgs || 0) - (x.total_msgs || 0))
+      || ((y.session_count || 0) - (x.session_count || 0)));
+  const a = installed[0];
+  if (which === "search" || which === "continue" || which === "share") {
+    if (a) { openSessions(which === "search" ? "all" : a.name); }
+    else { navigate("search"); }
+  } else if (which === "resume") {
+    if (!a) { navigate("search"); return; }
+    // Open the most recent session of the biggest tool. We open the
+    // conversation FIRST (its fetch fires immediately, before any Sessions
+    // view is active to supersede it), then point the URL at the Sessions
+    // view so the breadcrumb / back-button work as expected.
+    if ([...$("#s-agent").options].some(o => o.value === a.name))
+      $("#s-agent").value = a.name;
+    api(`/api/agents/${encodeURIComponent(a.name)}/sessions?sort=time&limit=1`)
+      .then(d => {
+        const s = d.sessions && d.sessions[0];
+        if (!s) { welcomeNoSessions(a.name); return; }
+        openConverse(a.name, s.id);   // switches to converse view, starts its fetch
+        navigate(sessionsHash());     // URL points at Sessions; the in-flight
+        // conversation fetch supersedes the Sessions one.
+      })
+      .catch(() => navigate("search"));
+  }
+}
+
+// Shown when the "Pick it back up" card can't find a session to open.
+function welcomeNoSessions(agentName) {
+  navigate("sessions/all?sort=time");
+  setTimeout(() => {
+    const el = document.getElementById("agent-intro");
+    if (!el) return;
+    el.innerHTML = `No sessions found yet in <b>${esc(agentName)}</b> — ` +
+      `run the tool once, then refresh to pick a session back up.`;
+  }, 60);
 }
 // --- hash routing: #, #search, #sessions/<agent>[?sort=x], #session/<agent>/<sid>, #configs ---
 function parseHash() {
