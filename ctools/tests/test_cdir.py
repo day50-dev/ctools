@@ -964,9 +964,20 @@ def test_cli_sort_by_size_default_sorts_by_time(tmp_path):
     assert result.stdout.index('ses_small') < result.stdout.index('ses_big')
 
 
-def test_cli_sort_by_size_S_flag(tmp_path):
-    """-S sorts by size. (-s was the legacy hidden alias; it is now the
-    --suppress flag, so the size sort goes through -S/--size.)"""
+def test_cli_quiet_is_the_suppress_flag(tmp_path):
+    """-q/--quiet is the decoration-stripping flag (renamed from -s so that
+    -s stays free for ls's size meaning)."""
+    _make_opencode_db(tmp_path)
+    short = _run_opencode_cli(tmp_path, ["-q", "opencode/"])
+    long_form = _run_opencode_cli(tmp_path, ["--quiet", "opencode/"])
+    assert short.stdout == long_form.stdout
+    assert 'ID' not in short.stdout
+    assert 'session(s)' not in short.stdout
+
+
+def test_cli_size_sort_S_flag(tmp_path):
+    """-S sorts by size; -s is no longer a hidden size alias (it was the old
+    suppress flag, now -q), so the size sort goes through -S/--size."""
     _make_opencode_db_two_sizes(tmp_path)
 
     result = _run_opencode_cli(tmp_path, ["-S", "-l", "opencode/"])
@@ -1353,10 +1364,10 @@ def test_cli_one_line_no_header(tmp_path):
 
 
 def test_cli_suppress_strips_all_decorations(tmp_path):
-    """-s strips the column headers, count footer, resume hint, Source line,
+    """-q strips the column headers, count footer, resume hint, Source line,
     and the leading indent, leaving clean aligned rows for scraping."""
     _make_opencode_db(tmp_path)
-    result = _run_opencode_cli(tmp_path, ["-s", "opencode/"])
+    result = _run_opencode_cli(tmp_path, ["-q", "opencode/"])
     assert result.exit_code == 0
     lines = result.stdout.splitlines()
     # only the data row remains
@@ -1372,10 +1383,10 @@ def test_cli_suppress_strips_all_decorations(tmp_path):
 
 
 def test_cli_suppress_keeps_data_and_sort(tmp_path):
-    """-s changes only the decorations, not the rows or their order."""
+    """-q changes only the decorations, not the rows or their order."""
     _make_opencode_db_two_sizes(tmp_path)
     plain = _run_opencode_cli(tmp_path, ["-l", "opencode/"])
-    supp = _run_opencode_cli(tmp_path, ["-s", "-l", "opencode/"])
+    supp = _run_opencode_cli(tmp_path, ["-q", "-l", "opencode/"])
     assert supp.exit_code == 0
     # same rows, same order, just without the header/footer/indent
     supp_rows = [l.rstrip() for l in supp.stdout.splitlines() if l.strip()]
@@ -1384,9 +1395,9 @@ def test_cli_suppress_keeps_data_and_sort(tmp_path):
 
 
 def test_cli_suppress_long_format(tmp_path):
-    """-s -l keeps the long fields but drops the header/count/hint."""
+    """-q -l keeps the long fields but drops the header/count/hint."""
     _make_opencode_db(tmp_path)
-    result = _run_opencode_cli(tmp_path, ["-s", "-l", "opencode/"])
+    result = _run_opencode_cli(tmp_path, ["-q", "-l", "opencode/"])
     assert result.exit_code == 0
     lines = result.stdout.splitlines()
     assert len(lines) == 1

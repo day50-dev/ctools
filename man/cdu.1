@@ -4,6 +4,7 @@ cdu \- context disk usage for LLM conversations
 .SH SYNOPSIS
 .B cdu
 .RB [ \-j ]
+.RB [ \-q ]
 .RB [ \-\-version ]
 .RI [ path ]
 .SH DESCRIPTION
@@ -19,6 +20,13 @@ With agent/session_id, shows token breakdown for that session.
 .TP
 .BR \-j ", " \-\-json
 Output in JSON format instead of table.
+.TP
+.BR \-q ", " \-\-quiet
+Replace the rich table with plain rows: no borders, no title, no section
+break, no TOTAL row. Same fields and same token-descending order, but with
+raw token counts (not the \fB1.2k\fP shorthand) and, for \fBcdu AGENT/\fP, all
+sessions (the table view caps at 50 for display). Intended for piping and
+screen-scraping; \fB\-\-json\fP remains the structured alternative.
 .TP
 .B \-\-version
 Print version information and exit.
@@ -92,6 +100,22 @@ $ cdu --json opencode/
     "messages": 24
   }
 ]
+.fi
+.RE
+.PP
+Quiet output for scraping (plain rows, raw counts, all sessions):
+.PP
+.RS
+.nf
+$ cdu -q opencode/ | head
+ses_abc123  Python Help  12500  24
+ses_def456  Code Review  8200  18
+
+$ cdu -q opencode/ses_abc123
+total  12500
+input  8300
+output  4200
+source  (actual)
 .fi
 .RE
 .SH TOKEN COUNTING

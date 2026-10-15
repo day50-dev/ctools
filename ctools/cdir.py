@@ -12,7 +12,7 @@ Usage:
     cdir -S codex/          # List codex sessions, largest first
     cdir -u codex/          # List codex sessions, oldest first (by creation)
     cdir -1 opencode/       # One session ID per line
-    cdir -s opencode/       # Suppress header/count/hint/source/indent (for scraping)
+    cdir -q opencode/       # Quiet: no header/count/hint/source/indent (for scraping)
     cdir claude/            # List sessions for claude
     cdir opencode/*llcat*   # Filter sessions: glob on id, name, or path
     cdir claude/ -a         # Include subagent sessions (hidden by default)
@@ -231,7 +231,7 @@ def _print_sessions(sessions, agent_name, sort, reverse,
     Subagent sessions (parent_id set) are hidden by default: you can't resume
     one, so a resumable-session listing shouldn't be cluttered with them.
     include_subagents=True (the -a flag) lists them nested under their parent.
-    suppress=True (the -s flag) strips every non-data decoration — column
+    suppress=True (the -q flag) strips every non-data decoration — column
     headers, the session count, the resume hint, and the leading indent — so
     the rows are clean for piping and screen-scraping.
     """
@@ -659,10 +659,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-t", "--time", action="store_true",
                         help="Sort by modification time")
     parser.add_argument("-S", "--size", action="store_true", help="Sort by size")
-    parser.add_argument("-s", "--suppress", action="store_true",
-                        help="Suppress decoration: no column headers, no count "
-                             "footer, no resume hint, no Source line, no leading "
-                             "indent — clean rows for piping/screen-scraping")
+    parser.add_argument("-q", "--quiet", action="store_true",
+                        help="Strip decoration for scraping: no column headers, "
+                             "no count footer, no resume hint, no Source line, "
+                             "no leading indent")
     parser.add_argument("-u", "--ctime", action="store_true",
                         help="Sort by creation time")
     parser.add_argument("-r", "--reverse", action="store_true",
@@ -710,7 +710,7 @@ def main(argv=None) -> int:
     sort = _resolve_sort(argv)
     use_color = _use_color(color)
     include_subagents = args.all
-    suppress = args.suppress
+    suppress = args.quiet
 
     formatter = None
     if fmt != "default":

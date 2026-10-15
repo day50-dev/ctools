@@ -178,6 +178,45 @@ def test_cli_json_agent_sessions(patched_opencode):
     assert data[0]["tokens"] == 1500
 
 
+def test_cli_quiet_agent_sessions(patched_opencode):
+    """-q prints plain rows (no table borders/title/section/TOTAL), all
+    sessions, same token-descending order."""
+    result = runner.invoke(app, ["-q", "opencode/"])
+    assert result.exit_code == 0
+    assert "┃" not in result.stdout
+    assert "Context Usage" not in result.stdout
+    assert "TOTAL" not in result.stdout
+    lines = [l for l in result.stdout.splitlines() if l.strip()]
+    assert len(lines) == 1
+    assert lines[0].startswith("ses_test123")
+    # raw token count, not formatted
+    assert "1500" in lines[0]
+
+
+def test_cli_quiet_all_agents(patched_opencode):
+    """-q with no path: one plain row per agent, raw counts."""
+    result = runner.invoke(app, ["-q"])
+    assert result.exit_code == 0
+    assert "┃" not in result.stdout
+    assert "TOTAL" not in result.stdout
+    lines = [l for l in result.stdout.splitlines() if l.strip()]
+    opencode_rows = [l for l in lines if l.startswith("opencode")]
+    assert opencode_rows
+    assert "1" in opencode_rows[0].split()
+    assert "1500" in opencode_rows[0]
+
+
+def test_cli_quiet_session_detail(patched_opencode):
+    """-q on a session: plain key/value rows."""
+    result = runner.invoke(app, ["-q", "opencode/ses_test123"])
+    assert result.exit_code == 0
+    assert "┃" not in result.stdout
+    assert "Token Usage" not in result.stdout
+    lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
+    assert lines == ["total  1500", "input  1000", "output  500",
+                     "source  (actual)"]
+
+
 def test_cli_version():
     """--version prints the GNU-style version line and exits 0."""
     from ctools import __version__

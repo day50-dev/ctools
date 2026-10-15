@@ -11,7 +11,7 @@ cdir \- list agents and sessions from LLM context windows
 .RB [ \-l ]
 .RB [ \-1 ]
 .RB [ \-a ]
-.RB [ \-s ]
+.RB [ \-q ]
 .RB [ \-\-color
 .IR when ]
 .RB [ \-o
@@ -55,7 +55,7 @@ Sort sessions by size, largest first. Equivalent to
 Sort sessions by creation time, newest first. Equivalent to
 .BR "ls \-u" .
 .TP
-.BR \-s ", " \-\-suppress
+.BR \-q ", " \-\-quiet
 Strip every non-data decoration from a listing: no column header row, no
 .B session(s)
 count footer, no resume hint, no Source line, and no leading indent. The rows
@@ -63,13 +63,15 @@ themselves are unchanged (same fields, same sort order, same tree connectors
 with \fB\-a\fP), so the output is clean for piping and screen-scraping:
 .PP
 .nf
-$ cdir -s opencode/ | head
+$ cdir -q opencode/ | head
 ses_abc123  Petsitter exportit llcat JSON export
 ses_def456  Add Ollama transport option to llcat.py
 .fi
 .PP
 Composes with \fB\-l\fP, \fB\-o\fP and \fB\-S\fP. (\fB\-1\fP already prints bare IDs,
-so \fB\-s\fP has nothing left to remove there.)
+so \fB\-q\fP has nothing left to remove there.) Note that \fB\-q\fP is a ctools
+extension: \fBls\fP uses \fB\-q\fP for non-printable characters \(em the letter was
+chosen so that \fB\-s\fP stays free for \fBls\fP's size meaning.
 .TP
 .BR \-r ", " \-\-reverse
 Reverse the sort order.

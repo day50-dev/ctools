@@ -9,6 +9,7 @@ Usage:
     cdu                     # Show all agents with total token usage
     cdu opencode/           # Show sessions with token usage
     cdu opencode/ses_abc    # Show token breakdown for a session
+    cdu -q opencode/        # Quiet: plain rows, no table/section/total (scrape)
 """
 
 import argparse
@@ -103,6 +104,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("path", nargs="?", default=None,
                         help="Agent or agent/session_id")
     parser.add_argument("--json", "-j", action="store_true", help="JSON output")
+    parser.add_argument("-q", "--quiet", action="store_true",
+                        help="Plain rows for scraping: no table borders, title, "
+                             "section, or TOTAL row (same fields and sort order)")
     version_option(parser, "cdu")
     return parser
 
@@ -114,25 +118,26 @@ def main(argv=None) -> int:
 
     path = args.path
     json_output = args.json
+    quiet = args.quiet
 
     if path is None:
-        _show_all_agents(json_output)
+        _show_all_agents(json_output, quiet)
         return 0
 
     agent_name, session_id = parse_ref(path)
     agent = require_installed(agent_name)
 
     if session_id:
-        _show_session_tokens(agent, session_id, json_output)
+        _show_session_tokens(agent, session_id, json_output, quiet)
     else:
-        _show_agent_sessions(agent, json_output)
+        _show_agent_sessions(agent, json_output, quiet)
     return 0
 
 
 app = main
 
 
-def _show_all_agents(json_output: bool):
+def _show_all_agents(json_output: bool, quiet: bool = False):
     """Show total token usage across all agents."""
     results = []
     for agent in AGENTS.values():
@@ -156,13 +161,21 @@ def _show_all_agents(json_output: bool):
         console.print("[yellow]No agents found[/yellow]")
         return
 
+    ordered = sorted(results, key=lambda x: x["tokens"], reverse=True)
+
+    if quiet:
+        # Plain rows, raw counts: agent, session count, tokens.
+        for r in ordered:
+            print(f"{r['agent']}  {r['sessions']}  {r['tokens']}")
+        return
+
     table = Table(title="Context Usage by Agent")
     table.add_column("Agent", style="cyan")
     table.add_column("Sessions", justify="right")
     table.add_column("Tokens", justify="right", style="green")
 
     grand_total = 0
-    for r in sorted(results, key=lambda x: x["tokens"], reverse=True):
+    for r in ordered:
         grand_total += r["tokens"]
         table.add_row(r["agent"], str(r["sessions"]), format_tokens(r["tokens"]))
 
@@ -172,7 +185,7 @@ def _show_all_agents(json_output: bool):
     console.print(table)
 
 
-def _show_agent_sessions(agent: Agent, json_output: bool):
+def _show_agent_sessions(agent: Agent, json_output: bool, quiet: bool = False):
     """Show sessions for an agent sorted by token usage."""
     try:
         sessions = agent.sessions()
@@ -198,6 +211,14 @@ def _show_agent_sessions(agent: Agent, json_output: bool):
         print(json.dumps(data, indent=2))
         return
 
+    if quiet:
+        # Plain rows for scraping: id, name, raw token count, message count.
+        # All sessions are included (the table view caps at 50 for display).
+        for s in sessions:
+            msgs = s.message_count if s.message_count else "-"
+            print(f"{s.id}  {s.name}  {_session_tokens(s)}  {msgs}")
+        return
+
     table = Table(title=f"Context Usage — {agent.name}")
     table.add_column("Session", style="cyan")
     table.add_column("Name")
@@ -220,7 +241,8 @@ def _show_agent_sessions(agent: Agent, json_output: bool):
     console.print(table)
 
 
-def _show_session_tokens(agent: Agent, session_id: str, json_output: bool):
+def _show_session_tokens(agent: Agent, session_id: str, json_output: bool,
+                         quiet: bool = False):
     """Show token breakdown for a specific session."""
     agent_name = agent.name
     tokens = get_session_tokens(agent_name, session_id)
@@ -233,7 +255,20 @@ def _show_session_tokens(agent: Agent, session_id: str, json_output: bool):
         print(json.dumps(data, indent=2))
         return
 
-    est = " (estimated)" if tokens.get("estimated") else " (actual)"
+    est = "(estimated)" if tokens.get("estimated") else "(actual)"
+
+    if quiet:
+        # Plain key/value rows: total, then input/output or user/assistant/system.
+        print(f"total  {tokens['total']}")
+        if "input" in tokens:
+            print(f"input  {tokens['input']}")
+            print(f"output  {tokens['output']}")
+        else:
+            for role in ("user", "assistant", "system"):
+                if tokens.get(role, 0):
+                    print(f"{role}  {tokens[role]}")
+        print(f"source  {est}")
+        return
 
     table = Table(title=f"Token Usage — {agent_name}/{session_id}")
     table.add_column("Metric", style="cyan")

@@ -16,7 +16,7 @@ cdir -a opencode/           # include subagent sessions (hidden by default)
 cdir -S opencode/           # sessions biggest first (ls -S); -t sorts by time
 cdir -u opencode/           # sessions newest first by creation time (ctime)
 cdir -1 opencode/           # one session ID per line, no header
-cdir -s opencode/           # suppress decoration: no header/count/hint/source/indent
+cdir -q opencode/           # quiet: no header/count/hint/source/indent (for scraping)
 cdir claude-code/           # sessions for claude code
 cdir pi/                    # sessions for pi coding agent
 cdir -R                     # all agents, recursive
@@ -133,22 +133,24 @@ ses_08b4ab356ffeQvmBXnu1oj4Gqe
 ses_08b74487fffeTmQzA810dE9WRV
 ```
 
-## Suppress decoration (`-s`)
+## Quiet output (`-q`)
 
-`-s` (or `--suppress`) strips every non-data decoration from a listing so the
+`-q` (or `--quiet`) strips every non-data decoration from a listing so the
 output is clean for piping and screen-scraping: no column header row, no
 `N session(s)` count footer, no resume hint, no `Source:` line, and no leading
 indent. The rows themselves are untouched — same fields, same sort order, same
 tree connectors when you combine it with `-a`:
 
 ```sh
-$ cdir -s opencode/ | head
+$ cdir -q opencode/ | head
 ses_abc123  Petsitter exportit llcat JSON export
 ses_def456  Add Ollama transport option to llcat.py
 ```
 
 It composes with `-l`, `-o` and the sort flags. `-1` already prints bare IDs,
-so `-s` has nothing left to remove there.
+so `-q` has nothing left to remove there. (`-q` is a ctools extension — `ls`
+uses `-q` for non-printable characters — but it frees up `-s` for `ls`'s
+size meaning.)
 
 ## Resume hint
 
