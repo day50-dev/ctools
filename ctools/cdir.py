@@ -12,8 +12,9 @@ Usage:
     cdir -S codex/          # List codex sessions, largest first
     cdir -u codex/          # List codex sessions, oldest first (by creation)
     cdir -1 opencode/       # One session ID per line
-    cdir codex/             # List sessions for codex
+    cdir claude/            # List sessions for claude
     cdir opencode/*llcat*   # Filter sessions: glob on id, name, or path
+    cdir claude/ -a         # Include subagent sessions (hidden by default)
 """
 
 import argparse
@@ -209,8 +210,13 @@ def _use_color(mode: str) -> bool:
 
 def _print_sessions(sessions, agent_name, sort, reverse,
                     formatter=None, long_format=False, fields=None,
-                    one_line=False, color=False):
-    """Print sessions in aligned columns with a header row. agent_name shown if provided."""
+                    one_line=False, color=False, include_subagents=False):
+    """Print sessions in aligned columns with a header row. agent_name shown if provided.
+
+    Subagent sessions (parent_id set) are hidden by default: you can't resume
+    one, so a resumable-session listing shouldn't be cluttered with them.
+    include_subagents=True (the -a flag) lists them nested under their parent.
+    """
     if not sessions:
         console.print("[yellow]No sessions found[/yellow]")
         return
@@ -239,18 +245,22 @@ def _print_sessions(sessions, agent_name, sort, reverse,
     def _id_of(s):
         return f"{agent_name}/{s.id}" if agent_name else s.id
 
+    n_sub = len(sessions) - len(top_level)
+
     if one_line:
         for s in top_level:
             print(_id_of(s))
-            for child in children_map.get(s.id, []):
-                print(_id_of(child))
+            if include_subagents:
+                for child in children_map.get(s.id, []):
+                    print(_id_of(child))
         return
 
     # Build rows with nesting info and tree prefix
     body_rows = []
     for s in top_level:
         body_rows.append((True, _session_values(s, fields)))
-
+        if not include_subagents:
+            continue
         # Add children with tree prefix folded into the anchor field
         children = children_map.get(s.id, [])
         for i, child in enumerate(children):
@@ -261,7 +271,13 @@ def _print_sessions(sessions, agent_name, sort, reverse,
             body_rows.append((False, values))
 
     _render_table(body_rows, fields, color=color)
-    print(f"\n  {len(top_level)} session(s), {len(sessions) - len(top_level)} subagent(s)")
+    if include_subagents:
+        print(f"\n  {len(top_level)} session(s), {n_sub} subagent(s)")
+    elif n_sub:
+        print(f"\n  {len(top_level)} session(s), {n_sub} subagent(s) hidden "
+              f"(-a to show)")
+    else:
+        print(f"\n  {len(top_level)} session(s)")
 
 
 def _list_agents(formatter) -> None:
@@ -403,13 +419,20 @@ def _list_remote_agent(remote: Remote, agent_name: str, formatter) -> None:
 
 
 def _list_all_sessions(sort, reverse, formatter, fields,
-                       one_line=False, color=False) -> None:
-    """List every installed agent's sessions, newest first, agent-prefixed."""
+                       one_line=False, color=False,
+                       include_subagents=False) -> None:
+    """List every installed agent's sessions, newest first, agent-prefixed.
+
+    Subagent sessions are hidden unless include_subagents is True (-a).
+    """
     all_sessions = []
     for agent in AGENTS.values():
         if not agent.exists():
             continue
-        all_sessions.extend((agent.name, s) for s in agent.sessions())
+        for s in agent.sessions():
+            if s.parent_id and not include_subagents:
+                continue
+            all_sessions.append((agent.name, s))
 
     if not all_sessions:
         console.print("[yellow]No sessions found[/yellow]")
@@ -479,7 +502,8 @@ def _show_specific_sessions(refs: List[str], sort: str, reverse: bool,
 
 def _show_agent_glob_sessions(refs: List[str], sort: str, reverse: bool,
                               formatter, fields, long_format: bool,
-                              one_line: bool, color: bool) -> None:
+                              one_line: bool, color: bool,
+                              include_subagents: bool = False) -> None:
     """Render rows for references whose agent part is a glob.
 
     ls segment semantics for `*/...`, `p*/...` and friends: the agent segment
@@ -497,11 +521,15 @@ def _show_agent_glob_sessions(refs: List[str], sort: str, reverse: bool,
                 if session_pat and any(c in session_pat for c in "*?["):
                     sessions = [s for s in agent.sessions()
                                 if _matches_pattern(s, session_pat)]
+                    if not include_subagents:
+                        sessions = [s for s in sessions if not s.parent_id]
                 elif session_pat:
                     s = agent.session(session_pat)
                     sessions = [s] if s is not None else []
                 else:
                     sessions = agent.sessions()
+                    if not include_subagents:
+                        sessions = [s for s in sessions if not s.parent_id]
             rows.extend((name, s) for s in sessions)
 
     if not rows:
@@ -533,7 +561,7 @@ def _show_agent_glob_sessions(refs: List[str], sort: str, reverse: bool,
 
 def _handle_one_ref(path: str, sort: str, reverse: bool, formatter, fields,
                     long_format: bool, one_line: bool, recursive: bool,
-                    color: bool) -> None:
+                    color: bool, include_subagents: bool = False) -> None:
     """Dispatch a single `agent[/session_id]` reference.
 
     A bare agent name (or agent glob) lists/filters sessions. An exact
@@ -568,9 +596,12 @@ def _handle_one_ref(path: str, sort: str, reverse: bool, formatter, fields,
         print(f"  Source: {agent.source}")
         print()
 
+    # Subagent hiding (and the footer's "N hidden" note) happens in
+    # _print_sessions, which still sees the full list so it can count them.
     _print_sessions(sessions, agent.name if recursive else None,
                     sort, reverse, formatter, long_format, fields,
-                    one_line=one_line, color=color)
+                    one_line=one_line, color=color,
+                    include_subagents=include_subagents)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -584,7 +615,8 @@ def build_parser() -> argparse.ArgumentParser:
                      "in ccat). With -R and no arguments, recurses all agents. "
                      "Sort flags are ls-style: -t by time, -S by size, -u by "
                      "creation time; when several are given the last one wins "
-                     "(-tS == -S)."),
+                     "(-tS == -S). Subagent sessions are hidden by default "
+                     "(they can't be resumed); -a/--all includes them."),
     )
     parser.add_argument("paths", nargs="*",
                         help="One or more agent or agent/session_id references")
@@ -602,6 +634,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Show details: modified, size, messages, path")
     parser.add_argument("-1", "--one-line", action="store_true",
                         help="Print one session ID per line, with no header")
+    parser.add_argument("-a", "--all", action="store_true",
+                        help=("Include subagent sessions (hidden by default: "
+                              "they can't be resumed)"))
     parser.add_argument("--color", default="auto",
                         help="Colorize output: never, auto, or always")
     parser.add_argument("-f", "--format", dest="fmt", default="default",
@@ -635,6 +670,7 @@ def main(argv=None) -> int:
     fields = _resolve_fields(output)
     sort = _resolve_sort(argv)
     use_color = _use_color(color)
+    include_subagents = args.all
 
     formatter = None
     if fmt != "default":
@@ -647,7 +683,8 @@ def main(argv=None) -> int:
     if not paths:
         if recursive:
             _list_all_sessions(sort, reverse, formatter, fields,
-                               one_line=one_line, color=use_color)
+                               one_line=one_line, color=use_color,
+                               include_subagents=include_subagents)
         else:
             _list_agents(formatter)
         return 0
@@ -685,7 +722,8 @@ def main(argv=None) -> int:
     if agent_globs:
         _sep()
         _show_agent_glob_sessions(agent_globs, sort, reverse, formatter,
-                                  fields, long_format, one_line, use_color)
+                                  fields, long_format, one_line, use_color,
+                                  include_subagents)
 
     # Exact agent/session references list as rows (ls file semantics),
     # one or many.
@@ -697,7 +735,7 @@ def main(argv=None) -> int:
     for path in rest:
         _sep()
         _handle_one_ref(path, sort, reverse, formatter, fields, long_format,
-                        one_line, recursive, use_color)
+                        one_line, recursive, use_color, include_subagents)
     return 0
 
 

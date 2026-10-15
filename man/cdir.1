@@ -10,6 +10,7 @@ cdir \- list agents and sessions from LLM context windows
 .RB [ \-R ]
 .RB [ \-l ]
 .RB [ \-1 ]
+.RB [ \-a ]
 .RB [ \-\-color
 .IR when ]
 .RB [ \-o
@@ -65,6 +66,17 @@ Print one session ID per line and nothing else: no header, no
 Source line, no summary footer, no tree connectors. With
 .B \-R
 the IDs carry their agent prefix. Sort order still applies.
+.TP
+.BR \-a ", " \-\-all
+Include subagent sessions. A subagent session is one with a
+.B parent
+field set: the agent spawned it for delegated work. You can't resume a
+subagent (resuming the parent continues the work), so browse listings hide
+them by default and report how many are hidden in the footer. With
+.B \-a
+they are listed nested under their parent with tree connectors. Exact
+.I agent/session_id
+references always list the session, subagent or not.
 .TP
 .BR \-\-color
 .I when

@@ -1,13 +1,18 @@
 # cdir
 
-`cdir` lists sessions. Think `ls` for your conversation history. Subagents appear
-indented under their parent with tree connectors. Run it with no argument to see
-which agents are installed and where they store data.
+`cdir` lists sessions. Think `ls` for your conversation history. Run it with no
+argument to see which agents are installed and where they store data.
+
+Subagent sessions (the ones a harness spawns for delegated work) can't be
+resumed, so `cdir` hides them by default — the listing is what you can pick up
+again. The footer says how many are hidden; pass `-a` to include them, nested
+under their parent with tree connectors.
 
 ```sh
 cdir                        # list all known agents
 cdir opencode/              # sessions for opencode (name only)
 cdir -l opencode/           # sessions with modified date, size, message count, path
+cdir -a opencode/           # include subagent sessions (hidden by default)
 cdir -S opencode/           # sessions biggest first (ls -S); -t sorts by time
 cdir -u opencode/           # sessions newest first by creation time (ctime)
 cdir -1 opencode/           # one session ID per line, no header
@@ -18,6 +23,42 @@ cdir opencode/ses_abc123    # show that session's row (contents: ccat)
 cdir opencode/*llcat*       # filter: glob on session id, name, or working dir
 cdir '*/*ctools*'           # cross-agent glob: any agent, session matching the pattern
 ```
+
+## Subagent sessions
+
+Many agents spawn *subagent* sessions for delegated work (opencode's
+`@explore`/`@build` helpers, goose's delegated tasks, and the like). They show
+up in storage with a `parent_id` pointing at the session that spawned them —
+but you can't resume one: the work belongs to the parent, and resuming the
+parent is what continues it. So a listing of *resumable* sessions shouldn't be
+cluttered with them.
+
+`cdir` hides subagent sessions by default in every browse-style listing
+(agent listings, globs, `-R`, `-1`). The footer tells you how many are hidden:
+
+```sh
+$ cdir opencode/
+  ID                                 NAME
+  ses_abc123                         Petsitter exportit llcat JSON export
+  ses_def456                         Add Ollama transport option to llcat.py
+
+  2 session(s), 11 subagent(s) hidden (-a to show)
+```
+
+`-a` (or `--all`) includes them, nested under their parent with tree
+connectors:
+
+```sh
+$ cdir -a opencode/
+  ID                                 NAME
+  ses_abc123                         Petsitter exportit llcat JSON export
+  ┗━ ses_9ff01                        Explore codebase (@explore subagent)
+
+  2 session(s), 1 subagent(s)
+```
+
+Exact references always win: `cdir opencode/ses_9ff01` lists a subagent's row
+when you name it by id, even without `-a`.
 
 ## Sorting
 

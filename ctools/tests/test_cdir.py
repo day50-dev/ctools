@@ -742,6 +742,113 @@ def test_cli_output_field_suppresses_created(tmp_path):
     assert "CREATED" not in result.stdout
 
 
+def _make_opencode_db_with_subagent(tmp_path):
+    """Create an opencode.db with one parent session and one subagent session.
+
+    The subagent (parent_id set) is the *newer* session, so it would sort
+    first under the default time ordering.
+    """
+    db_path = tmp_path / 'opencode.db'
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE session (
+            id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, slug TEXT,
+            directory TEXT, title TEXT, version TEXT, share_url TEXT,
+            summary_additions INTEGER, summary_deletions INTEGER,
+            summary_files INTEGER, summary_diffs TEXT, revert TEXT,
+            permission TEXT, time_created INTEGER, time_updated INTEGER,
+            time_compacting INTEGER, time_archived INTEGER, workspace_id TEXT,
+            path TEXT, agent TEXT, model TEXT, cost REAL,
+            tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER,
+            tokens_cache_read INTEGER, tokens_cache_write INTEGER, metadata TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE message (
+            id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER,
+            time_updated INTEGER, data TEXT
+        )
+    ''')
+    cursor.execute('''
+        INSERT INTO session (id, title, parent_id, time_created, time_updated,
+                             tokens_input, tokens_output, directory)
+        VALUES ('ses_parent', 'Main work', NULL, 1700000000000,
+                1700000000000, 100, 200, '/tmp')
+    ''')
+    cursor.execute('''
+        INSERT INTO session (id, title, parent_id, time_created, time_updated,
+                             tokens_input, tokens_output, directory)
+        VALUES ('ses_child', 'Explore (@subagent)', 'ses_parent',
+                1700000100000, 1700000100000, 50, 60, '/tmp')
+    ''')
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_cli_subagents_hidden_by_default(tmp_path):
+    """Subagent sessions are hidden from the default listing; a footer note
+    points at -a."""
+    _make_opencode_db_with_subagent(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["opencode/"])
+    assert result.exit_code == 0
+    assert 'ses_parent' in result.stdout
+    assert 'ses_child' not in result.stdout
+    # footer mentions the hidden subagents and the flag
+    assert 'subagent(s) hidden' in result.stdout
+    assert '-a' in result.stdout
+
+
+def test_cli_subagents_included_with_a_flag(tmp_path):
+    """-a lists subagents nested under their parent with tree connectors."""
+    _make_opencode_db_with_subagent(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["-a", "opencode/"])
+    assert result.exit_code == 0
+    assert 'ses_parent' in result.stdout
+    assert 'ses_child' in result.stdout
+    # tree connector on the child row
+    assert '┗━' in result.stdout
+    # footer counts both, no "hidden" note
+    assert 'subagent(s) hidden' not in result.stdout
+    assert '1 session(s), 1 subagent(s)' in result.stdout
+
+
+def test_cli_subagents_hidden_one_line(tmp_path):
+    """-1 default prints only resumable (top-level) session ids."""
+    _make_opencode_db_with_subagent(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["-1", "opencode/"])
+    assert result.exit_code == 0
+    assert 'ses_parent' in result.stdout
+    assert 'ses_child' not in result.stdout
+
+    result_a = _run_opencode_cli(tmp_path, ["-1", "-a", "opencode/"])
+    assert 'ses_parent' in result_a.stdout
+    assert 'ses_child' in result_a.stdout
+
+
+def test_cli_subagents_hidden_recursive(tmp_path):
+    """-R (all agents) hides subagents by default; -a includes them."""
+    _make_opencode_db_with_subagent(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["-R"])
+    assert result.exit_code == 0
+    assert 'opencode/ses_parent' in result.stdout
+    assert 'opencode/ses_child' not in result.stdout
+
+    result_a = _run_opencode_cli(tmp_path, ["-R", "-a"])
+    assert 'opencode/ses_parent' in result_a.stdout
+    assert 'opencode/ses_child' in result_a.stdout
+
+
+def test_cli_exact_subagent_id_still_lists(tmp_path):
+    """An explicit agent/session_id reference to a subagent is honored —
+    hiding only affects browse-style listings."""
+    _make_opencode_db_with_subagent(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["opencode/ses_child"])
+    assert result.exit_code == 0
+    assert 'ses_child' in result.stdout
+
+
 def test_cli_recursive_has_header(tmp_path):
     """Test -R output has a header row."""
     _make_opencode_db(tmp_path)
