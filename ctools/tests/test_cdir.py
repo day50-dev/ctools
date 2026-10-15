@@ -742,6 +742,45 @@ def test_cli_output_field_suppresses_created(tmp_path):
     assert "CREATED" not in result.stdout
 
 
+def test_cli_resume_hint_shown_for_agent_listing(tmp_path):
+    """A single-agent listing tells the user how to resume a session."""
+    _make_opencode_db(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["opencode/"])
+    assert result.exit_code == 0
+    assert "Resume a session with:" in result.stdout
+    assert "opencode -s <id>" in result.stdout
+
+
+def test_cli_resume_hint_not_in_one_line(tmp_path):
+    """-1 (machine/script output) carries no prose hint."""
+    _make_opencode_db(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["-1", "opencode/"])
+    assert result.exit_code == 0
+    assert "Resume a session with:" not in result.stdout
+
+
+def test_cli_resume_hint_not_in_recursive(tmp_path):
+    """-R (all agents) carries no per-agent hint."""
+    _make_opencode_db(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["-R"])
+    assert result.exit_code == 0
+    assert "Resume a session with:" not in result.stdout
+
+
+def test_cli_resume_hint_respects_override(tmp_path, monkeypatch):
+    """A per-machine override in resume-commands.json wins over the built-in
+    table."""
+    _make_opencode_db(tmp_path)
+    cfg = tmp_path / 'resume-commands.json'
+    (tmp_path / '.config' / 'ctools').mkdir(parents=True)
+    cfg = tmp_path / '.config' / 'ctools' / 'resume-commands.json'
+    cfg.write_text('{"opencode": "myoc --continue {id}"}')
+    monkeypatch.setattr('ctools.agents.Path.home', lambda: tmp_path)
+    result = _run_opencode_cli(tmp_path, ["opencode/"])
+    assert result.exit_code == 0
+    assert "myoc --continue <id>" in result.stdout
+
+
 def _make_opencode_db_with_subagent(tmp_path):
     """Create an opencode.db with one parent session and one subagent session.
 
@@ -1334,14 +1373,14 @@ def test_cli_one_line_recursive(tmp_path):
         assert 'MODIFIED' not in line
 
 
-def test_cli_color_always_emits_escapes(tmp_path):
-    """--color always emits ANSI bold for the header."""
+def test_cli_color_always_no_bold(tmp_path):
+    """--color always no longer emits ANSI bold (all listed sessions are
+    equally resumable now that subagents are hidden by default)."""
     _make_opencode_db(tmp_path)
 
     result = _run_opencode_cli(tmp_path, ["--color", "always", "opencode/"])
     assert result.exit_code == 0
-    assert '\033[1m' in result.stdout
-    assert '\033[0m' in result.stdout
+    assert '\033[1m' not in result.stdout
 
 
 def test_cli_color_never_has_no_escapes(tmp_path):

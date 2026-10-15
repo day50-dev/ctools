@@ -29,6 +29,11 @@ and presents them in a human-readable or machine-parseable format.
 Session contents are read with \fBccat\fP; cdir is the directory listing.
 .PP
 Without arguments, cdir lists all known agents and their storage paths.
+.PP
+A single-agent listing ends with a resume hint \(em the command to pick a
+session back up under that agent, plus a pointer to\ \fBccat\fP for reading it
+(e.g.\ \fIResume a session with: opencode -s <id>\fP). The hint follows your
+per-machine overrides (see the FILES section). Machine output (\fB\-1\fP,\n\fB\-f\fP) and the cross-agent listings (\fB\-R\fP, globs) carry no hint.
 .SH OPTIONS
 Sort flags follow
 .B ls
@@ -63,7 +68,7 @@ source path. The creation date is suppressed. Equivalent to
 .TP
 .BR \-1 ", " \-\-one\-line
 Print one session ID per line and nothing else: no header, no
-Source line, no summary footer, no tree connectors. With
+Source line, no summary footer, no tree connectors, no resume hint. With
 .B \-R
 the IDs carry their agent prefix. Sort order still applies.
 .TP

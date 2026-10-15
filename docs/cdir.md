@@ -124,7 +124,7 @@ isn't found is reported and skipped; the rest still list.
 ## One-line output
 
 `-1` prints bare session IDs, one per line — shell-script friendly, no header, no
-tree:
+tree, no resume hint:
 
 ```sh
 $ cdir -1 opencode/
@@ -132,10 +132,28 @@ ses_08b4ab356ffeQvmBXnu1oj4Gqe
 ses_08b74487fffeTmQzA810dE9WRV
 ```
 
+## Resume hint
+
+A single-agent listing ends with a one-line hint telling you how to pick a
+session back up (and how to read it with `ccat`):
+
+```sh
+$ cdir opencode/
+  ...rows...
+
+  226 session(s), 110 subagent(s) hidden (-a to show)
+
+  Resume a session with: opencode -s <id>  (or ccat opencode/<id> to read it)
+```
+
+The hint follows your per-machine `resume-commands.json` overrides, so if you've
+taught ctools a custom resume command it shows up here. Machine output (`-1`,
+`-f json`, …) and the cross-agent listings (`-R`, `*/…`) carry no hint.
+
 ## Color
 
-`--color` controls ANSI bold on the header: `auto` (default, on only when stdout
-is a terminal), `always`, `never`.
+`--color` controls whether the listing is colored: `auto` (default, color only
+when stdout is a terminal), `always`, `never`.
 
 ## Long format
 

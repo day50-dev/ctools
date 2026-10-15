@@ -26,7 +26,8 @@ from typing import List, Optional, Tuple
 
 from rich.console import Console
 
-from ctools.agents import Session, REGISTRY as AGENTS
+from ctools.agents import (Session, RESUME_COMMANDS, _resume_override,
+                          REGISTRY as AGENTS)
 from ctools.cli import (Remote, handle_version, parse_ref, parse_remote_ref,
                         reporting, require_installed, version_option)
 from ctools.lib import format_datetime, format_size, get_formatter
@@ -143,17 +144,14 @@ def _resolve_fields(output: Optional[str]) -> Optional[List[str]]:
 def _render_table(body_rows: list, fields: List[str], color: bool = False) -> None:
     """Render an aligned table with a header row.
 
-    body_rows is a list of (is_parent, values) tuples where values is a
-    {field: display_value} dict. Tree connectors are embedded in the
-    anchor field's value so later columns stay aligned.
+    body_rows is a list of {field: display_value} dicts. Tree connectors are
+    embedded in the anchor field's value so later columns stay aligned.
     """
-    BOLD = "\033[1m" if color else ""
-    RESET = "\033[0m" if color else ""
     if not body_rows:
         return
 
     widths = {f: len(FIELD_LABELS[f]) for f in fields}
-    for _, values in body_rows:
+    for values in body_rows:
         for f in fields:
             widths[f] = max(widths[f], len(values[f]))
 
@@ -163,13 +161,8 @@ def _render_table(body_rows: list, fields: List[str], color: bool = False) -> No
         return f"{v:<{widths[f]}}"
 
     print("  " + "  ".join(fmt(f, FIELD_LABELS[f]) for f in fields))
-    for is_parent, values in body_rows:
-        cells = []
-        for f in fields:
-            cell = fmt(f, values[f])
-            if is_parent and f in ('id', 'name'):
-                cell = f"{BOLD}{cell}{RESET}"
-            cells.append(cell)
+    for values in body_rows:
+        cells = [fmt(f, values[f]) for f in fields]
         print("  " + "  ".join(cells))
 
 
@@ -206,6 +199,20 @@ def _use_color(mode: str) -> bool:
     if mode == 'never':
         return False
     return sys.stdout.isatty()
+
+
+def _resume_hint(agent_name: Optional[str]) -> None:
+    """Tell the user how to pick a session back up under this agent.
+
+    Shown only for a single-agent listing (not -R / cross-agent globs, where
+    the per-agent command would differ row to row). Human output only —
+    machine formats print no prose at all.
+    """
+    if not agent_name:
+        return
+    template = _resume_override().get(agent_name) or RESUME_COMMANDS.get(agent_name)
+    if template:
+        print(f"\n  Resume a session with: {template.replace('{id}', '<id>')}  (or ccat {agent_name}/<id> to read it)")
 
 
 def _print_sessions(sessions, agent_name, sort, reverse,
@@ -258,7 +265,7 @@ def _print_sessions(sessions, agent_name, sort, reverse,
     # Build rows with nesting info and tree prefix
     body_rows = []
     for s in top_level:
-        body_rows.append((True, _session_values(s, fields)))
+        body_rows.append(_session_values(s, fields))
         if not include_subagents:
             continue
         # Add children with tree prefix folded into the anchor field
@@ -268,7 +275,7 @@ def _print_sessions(sessions, agent_name, sort, reverse,
             values = _session_values(child, fields)
             anchor = 'id' if 'id' in fields else fields[0]
             values[anchor] = prefix + values[anchor]
-            body_rows.append((False, values))
+            body_rows.append(values)
 
     _render_table(body_rows, fields, color=color)
     if include_subagents:
@@ -278,6 +285,9 @@ def _print_sessions(sessions, agent_name, sort, reverse,
               f"(-a to show)")
     else:
         print(f"\n  {len(top_level)} session(s)")
+    if one_line or formatter:
+        return
+    _resume_hint(agent_name)
 
 
 def _list_agents(formatter) -> None:
@@ -456,7 +466,7 @@ def _list_all_sessions(sort, reverse, formatter, fields,
         values = _session_values(session, rfields)
         if 'id' in values:
             values['id'] = f"{agent_name}/{session.id}"
-        body_rows.append((True, values))
+        body_rows.append(values)
     _render_table(body_rows, rfields, color=color)
     print(f"\n  {len(body_rows)} session(s)")
 
@@ -495,7 +505,7 @@ def _show_specific_sessions(refs: List[str], sort: str, reverse: bool,
     rfields = fields if fields is not None else (LONG_FIELDS if long_format else DEFAULT_FIELDS)
     key = _sort_key(sort)
     rows.sort(key=key, reverse=not reverse)
-    body_rows = [(True, _session_values(s, rfields)) for s in rows]
+    body_rows = [_session_values(s, rfields) for s in rows]
     _render_table(body_rows, rfields, color=color)
     print(f"\n  {len(rows)} session(s)")
 
@@ -554,7 +564,7 @@ def _show_agent_glob_sessions(refs: List[str], sort: str, reverse: bool,
         values = _session_values(s, rfields)
         if 'id' in values:
             values['id'] = f"{name}/{s.id}"
-        body_rows.append((True, values))
+        body_rows.append(values)
     _render_table(body_rows, rfields, color=color)
     print(f"\n  {len(body_rows)} session(s)")
 
@@ -598,7 +608,9 @@ def _handle_one_ref(path: str, sort: str, reverse: bool, formatter, fields,
 
     # Subagent hiding (and the footer's "N hidden" note) happens in
     # _print_sessions, which still sees the full list so it can count them.
-    _print_sessions(sessions, agent.name if recursive else None,
+    # The agent name drives the resume hint and the per-row prefix. -1 keeps
+    # bare IDs (shell-script friendly) so it omits the prefix.
+    _print_sessions(sessions, agent.name if not one_line else None,
                     sort, reverse, formatter, long_format, fields,
                     one_line=one_line, color=color,
                     include_subagents=include_subagents)
