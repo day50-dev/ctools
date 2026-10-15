@@ -19,3 +19,11 @@ env/
 .DS_Store
 .direnv
 .envrc
+
+# working files / unrelated repos dropped in the tree
+session.json
+strat.json
+ctools.png
+ctools.avif
+gabngo/
+goose/
