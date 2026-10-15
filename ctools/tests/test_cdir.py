@@ -964,11 +964,12 @@ def test_cli_sort_by_size_default_sorts_by_time(tmp_path):
     assert result.stdout.index('ses_small') < result.stdout.index('ses_big')
 
 
-def test_cli_sort_by_size_legacy_s_alias(tmp_path):
-    """-s still sorts by size."""
+def test_cli_sort_by_size_S_flag(tmp_path):
+    """-S sorts by size. (-s was the legacy hidden alias; it is now the
+    --suppress flag, so the size sort goes through -S/--size.)"""
     _make_opencode_db_two_sizes(tmp_path)
 
-    result = _run_opencode_cli(tmp_path, ["-s", "-l", "opencode/"])
+    result = _run_opencode_cli(tmp_path, ["-S", "-l", "opencode/"])
     assert result.exit_code == 0
     assert result.stdout.index('ses_big') < result.stdout.index('ses_small')
 
@@ -1349,6 +1350,50 @@ def test_cli_one_line_no_header(tmp_path):
     assert 'Source:' not in result.stdout
     assert 'MODIFIED' not in result.stdout
     assert 'session(s)' not in result.stdout
+
+
+def test_cli_suppress_strips_all_decorations(tmp_path):
+    """-s strips the column headers, count footer, resume hint, Source line,
+    and the leading indent, leaving clean aligned rows for scraping."""
+    _make_opencode_db(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["-s", "opencode/"])
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    # only the data row remains
+    assert lines == ['ses_test123  Test Session']
+    # no header, no source, no count, no hint
+    assert 'ID' not in result.stdout
+    assert 'Source:' not in result.stdout
+    assert 'session(s)' not in result.stdout
+    assert 'Resume a session with:' not in result.stdout
+    # the row starts at column 0 (no leading indent)
+    assert lines[0].startswith('ses_test123')
+    assert not result.stdout.startswith(' ')
+
+
+def test_cli_suppress_keeps_data_and_sort(tmp_path):
+    """-s changes only the decorations, not the rows or their order."""
+    _make_opencode_db_two_sizes(tmp_path)
+    plain = _run_opencode_cli(tmp_path, ["-l", "opencode/"])
+    supp = _run_opencode_cli(tmp_path, ["-s", "-l", "opencode/"])
+    assert supp.exit_code == 0
+    # same rows, same order, just without the header/footer/indent
+    supp_rows = [l.rstrip() for l in supp.stdout.splitlines() if l.strip()]
+    assert supp_rows == ['ses_small  Small  2023-11-14 14:14    30 B     1  /tmp',
+                         'ses_big    Big    2023-11-14 14:13  2.0 KB     1  /tmp']
+
+
+def test_cli_suppress_long_format(tmp_path):
+    """-s -l keeps the long fields but drops the header/count/hint."""
+    _make_opencode_db(tmp_path)
+    result = _run_opencode_cli(tmp_path, ["-s", "-l", "opencode/"])
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith('ses_test123')
+    assert 'MODIFIED' not in result.stdout
+    assert 'session(s)' not in result.stdout
+    assert 'Resume a session with:' not in result.stdout
 
 
 def test_cli_one_line_long_flag(tmp_path):
