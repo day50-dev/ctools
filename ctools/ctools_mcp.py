@@ -298,7 +298,169 @@ def get_session_concepts(agent: str, session_id: str, concept_type: str = "") ->
     return "\n".join(lines)
 
 
+def _find_uv_tool_python() -> Optional[str]:
+    """Return the venv interpreter from a `uv tool install ctxttools` if present."""
+    import os
+    uv_tools = os.path.expanduser("~/.local/share/uv/tools/ctxttools/bin/python")
+    if os.path.exists(uv_tools):
+        return uv_tools
+    return None
+
+
+def _find_pipx_python() -> Optional[str]:
+    """Return the venv interpreter from a pipx install if present."""
+    import os
+    pipx_py = os.path.expanduser("~/.local/pipx/venvs/ctxttools/bin/python")
+    if os.path.exists(pipx_py):
+        return pipx_py
+    return None
+
+
+def _best_python() -> str:
+    """Pick the best interpreter that has ctxtools[mcp] installed."""
+    import sys
+    for finder in (_find_uv_tool_python, _find_pipx_python):
+        p = finder()
+        if p:
+            return p
+    # Fall back to the running interpreter (e.g. from a venv or editable install)
+    return sys.executable
+
+
+def _verify_python(py: str) -> bool:
+    """Check that `py -m ctools.ctools_mcp` starts and can import itself.
+
+    Runs a subprocess with stdin closed so the MCP stdio server exits
+    immediately (it would otherwise block reading stdin).
+    """
+    import subprocess
+    result = subprocess.run(
+        [py, "-m", "ctools.ctools_mcp"],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=15,
+    )
+    # Exit 0 means it started cleanly (and exited because stdin was closed).
+    return result.returncode == 0
+
+
+def cmd_install(args) -> None:
+    """Ensure ctxtools[mcp] is installed and register the server with pi."""
+    import os, json, subprocess, sys
+
+    py = _best_python()
+    if not _verify_python(py):
+        print("No working ctxtools[mcp] install found. Installing with uv...")
+        subprocess.run(["uv", "tool", "install", "ctxttools[mcp]", "--force"], check=True)
+        py = _best_python()
+        if not _verify_python(py):
+            print(f"ERROR: cannot import ctools.ctools_mcp with {py}", file=sys.stderr)
+            sys.exit(1)
+
+    pi_mcp_json = os.path.expanduser("~/.pi/agent/mcp.json")
+    os.makedirs(os.path.dirname(pi_mcp_json), exist_ok=True)
+
+    entry = {
+        "command": py,
+        "args": ["-m", "ctools.ctools_mcp"],
+        "description": "Search, list, and copy LLM agent sessions (pi, claude, opencode, codex, goose, etc.)",
+    }
+
+    if os.path.exists(pi_mcp_json):
+        with open(pi_mcp_json) as f:
+            existing = json.load(f)
+    else:
+        existing = {}
+    existing.setdefault("mcpServers", {})[
+        "ctools"] = entry
+
+    with open(pi_mcp_json, "w") as f:
+        json.dump(existing, f, indent=2)
+        f.write("\n")
+
+    print("Registered ctools MCP server with pi.")
+    print(f"  python: {py}")
+    print(f"  config: {pi_mcp_json}")
+    print("")
+    print("Verify with:  pi mcp list")
+    print("Use in pi:     /mcp, or just ask the agent - tools are also reachable via codemode.")
+
+
+def cmd_uninstall(args) -> None:
+    """Remove ctools from pi's mcp.json (and optionally other clients with --all)."""
+    import os, json
+
+    removed = []
+
+    pi_mcp_json = os.path.expanduser("~/.pi/agent/mcp.json")
+    if os.path.exists(pi_mcp_json):
+        with open(pi_mcp_json) as f:
+            data = json.load(f)
+        if "ctools" in data.get("mcpServers", {}):
+            del data["mcpServers"]["ctools"]
+            with open(pi_mcp_json, "w") as f:
+                json.dump(data, f, indent=2)
+                f.write("\n")
+            removed.append(pi_mcp_json)
+
+    if getattr(args, "all", False):
+        for path, key in [
+            (os.path.expanduser("~/.claude.json"), "mcpServers"),
+            (os.path.expanduser("~/.config/opencode/opencode.json"), "mcp"),
+        ]:
+            if os.path.exists(path):
+                with open(path) as f:
+                    data = json.load(f)
+                if "ctools" in data.get(key, {}):
+                    del data[key]["ctools"]
+                    with open(path, "w") as f:
+                        json.dump(data, f, indent=2)
+                        f.write("\n")
+                    removed.append(path)
+
+    if removed:
+        print("Removed ctools from: " + ", ".join(removed))
+    else:
+        print("ctools not found in any MCP config")
+
+
+def cmd_print_config(args) -> None:
+    """Print the mcpServers JSON snippet for any MCP client."""
+    import json
+    cfg = {
+        "mcpServers": {
+            "ctools": {
+                "command": _best_python(),
+                "args": ["-m", "ctools.ctools_mcp"],
+                "description": "Search, list, and copy LLM agent sessions",
+            }
+        }
+    }
+    print(json.dumps(cfg, indent=2))
+
+
 def main():
+    import sys
+    if len(sys.argv) > 1:
+        cmd = sys.argv[1]
+        rest = sys.argv[2:]
+        if cmd == "install":
+            import argparse
+            parser = argparse.ArgumentParser(prog="ctools-mcp install")
+            parser.parse_args(rest)
+            cmd_install(parser.parse_args(rest))
+            return
+        if cmd == "uninstall":
+            import argparse
+            parser = argparse.ArgumentParser(prog="ctools-mcp uninstall")
+            parser.add_argument("--all", action="store_true",
+                                help="also remove Claude Code and opencode entries")
+            cmd_uninstall(parser.parse_args(rest))
+            return
+        if cmd == "print-config":
+            cmd_print_config(None)
+            return
+        print(f"Unknown subcommand: {cmd}", file=sys.stderr)
+        print("Usage: ctools-mcp [install | uninstall [--all] | print-config]", file=sys.stderr)
+        sys.exit(1)
     mcp.run(transport="stdio")
 
 

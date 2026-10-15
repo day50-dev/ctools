@@ -161,22 +161,46 @@ Anything the storage cannot do — pi's session trees cannot be rewritten in pla
 
 ## MCP server
 
-There is an MCP server for use from Claude, opencode, Cursor, or anything else that speaks MCP.
+There is an MCP server for use from pi, Claude, opencode, Cursor, or anything else that speaks MCP.
 
 Tools: `list_agents`, `list_sessions`, `search_sessions`, `export_session`, `extract_concepts`, `copy_concepts`, `get_session_concepts`.
 
-Add to your MCP config:
+### Quick install (pi)
+
+One command does the whole job — install into an isolated venv (if needed) and register with pi:
+
+```sh
+pipx run 'ctxttools[mcp]' ctools-mcp install
+# or, with uv:
+uv tool run 'ctxttools[mcp]' ctools-mcp install
+```
+
+It detects an existing `uv tool` or `pipx` install of `ctxttools` and uses it instead. Verify with:
+
+```sh
+pi mcp list   # expect: ctools: connected, 7 tools
+```
+
+Then use it inside pi — run `/mcp` to inspect, or just ask the agent (the tools are also reachable through codemode / tool search).
+
+Uninstall with `ctools-mcp uninstall` (removes the pi entry; pass `--all` to also remove Claude Code and opencode entries).
+
+### Other clients
+
+Run `ctools-mcp print-config` to get the JSON snippet for any MCP host, e.g. for opencode (`opencode.json` under `"mcp"`) or Claude (`.mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "ctools": {
       "command": "python",
-      "args": ["/ABSOLUTE/PATH/TO/ctools/ctools_mcp.py"]
+      "args": ["-m", "ctools.ctools_mcp"]
     }
   }
 }
 ```
+
+(`command` should point at the interpreter of a venv that has `ctxttools[mcp]` installed — `ctools-mcp install` prints the exact one for your machine.)
 
 ## Web dashboard
 
