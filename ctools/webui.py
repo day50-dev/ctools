@@ -1886,7 +1886,7 @@ async function openConverse(agent, sid) {
     </span>`;
     meta += ` <button class="primary" style="background:var(--green)"
       onclick="showConcepts()">Concepts</button>`;
-    meta += ` <button class="primary" style="background:var(--panel2)"
+    meta += ` <button class="primary" style="background:var(--panel2);color:var(--text);border:1px solid var(--border)"
       onclick="showExport()">Export</button>`;
     $("#c-meta").innerHTML = meta;
     window._lastMessages = d.messages;   // kept for showExport()
