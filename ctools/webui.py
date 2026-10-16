@@ -1000,9 +1000,29 @@ td .sub { color: var(--dim); font-size: 11px; }
 .msg .role.tool { color: #e0a458; }
 .msg pre { margin: 0; white-space: pre-wrap; word-break: break-word;
   font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
-.msg.collapsed pre { display: none; }
 .msg .expand { color: var(--accent); font-size: 11px; cursor: pointer;
   font-family: var(--mono); }
+/* consecutive same-role messages cluster into one container */
+.msggroup { background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+.msggroup .msg { background: none; border: none; border-radius: 0; padding: 0;
+  margin-bottom: 0; }
+.msggroup .msg + .msg { border-top: 1px solid var(--border); margin-top: 10px;
+  padding-top: 10px; }
+.msggroup .msg > div:first-child .role { display: none; }
+.msggroup .msghead { display: flex; justify-content: space-between; gap: 12px;
+  align-items: baseline; margin-bottom: 2px; }
+.msggroup .role.assistant { color: var(--green); }
+.msggroup .role.user { color: var(--accent); }
+.msggroup .role.system { color: #b48ce0; }
+.msggroup .role.tool { color: #e0a458; }
+/* long messages: rendered markdown, collapsed to a fixed height with a
+   gradient fade; expand removes the cap */
+.msg-long { max-height: 900px; overflow: hidden; position: relative; }
+.msg-long.collapsed::after { content: ""; position: absolute; bottom: 0;
+  left: 0; right: 0; height: 60px;
+  background: linear-gradient(transparent, var(--panel)); pointer-events: none; }
+.msg-long:not(.collapsed) { max-height: none; }
 .md { font-family: var(--sans); font-size: 13.5px; line-height: 1.55;
   color: var(--text); overflow-wrap: anywhere; }
 .md > :first-child { margin-top: 0; }
@@ -1362,8 +1382,12 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
 
 <script>
 const $ = s => document.querySelector(s);
-const esc = s => (s ?? "").replace(/[&<>"']/g, c =>
-  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const esc = (s, attr) => {
+  const v = s ?? "";
+  if (attr) return String(v).replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return String(v).replace(/[&<>"']/g, c =>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+};
 let AGENTS = [];
 let STRATEGIES = [];
 let FILTERS = [];
@@ -1893,7 +1917,7 @@ async function openConverse(agent, sid) {
     $("#c-dest").addEventListener("keydown", e => {
       if (e.key === "Enter") doCopy();
     });
-    $("#c-body").innerHTML = d.messages.map((m, i) => msgHtml(m, i)).join("")
+    $("#c-body").innerHTML = messagesHtml(d.messages)
       + resumePanel(agent, sid, d.resume);
     // wire the copy-command buttons in the resume panel
     $("#c-body").querySelectorAll(".resume-panel [data-cp]").forEach(b =>
@@ -1954,20 +1978,40 @@ function md(text) {
 function msgHtml(m, i) {
   const full = m.content;
   const long = full.length > 900;
-  const wrap = document.createElement("div");
-  if (long) {
-    const pre = document.createElement("pre");
-    pre.dataset.full = full;
-    pre.textContent = full.slice(0, 900) + " …";
-    wrap.appendChild(pre);
-  } else {
-    wrap.appendChild(md(full));
-  }
+  const body = md(full);
+  const inner = long
+    ? `<div class="msg-long collapsed">${body.outerHTML}</div>`
+    : body.outerHTML;
   return `<div class="msg">
     <div style="display:flex;justify-content:space-between;gap:12px">
       <span class="role ${esc(m.role)}">${esc(m.role)}</span>
       ${long ? `<span class="expand">show more ▾</span>` : ""}
-    </div>${wrap.outerHTML}</div>`;
+    </div>${inner}</div>`;
+}
+
+// Cluster consecutive same-role messages into one shared container: the role
+// header shows once, each message body separated by a hairline. Runs of
+// assistant messages (common in agentic sessions) read as a single block.
+function messagesHtml(messages) {
+  let html = "";
+  let i = 0;
+  while (i < messages.length) {
+    let j = i + 1;
+    while (j < messages.length && messages[j].role === messages[i].role) j++;
+    const run = messages.slice(i, j);
+    if (run.length === 1) {
+      html += msgHtml(run[0]);
+    } else {
+      html += `<div class="msggroup">
+        <div class="msghead">
+          <span class="role ${esc(run[0].role)}">${esc(run[0].role)} × ${run.length}</span>
+        </div>
+        ${run.map(m => msgHtml(m)).join("")}
+      </div>`;
+    }
+    i = j;
+  }
+  return html;
 }
 
 // Export: show the whole conversation as one markdown document in a
@@ -2080,29 +2124,15 @@ $("#s-filter").addEventListener("input", renderSessions);
 document.addEventListener("click", e => {
   const el = e.target.closest(".expand");
   if (!el) return;
-  const pre = el.closest(".msg").querySelector("pre[data-full]");
-  const body = el.closest(".msg").querySelector("> div > .md");
-  const isExpanded = !!body && !pre;
-  if (!pre && !body) return;
-  const full = (pre && pre.dataset.full) || (body ? body.textContent : "");
-  const swap = (node) => {
-    const host = pre ? pre.parentNode : body.parentNode;
-    const ref = pre ? pre : body;
-    host.insertBefore(node, ref);
-    ref.remove();
-  };
-  if (!isExpanded) {
-    // expand: swap the truncated <pre> for the full rendered markdown
-    const wrap = document.createElement("div");
-    wrap.appendChild(md(full));
-    swap(wrap);
+  const msg = el.closest(".msg");
+  const wrap = msg.querySelector(".msg-long");
+  if (!wrap) return;
+  const isCollapsed = wrap.classList.contains("collapsed");
+  if (isCollapsed) {
+    wrap.classList.remove("collapsed");
     el.textContent = "collapse ▴";
   } else {
-    // collapse: swap back to a truncated plain <pre>
-    const p = document.createElement("pre");
-    p.dataset.full = full;
-    p.textContent = full.slice(0, 900) + " …";
-    swap(p);
+    wrap.classList.add("collapsed");
     el.textContent = "show more ▾";
   }
 });
