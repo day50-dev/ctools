@@ -1,301 +1,304 @@
-<p align="center">
-<img width="500" alt="ctools" src="https://github.com/user-attachments/assets/ee781bbe-6364-44ed-be2d-72114f1e6d8a" /><br/>
-<a href=https://pypi.org/project/ctxttools><img src=https://badge.fury.io/py/ctxttools.svg/></a>
-<br/><br/><b>Try it now</b><br/>
-<code>uvx --from ctxttools cdir</code>
-<br/><br/><b>Then install it</b><br/>
-<code>uv tool install ctxttools</code>
-</p>
+# ctools
 
-------
-**ctools** is a suite of simple tools for navigating through the sessions of the most popular LLM agents and coding tools. It allows you to search your history, transfer conversations, filter them, and even share them among machines and users.
+Your coding agents are scattered across your machine: sessions in
+`~/.claude`, `~/.pi`, `~/.local/share/opencode`, and so on. **ctools** is a
+set of Python tools that gives you a single way to find, read, copy, and
+share those conversations.
 
-It supports [Claude Desktop](https://claude.com/download), [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [Hermes](https://github.com/NousResearch/hermes-agent), [Goose](https://github.com/aaif-goose/goose), [Kilo](https://github.com/Kilo-Org/kilocode), [FreeBuff](https://github.com/CodebuffAI/freebuff), [Cline](https://github.com/cline/cline), [omp](https://github.com/can1357/oh-my-pi), and [OpenClaw](https://openclaw.ai/).
+You can use it from the terminal, from a small web dashboard, or from any
+AI coding agent (via an MCP server).
 
-Here's an example:
+---
 
-> I look for mentions of snake game in opencode using cgrep
-<pre>
-$ <b>cgrep</b> "snake game" opencode
-opencode/ses_a1d1a5a4df984ee698cab4a7:1:user: make a simple snake game in python
-opencode/ses_a1d1a5a4df984ee698cab4a7:2:assistant: I'll make a terminal-based snake game using `curses` (standard library, no dependencies).
-opencode/ses_a1d1a5a4df984ee698cab4a7:3:assistant: Done — `snake.py` is a terminal snake game using Python's built-in `curses` module (no dependencies).
-</pre>
+## What it can do
 
-> cool let's look at the status of that session using cdir
-<pre>
-$ <b>cdir</b> -l opencode/ses_a1d1a5a4df984ee698cab4a7
-  ID                            NAME                                MODIFIED            SIZE  MSGS  PATH
-  ses_a1d1a5a4df984ee698cab4a7  make a simple snake game in python  2026-10-07 16:56  2.7 KB     3  /home/chris/.local/share/opencode
+| Capability | What you get |
+|---|---|
+| **Discover** | See every agent installed on your machine and how many sessions each holds. |
+| **Find** | Search across all sessions at once: a pattern or a phrase (fuzzy, across word boundaries). |
+| **Continue** | Get the exact command to resume a session in its original tool, or open it in the web UI. |
+| **Copy** | Extract a session and copy it into another tool's session storage, or into a `.json` file. |
+| **Export** | Download a session as JSON, or pretty-printed text/Markdown for reading or sharing. |
+| **Concepts** | Pull out the *intent* of a session: what it's about, its constraints, what was decided. |
+| **Search in bulk** | A small CLI that greps across all sessions for the first matching message, with context. |
 
-  1 session(s)
-</pre>
+```bash
+$ ctools find "mcp config"
+[1] claude-code  a1b2c3...
+     (claude-code/2026-05-01) "…let me check the mcp config for you…"
 
-> Alright let's copy that session from opencode into pi!
-<pre>
-$ <b>ccopy</b> opencode/ses_a1d1a5a4df984ee698cab4a7 pi
-Copied 3 message(s) from opencode/ses_a1d1a5a4df984ee698cab4a7 to a new pi session: e357f435-f813-463a-b313-f97f1051f3cb
-Resume it with:
-  pi --session e357f435-f813-463a-b313-f97f1051f3cb
-</pre>
-
-As you can see, these are unix-friendly tools using simple paradigms that you are already familiar with.
-
-## Tools
-
-| Tool | What it does | Docs |
-|------|--------------|------|
-| `cgrep` | Search conversation content (grep across every agent) | [docs/cgrep.md](docs/cgrep.md) |
-| `cdir` | List sessions (ls for your history) | [docs/cdir.md](docs/cdir.md) |
-| `ccat` | Print one or more conversations (cat for your history) | [docs/ccat.md](docs/ccat.md) |
-| `ccopy` | Copy a whole conversation from one agent to a new session in another | [docs/ccopy.md](docs/ccopy.md) |
-| `crecover` | List, verify, and restore the storage backups ccopy takes before each write | [docs/crecover.md](docs/crecover.md) |
-| `cextract` | Extract concepts from a session into files, and inject them back | [docs/cextract.md](docs/cextract.md) |
-| `cconnect` | Live concept pipelines between sessions | [docs/cconnect.md](docs/cconnect.md) |
-| `cdu` | Token usage per session (du for context windows) | [docs/cdu.md](docs/cdu.md) |
-| `crm` | Remove concepts from a session (mdel) | [docs/crm.md](docs/crm.md) |
-| `ctools-web` | Browser dashboard for all of the above | [Web dashboard](#web-dashboard) |
-
-Every tool takes `--version`. The session-mover tools (`ccopy`, `cextract`, `cconnect`, `crm`) also take `--verbose` for structured logging. Each tool's full flag reference, output formats, and examples live in its `docs/` page — the table above is just the 30-second version.
-
-## The problem
-
-You talk to LLMs all day. Over weeks, you build up a set of constraints, preferences, and goals. These live in your conversations as system messages. They are valuable. They are also trapped.
-
-Say you have been working with opencode for a month. You have refined your coding style through dozens of sessions. Now you start a new Claude Code project and you want those same preferences. You could copy them by hand. Or you could `cextract` them out and `cextract` them back in, or copy the whole conversation across with `ccopy`. Either way, your memory travels with you.
-
-## How it works
-
-ctools is a substrate for moving memory between context windows. Cross-platform, agent-agnostic, designed like a bus.
-
-Two stages: **extraction** and **filtering**.
-
-- A **strategy** extracts concepts from a conversation. It defines what counts as a concept and how to find it: regex patterns, LLM extraction, whatever. Different strategies produce different ontologies from the same conversation, because context is contestable.
-- A **filter** selects which extracted concepts reach a destination. It's a binary classifier: pass through or filter out. One concept list can fan out to many destinations, each with its own filter. A coding agent gets coding preferences, a security agent gets security constraints, a PM agent gets goals, all from the same source.
-
-A filter can be as simple as a type or substring match, or as smart as a **decision model** — a small local classifier that scores each concept and lets it through only when confident. Point a filter at a model and you get *semantic* filtering with no free text to parse: ask "is this concept about security?" and gate on the answer. The model is asked either through Ollama's typed `/v1/systemone` endpoint (calibrated probabilities, the home of decision-dedicated models) or through any OpenAI-compatible `/v1/chat/completions` server (portable, lettered decision-task prompt) — one `endpoint` field decides. See [cextract](docs/cextract.md) for the decision-model and JSON-RPC filter configs.
-
-```mermaid
-graph LR
-    SRC["source session"] --> STRAT["strategy<br/>(extraction)"]
-    STRAT --> CONCEPTS["concept list"]
-    CONCEPTS --> FA["filter A"]
-    CONCEPTS --> FB["filter B"]
-    CONCEPTS --> FC["filter C"]
-    FA --> DEST_A["destination A"]
-    FB --> DEST_B["destination B"]
-    FC --> DEST_C["destination C"]
+$ ctools resume claude-code a1b2c3...
+  claude --resume a1b2c3...
 ```
 
-Context windows are endpoints: opencode, Claude Code, Codex, Pi. They all speak different protocols, but they all consume the same packets. See [cextract](docs/cextract.md) for the concept packet format, strategies, and the filter configs (decision model and JSON-RPC).
+---
 
-## Write safety
+## A quick tour
 
-The session-mover tools write into your agents' **live** storage — for the
-SQLite-backed agents (opencode, goose, kilo, hermes) that's the database that
-holds every session of that agent. A write that fails or is interrupted
-part-way can corrupt it, and losing an agent's whole history would be
-unforgivable.
+**The overview**: every tool ctools can see, with session counts and token
+totals, plus quick links into the most common actions:
 
-So every local write is guarded:
+![Overview](docs/screens/overview.png)
 
-1. ctools **snapshots the agent's storage first** (SQLite via `VACUUM INTO` —
-   a consistent copy even mid-write; file agents via a tree copy), kept under
-   `~/.local/share/ctools/backups/<agent>/` (20 newest per agent).
-2. After the write it **verifies** the storage: the DB opens,
-   `PRAGMA integrity_check` passes, the session table still exists, and the
-   session count did not decrease. A database that is structurally valid but
-   emptied of data is caught too.
-3. If anything looks wrong, the snapshot is **restored automatically** — you
-   get a clean error, not a broken database.
+**Sessions**: browse every conversation from any tool, sorted by recency.
+Click one to open it.
 
-And because a restore is itself a write, it snapshots what it overwrites, so
-**every restore is undoable**. For the out-of-band case (you notice days later
-that an agent's history vanished), `crecover list` / `verify` / `restore` are
-there. Details: [ccopy — safety](docs/ccopy.md#safety-automatic-backups) and
-[crecover](docs/crecover.md).
+![Sessions](docs/screens/sessions.png)
 
-## Supported endpoints
+**A conversation**: the full message stream, with the original tool's
+resume command and copy-to-another-tool options.
 
-| Agent | Storage |
-|-------|---------|
-| claude | JSON |
-| claude-code | JSONL |
-| opencode | SQLite |
-| kilo | SQLite (opencode fork, same schema) |
-| codex | JSONL |
-| pi | JSONL |
-| goose | SQLite |
-| hermes | SQLite (`~/.hermes/state.db`, `$HERMES_HOME`) |
-| cline | JSON (`~/.cline/data/tasks/`) |
-| omp | JSONL (`~/.omp/agent/sessions/`, tree journal) |
-| freebuff | JSON (`~/.config/<codebuff>/projects/`) |
-| openclaw | SQLite (per-agent, `~/.openclaw/agents/`, `OPENCLAW_STATE_DIR`) |
+![Conversation](docs/screens/conversation.png)
 
-OpenClaw is a **personal assistant** rather than a terminal coding agent, so it
-runs in a local Gateway that owns its store; ctools reads and exports its
-sessions but does not seed new ones (the store has canonical-index and integrity
-checks that a raw insert cannot satisfy).
+**Search**: type a phrase and see every matching message across all tools.
 
-Run `cdir` to see which endpoints are found on your system and where they store data.
+![Search](docs/screens/search.png)
 
-Every endpoint is one class in `ctools/agents.py`. The base `Agent` defines the whole interface the tools use — `sessions()`, `messages()`, `raw_messages()`, `lines()`, `inject_system()`, `inject_toolcall()`, `remove_messages()`, `create_session()` — and the storage-shaped subclasses (`JsonAgent`, `JsonlAgent`, `SqliteAgent`) implement most of it. Adding an endpoint means writing one subclass and adding it to `AGENT_CLASSES`; no command changes.
+**Concepts**: ask a session what it's *about*. ctools extracts the intent,
+constraints, and decisions so you can pick up where you left off without
+re-reading everything.
 
-```python
-from ctools.agents import JsonlAgent, Session
+![Concepts](docs/screens/concepts.png)
 
-class MyAgent(JsonlAgent):
-    name = 'myagent'
-    description = 'My Coding Agent'
-    session_pattern = 'sessions/**/*.jsonl'
+---
 
-    @classmethod
-    def default_base_path(cls):
-        return Path.home() / '.myagent'
+## Install
 
-    def sessions(self):
-        ...
-```
+**Python 3.10+** is required.
 
-Anything the storage cannot do — pi's session trees cannot be rewritten in place — raises `UnsupportedOperation` instead of being silently skipped.
-
-## MCP server
-
-There is an MCP server for use from pi, Claude, opencode, Cursor, or anything else that speaks MCP.
-
-Tools: `list_agents`, `list_sessions`, `search_sessions`, `export_session`, `extract_concepts`, `copy_concepts`, `get_session_concepts`.
-
-### Quick install (pi)
-
-One command does the whole job — install into an isolated venv (if needed) and register with pi:
-
-```sh
-pipx run 'ctxttools[mcp]' ctools-mcp install
-# or, with uv:
-uv tool run 'ctxttools[mcp]' ctools-mcp install
-```
-
-It detects an existing `uv tool` or `pipx` install of `ctxttools` and uses it instead. Verify with:
-
-```sh
-pi mcp list   # expect: ctools: connected, 7 tools
-```
-
-Then use it inside pi — run `/mcp` to inspect, or just ask the agent (the tools are also reachable through codemode / tool search).
-
-Uninstall with `ctools-mcp uninstall` (removes the pi entry; pass `--all` to also remove Claude Code and opencode entries).
-
-### Other clients
-
-Run `ctools-mcp print-config` to get the JSON snippet for any MCP host, e.g. for opencode (`opencode.json` under `"mcp"`) or Claude (`.mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "ctools": {
-      "command": "python",
-      "args": ["-m", "ctools.ctools_mcp"]
-    }
-  }
-}
-```
-
-(`command` should point at the interpreter of a venv that has `ctxttools[mcp]` installed — `ctools-mcp install` prints the exact one for your machine.)
-
-## Web dashboard
-
-Prefer a mouse to a man page? ctools ships a browser dashboard — a small local
-web server (Python stdlib only, no web dependencies) with the same library
-underneath. Same on macOS, Windows, and Linux:
-
-```sh
-$ ctools-web                 # installed command
-# or, straight from a checkout, no install needed:
-$ python3 ctools/ctools-web.py        # or: python -m ctools.webui
-ctools 0.2.1 dashboard: http://127.0.0.1:8765
-```
-
-Open the URL. The navbar has **Overview**, **Sessions**, and **Concepts**, plus
-a search box (press <b>/</b>) and a power button to stop the server. Clicking a
-session anywhere opens its **Conversation** view:
-
-- **Overview** — every supported agent, installed or not, with session counts
-  and total tokens, and a jump into each agent's sessions.
-- **Search** — `cgrep` in the browser: one box, searches session ids, names,
-  paths <b>and</b> the content of every conversation at once; click a match to
-  open that conversation.
-- **Sessions** — `cdir` for one agent (or all of them): newest, largest, or by
-  token usage, filterable.
-- **Conversation** — `ccat` with the session's messages, token usage, the
-  resume command, concept extraction (`cextract`), a markdown export, and
-  **Copy** — `ccopy` to any other installed agent, which creates a fresh
-  session there (source untouched) and tells you how to resume it.
-
-The server binds to `127.0.0.1` by default, so nothing is exposed to your
-network unless you pass `--host 0.0.0.0`. There is one write operation:
-Copy. Everything else is read-only against the agents' storage.
-
-Stop it with **Ctrl-C**, or with the **power button** (⏻) in the top-right of
-the page — it asks for confirmation, then shuts the server down cleanly.
-
-```sh
-ctools-web --port 9000
-```
-
-## Installation
-
-```sh
+```bash
 pip install ctxttools
 ```
 
-For MCP server support:
+This installs three commands:
 
-```sh
-pip install ctxttools[mcp]
+| Command | Purpose |
+|---|---|
+| `ctools` | The main CLI: agents, find, copy, resume, and more. |
+| `ctools-web` | The dashboard (browser). |
+| `ctools-mcp` | The MCP server for AI agents. |
+
+To install just the MCP server (or the dashboard) without the full CLI:
+
+```bash
+pip install "ctxttools[mcp]"
+# or: pip install "ctxttools[web]"
 ```
 
-## Library
+> **Heads up:** `ctools-mcp` needs `mcp<2` (see
+> [mcp dependency](#mcp-dependency) below).
 
-Works as a Python library too.
+---
 
-```python
-from ctools.agents import REGISTRY, OpencodeAgent, SessionNotFound
-from ctools.lib import get_formatter
-from ctools.cgrep import grep_session
-from ctools.cextract import extract_concepts_from_messages
-from ctools.cdu import count_tokens, get_session_tokens
-from ctools.filterlib import JSONRPCFilter, SystemOneFilter, load_filter
-from ctools.log import configure_logging, get_logger
+## The CLI
+
+### Discover your tools
+
+```bash
+ctools agents            # table of installed agents
+ctools agents --json     # machine-readable
 ```
 
-Everything goes through an agent:
+### Find and continue a session
 
-```python
-from ctools.agents import REGISTRY
+`find` looks for a **pattern** (a literal string, case-insensitive) or a
+**phrase** (`--phrase`, matched fuzzily across word boundaries).
 
-agent = REGISTRY['opencode']
-for session in agent.sessions():
-    print(session.id, session.name, session.size)
-
-for message in agent.messages('ses_abc123'):
-    print(message.role, message.content)
+```bash
+ctools find "bug report"                    # all agents, pattern match
+ctools find "refactor the parser" --phrase  # fuzzy phrase
+ctools find "deploy" --agent claude-code    # one agent only
 ```
 
-Point an agent somewhere else by constructing it with a path:
+Each result shows the agent, a short id, when it ran, and the first matching
+message. To resume it in its own tool:
 
-```python
-from ctools.agents import OpencodeAgent
-
-agent = OpencodeAgent('/backup/opencode')
+```bash
+ctools resume <agent> <session-id>
 ```
 
-## Where to go next
+> **Why this matters:** when you're mid-task in one agent and need to
+> continue in another (e.g. you started in Claude Code but now want to use
+> Pi), `find` + `resume` is how you get back into the same thread.
 
-- **Per-tool reference** — the [Tools](#tools) table above links to a `docs/` page for each command: every flag, output format, and a worked example.
-- **The interchange format** — how a conversation becomes a portable, lossless envelope and back, and why 2N agents compose into N² transfers. See [interchange](docs/interchange.md).
-- **Filtering with decision models** — the full decision-model and JSON-RPC filter configs, with live examples. See [cextract](docs/cextract.md#filters) and [cconnect](docs/cconnect.md#filter-configuration).
-- **Adding an endpoint** — one `Agent` subclass plus a line in `AGENT_CLASSES`. See [Supported endpoints](#supported-endpoints).
+### Copy a session to another tool
 
-## Credits
+```bash
+ctools copy <agent> <session-id> \
+  --to claude-code \
+  --mode copy            # or "move" to also erase the source
+```
 
-ctools was extracted from [Gab n' Go](https://github.com/day50-dev/gabngo). It's named after [GNU mtools](https://www.gnu.org/software/mtools/), which does the same thing for DOS floppies — because your context window is about the size of a DOS-floppy. The flag habits are GNU's too: `--version`, `-1`, `-S`, `-u`, and the rest behave the way you'd expect.
+`copy` writes the session into the destination tool's storage in its native
+format. `move` additionally clears the source (use with care).
+
+### Search across all sessions (bulk)
+
+```bash
+ctools search "fix the flaky test" --agent opencode --context 3
+```
+
+Prints the first matching message per session with N lines of context,
+handy when you're hunting for where a decision was made.
+
+### What else is there
+
+Run `ctools --help` to see the full list (including `tokens`, `export`, and
+`version`).
+
+---
+
+## The web dashboard
+
+```bash
+ctools-web                    # opens at http://127.0.0.1:8799
+ctools-web --port 9000        # a different port
+```
+
+The dashboard is a read-mostly surface over the same data the CLI uses.
+You can:
+
+- Browse and search sessions (the "Conversation" view mirrors the CLI).
+- Copy a session to another tool right from the UI.
+- Export/download a session.
+- Run **concept extraction** on a session (with optional LLM-backed
+  strategies and filters).
+
+It binds to `127.0.0.1` only by default, so it's not exposed to your
+network. Use `--host` to change that deliberately.
+
+---
+
+## Concepts: extract the intent of a session
+
+A raw session is thousands of tokens. **Concepts** distills it into the few
+things that matter for picking it back up: the goal, the constraints, and
+what was decided.
+
+```bash
+ctools concepts <agent> <session-id>
+```
+
+Concepts are extracted with one of three paths, chosen automatically:
+
+1. **Regex (default)**: built-in patterns for goal, decision, constraint,
+   and preference. No setup.
+2. **LLM strategy**: you define a chunking strategy that an LLM applies to
+   the session. Best for richer, contextual extraction.
+3. **Filter**: narrow the regex/LLM output with a rule (drop boilerplate,
+   keep only certain types, etc.).
+
+Strategies and filters are stored as JSON config files that ctools reads at
+runtime. Create them in the dashboard (the **Concepts** tab) or by hand:
+
+```bash
+ctools strategies list
+ctools filters list
+```
+
+The dashboard shows the full extraction pipeline (conversation → extraction
+→ filter → concepts) so you can see exactly what was kept and why.
+
+---
+
+## MCP server
+
+The MCP server exposes the same capabilities to any MCP-capable coding agent
+(Pi, Claude, OpenCode, etc.).
+
+### Install and register with Pi
+
+```bash
+ctools-mcp install
+```
+
+This installs the server (via `uv tool` if available, else `pipx`) and
+registers it in `~/.pi/agent/mcp.json`. Verify with:
+
+```bash
+pi mcp list        # "ctools-mcp … connected"
+```
+
+### Manual registration (any host)
+
+If you'd rather wire it up yourself, `print-config` emits the JSON snippet
+for a given host:
+
+```bash
+ctools-mcp print-config pi
+```
+
+Add that to your host's MCP config (`~/.pi/agent/mcp.json` for Pi). The
+server is started with `python -m ctools.ctools_mcp` from the install
+environment.
+
+### Tools exposed
+
+| Tool | What it does |
+|---|---|
+| `list_agents` | Agents available and whether they're installed. |
+| `list_sessions` | Recent sessions for one agent. |
+| `search_sessions` | Find a session by pattern/phrase. |
+| `export_session` | Get the messages (or export) for a session. |
+| `copy_concepts` | Copy extracted concepts into a destination session. |
+| `get_concepts` | Extract concepts from a session. |
+| `list_strategies` / `list_filters` | Show available LLM/filter configs. |
+
+---
+
+## MCP dependency
+
+`ctools-mcp` pins `mcp>=1.2,<2.0`. The `mcp` package 2.x renamed
+`FastMCP` to `MCPServer`, which breaks the v1 API ctools uses. If a fresh
+install pulls `mcp>=2` and `ctools-mcp` won't start, pin the major version
+(`pip install "mcp<2"`); the released package already does this.
+
+---
+
+## The agents ctools knows about
+
+| Name | Tool | Storage |
+|---|---|---|
+| `pi` | Pi coding agent | JSONL |
+| `claude` | Claude Desktop | JSON |
+| `claude-code` | Claude Code CLI | JSONL |
+| `opencode` | OpenCode CLI | SQLite |
+| `goose` | Goose AI agent | JSONL |
+| `kilo` | Kilo CLI | JSONL |
+| `hermes` | Hermes agent | SQLite |
+
+An agent is "installed" if ctools can find its session directory (or DB
+file). Uninstalled agents are still listed but skipped by `find`/`copy`.
+
+---
+
+## How the data is handled
+
+- **Read-only by default.** `find`, `search`, `list_sessions`, and the
+  dashboard's read paths never modify your session files.
+- **Writes are explicit.** Only `copy`/`move` and `copy_concepts` write, and
+  only to a session you name as the target.
+- **Local only.** The dashboard binds to `127.0.0.1`; the MCP server reads
+  your local session storage. Nothing leaves your machine.
+
+---
+
+## Development
+
+```bash
+git clone https://github.com/day50-dev/ctools
+cd ctools
+python -m venv .venv && . .venv/bin/activate
+pip install -e .
+python -m pytest
+```
+
+The code is deliberately simple: each agent adapter is one file under
+`ctools/`, and the CLI/dashboard/MCP layers are thin over the shared
+`ctools.agents` registry.
+
+---
+
+## License
+
+[MIT](LICENSE)
