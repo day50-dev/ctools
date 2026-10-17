@@ -1248,7 +1248,8 @@ class PiAgent(JsonlAgent):
             if not name:
                 name = (first_user_text or '').strip()
                 if len(name) > 80:
-                    name = name[:80] + '...'
+                    # One-column unicode ellipsis: '…' costs 1 char, not 3.
+                    name = name[:79] + '…'
                 name = name or session_id[:8]
             ctime = parse_timestamp(header_ts)
             try:
@@ -2447,9 +2448,12 @@ class ClineAgent(Agent):
                 created = epoch_ms(ts)
                 if created:
                     ctime = mtime = created
+            name_str = str(name)
+            if len(name_str) > 80:
+                name_str = name_str[:79] + '…'
             sessions.append(Session(
                 id=session_id,
-                name=str(name)[:80],
+                name=name_str,
                 ctime=ctime,
                 mtime=mtime,
                 size=int(_hist_size),

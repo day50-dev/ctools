@@ -15,12 +15,17 @@ Usage:
     cdir -q opencode/       # Quiet: no header/count/hint/source/indent (for scraping)
     cdir claude/            # List sessions for claude
     cdir opencode/*llcat*   # Filter sessions: glob on id, name, or path
+    cdir opencode .         # Sessions relevant to this directory (pwd)
+    cdir opencode ~/day50   # Sessions from ~/day50 or anything under it
+    cdir .                  # Cross-agent: every agent, sessions for this dir
     cdir claude/ -a         # Include subagent sessions (hidden by default)
 """
 
 import argparse
 import fnmatch
 import json
+import os
+import shutil
 import sys
 from datetime import datetime
 from typing import List, Optional, Tuple
@@ -125,6 +130,64 @@ def _matches_pattern(session: Session, pattern: str) -> bool:
             or fnmatch.fnmatch((session.path or "").lower(), p))
 
 
+def _looks_like_path(part: str) -> bool:
+    """Is a session-part token a filesystem path rather than a session id?
+
+    A path is absolute, ~-anchored, rooted at `.` or `..` (including the bare
+    `.`), or carries an inner slash. No agent's session ids look like that,
+    so the two shapes never collide.
+    """
+    return (part.startswith('/') or part.startswith('~')
+            or part.startswith('.') or '/' in part)
+
+
+def _canonical_dir(p: str) -> str:
+    """Canonical form of a directory for comparison: expand ~, make absolute,
+    resolve symlinks. realpath does not require the path to exist, so stale
+    session cwds canonicalize as far as their prefix allows."""
+    try:
+        expanded = os.path.expanduser(p)
+    except RuntimeError:
+        expanded = p
+    try:
+        return os.path.realpath(expanded)
+    except (OSError, ValueError):
+        return os.path.abspath(expanded)
+
+
+def _session_path_matches(session: Session, path_arg: str) -> bool:
+    """Is the session's working directory *relevant* to `path_arg`?
+
+    Relevant means the session ran in the given directory itself or *inside*
+    it: `cdir opencode .` lists the sessions of this tree, not of its
+    ancestors (a session started at `~` is not relevant to `~/day50`).
+    Comparisons are case-insensitive on canonical (symlink-resolved) paths.
+    Glob characters turn the argument into a case-insensitive pattern over
+    the session path.
+    """
+    if not session.path:
+        return False
+    if any(c in path_arg for c in '*?['):
+        pattern = os.path.expanduser(path_arg)
+        if not os.path.isabs(pattern):
+            pattern = os.path.abspath(pattern)
+        haystack = _canonical_dir(session.path)
+        return (fnmatch.fnmatch(haystack.lower(), pattern.lower())
+                or fnmatch.fnmatch(session.path.lower(), pattern.lower()))
+    # Compare on lowered canonical keys: matching is case-insensitive (the
+    # keys are never used to touch the filesystem).
+    target = _canonical_dir(path_arg).lower()
+    session_dir = _canonical_dir(session.path).lower()
+    if session_dir == target:
+        return True
+    # The query at the filesystem root: every session dir is under it.
+    if target == os.sep:
+        return True
+    # Session dir inside the query dir. A session started *above* the query
+    # dir is not relevant to it — `cdir pi ..` finds those instead.
+    return (session_dir + os.sep).startswith(target + os.sep)
+
+
 def _resolve_fields(output: Optional[str]) -> Optional[List[str]]:
     """Resolve a -o value into a field list, handling 'help' and errors."""
     if not output:
@@ -154,23 +217,85 @@ def _render_table(body_rows: list, fields: List[str], color: bool = False,
     if not body_rows:
         return
 
+    fields = list(fields)  # _fit_to_terminal may drop columns; never mutate
+                           # the caller's list (it can be the LONG_FIELDS global)
+
     widths = {f: len(FIELD_LABELS[f]) for f in fields}
     for values in body_rows:
         for f in fields:
             widths[f] = max(widths[f], len(values[f]))
+    _fit_to_terminal(widths, fields, indent)
 
     pad = "  " if indent else ""
 
     def fmt(f: str, v: str) -> str:
+        w = widths[f]
+        if len(v) > w:
+            v = v[:w - 1] + '…' if w > 1 else v[:1]
         if f in RIGHT_ALIGNED:
-            return f"{v:>{widths[f]}}"
-        return f"{v:<{widths[f]}}"
+            return f"{v:>{w}}"
+        return f"{v:<{w}}"
 
     if header:
         print(pad + "  ".join(fmt(f, FIELD_LABELS[f]) for f in fields))
     for values in body_rows:
         cells = [fmt(f, values[f]) for f in fields]
         print(pad + "  ".join(cells))
+
+
+def _term_width(default: int = 10**9) -> int:
+    """Column count of the terminal attached to stdout.
+
+    shutil.get_terminal_size is the cross-platform way: COLUMNS env var,
+    then TIOCGWINSZ on POSIX / the console buffer on Windows, then the
+    fallback. Non-terminal stdout (pipes, files, pagers like `less`) has no
+    width to fit to: the huge default means "never truncate".
+    """
+    if not sys.stdout.isatty():
+        return default
+    return shutil.get_terminal_size((default, 24)).columns
+
+
+def _fit_to_terminal(widths: dict, fields: List[str], indent: bool) -> None:
+    """Squeeze then drop columns so the table fits the terminal.
+
+    The free-text columns absorb the squeeze with ellipses — PATH first (the
+    redundant column), then NAME, which keeps at least its label. A column
+    that would be squeezed below ~8 chars conveys nothing, so it is dropped
+    outright and its space goes to the other flex column. IDs, dates, sizes
+    and counts are never truncated; a terminal narrower than the fixed
+    columns simply overflows. No-op when stdout is not a TTY or the table
+    fits. Mutates `widths` and `fields` (call with a copy).
+    """
+    useful_min = 8  # narrower than this, a column is noise, not signal
+    if 'name' not in fields and 'path' not in fields:
+        return
+    avail = _term_width()
+
+    def total() -> int:
+        return sum(widths[f] for f in fields) + 2 * (len(fields) - 1) \
+            + (2 if indent else 0)
+
+    if total() <= avail:
+        return
+    # Squeeze order: PATH (floor 1), then NAME (floor: its label).
+    for f in ('path', 'name'):
+        if f not in fields:
+            continue
+        if total() <= avail:
+            break
+        room = avail - (total() - widths[f])
+        floor = len(FIELD_LABELS[f]) if f == 'name' else 1
+        other_flex = [x for x in ('path', 'name') if x in fields and x != f]
+        if room < useful_min and other_flex:
+            fields.remove(f)  # give the space to the other flex column
+            continue
+        if widths[f] > max(room, floor):
+            widths[f] = max(room, floor)
+    # Still too wide: drop PATH (the least useful column; the path is the
+    # filter, and the rows are already sorted and ID-addressed).
+    if 'path' in fields and total() > avail:
+        fields.remove('path')
 
 
 _SORT_ALIASES = {
@@ -319,23 +444,35 @@ def _list_agents(formatter) -> None:
 
     # The registry key, not the display name: this column is what the user
     # types back at us as `cdir <agent>/`, so it has to be shell-safe.
-    rows = [(agent.name, agent.description, str(agent.base_path),
-             agent.files_read or agent.storage_format, agent.exists())
-            for agent in AGENTS.values()]
-    found = [r for r in rows if r[4]]
-    missing = [r for r in rows if not r[4]]
+    rows = [(agent.name, agent.description,
+             f"{agent.base_path}/{agent.files_read or agent.storage_format}",
+             agent.exists()) for agent in AGENTS.values()]
     if not rows:
         return
 
     w_name = max(len(r[0]) for r in rows)
     w_desc = max(len(r[1]) for r in rows)
+    w_tail = max(len(r[2]) for r in rows)
 
-    for label, group in (("Found:", found), ("Not Found:", missing)):
+    # Fit the terminal like the session tables: squeeze the path column,
+    # drop it if it would be too narrow to read. Non-TTY never truncates.
+    base = 2 + w_name + 2 + w_desc + 2  # indent + name + gap + desc + gap
+    if base + w_tail > _term_width():
+        room = _term_width() - base
+        w_tail = room if room >= 8 else None  # < 8 chars: noise, drop it
+
+    for label, group in (("Found:", [r for r in rows if r[3]]),
+                         ("Not Found:", [r for r in rows if not r[3]])):
         if not group:
             continue
         print(label)
-        for name, desc, path, files_read, _ in group:
-            print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {path}/{files_read}")
+        for name, desc, tail, _ in group:
+            line = f"  {name:<{w_name}}  {desc:<{w_desc}}"
+            if w_tail is not None:
+                if w_tail < len(tail):
+                    tail = tail[:w_tail - 1] + '…'
+                line += f"  {tail}"
+            print(line)
 
 
 def _remote_agents_installed(remote: Remote) -> list:
@@ -544,13 +681,21 @@ def _show_agent_glob_sessions(refs: List[str], sort: str, reverse: bool,
     rows: List[Tuple[str, Session]] = []
     for ref in refs:
         agent_pat, session_pat = parse_ref(ref)
+        _is_glob = bool(session_pat) and any(c in session_pat for c in "*?[")
+        _is_path = (bool(session_pat) and not _is_glob
+                    and _looks_like_path(session_pat))
         for name, agent in AGENTS.items():
             if not fnmatch.fnmatch(name, agent_pat) or not agent.exists():
                 continue
             with reporting():
-                if session_pat and any(c in session_pat for c in "*?["):
+                if _is_glob:
                     sessions = [s for s in agent.sessions()
                                 if _matches_pattern(s, session_pat)]
+                    if not include_subagents:
+                        sessions = [s for s in sessions if not s.parent_id]
+                elif _is_path:
+                    sessions = [s for s in agent.sessions()
+                                if _session_path_matches(s, session_pat)]
                     if not include_subagents:
                         sessions = [s for s in sessions if not s.parent_id]
                 elif session_pat:
@@ -605,9 +750,13 @@ def _handle_one_ref(path: str, sort: str, reverse: bool, formatter, fields,
     agent = require_installed(agent_name)
 
     # Glob pattern in the session part: filter sessions by id, name, or path.
+    # A session part that looks like a filesystem path (no globs of its own)
+    # filters by working directory instead: cdir opencode . lists the
+    # sessions relevant to that directory.
     _is_glob = any(c in (session_id or "") for c in "*?[")
+    _is_path = bool(session_id) and not _is_glob and _looks_like_path(session_id)
 
-    if session_id and not _is_glob:
+    if session_id and not _is_glob and not _is_path:
         _show_specific_sessions([path], sort, reverse, formatter, fields,
                                 long_format, one_line, color, suppress)
         return
@@ -617,6 +766,9 @@ def _handle_one_ref(path: str, sort: str, reverse: bool, formatter, fields,
 
     if session_id and _is_glob:
         sessions = [s for s in sessions if _matches_pattern(s, session_id)]
+    elif _is_path:
+        sessions = [s for s in sessions
+                    if _session_path_matches(s, session_id)]
 
     if not sessions:
         if session_id:
@@ -640,22 +792,82 @@ def _handle_one_ref(path: str, sort: str, reverse: bool, formatter, fields,
                     suppress=suppress)
 
 
+def _merge_path_args(paths: List[str]) -> List[str]:
+    """Fold `cdir agent .` (two words) into the single ref `agent/.`.
+
+    A bare agent name or agent glob (no session part) immediately followed by
+    a token that looks like a filesystem path is merged: `opencode .` →
+    `opencode/.`, `* .` → `*/.`, `p* .` → `p*/.`. The path is just a filter
+    on the listing, so it applies to any agent selection. Anything with a
+    session part, or a remote ref, passes through untouched.
+    """
+    out: List[str] = []
+    i = 0
+    while i < len(paths):
+        ref = paths[i]
+        nxt = paths[i + 1] if i + 1 < len(paths) else None
+        bare = ref.lstrip('@').rstrip('/')
+        if (nxt is not None and not ref.startswith('ssh://')
+                and '/' not in bare
+                and _looks_like_path(nxt)):
+            out.append(f'{bare}/{nxt}')
+            i += 2
+            continue
+        out.append(ref)
+        i += 1
+    return out
+
+
+def _bare_path_refs(paths: List[str]) -> List[str]:
+    """A bare path argument (no agent part) becomes a cross-agent ref.
+
+    `cdir .` / `cdir ~/day50` / `cdir /home/user/proj` behave like `cdir
+    '*/.'` / `cdir '*/~/day50'` / `cdir '*/home/user/proj'`: every installed
+    agent is searched for sessions relevant to that directory, and rows carry
+    the agent prefix. A ref whose first component is a known agent is an
+    agent ref, never a path (`pi/...` stays `pi/...` even though it contains
+    a slash).
+    """
+    out: List[str] = []
+    for ref in paths:
+        if ref.startswith('ssh://'):
+            out.append(ref)
+            continue
+        r = ref.lstrip('@')
+        first = r.lstrip('/').split('/', 1)[0]
+        # A glob in the first component (`*/*x*`, `p*/...`) is a cross-agent
+        # agent glob, not a path; known agent names are agent refs too.
+        if (_looks_like_path(r) and first not in AGENTS
+                and not any(c in first for c in '*?[')):
+            out.append(f'*/{r}')
+            continue
+        out.append(ref)
+    return out
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cdir",
         description=("List agents and their conversation sessions.\n\n"
-                     "Accepts one or more `agent` or `agent/session_id` "
-                     "references. With no arguments, lists all known agents. "
-                     "With an agent name, lists sessions for that agent. With "
-                     "agent/session_id, shows that session's row (contents live "
-                     "in ccat). With -R and no arguments, recurses all agents. "
-                     "Sort flags are ls-style: -t by time, -S by size, -u by "
-                     "creation time; when several are given the last one wins "
-                     "(-tS == -S). Subagent sessions are hidden by default "
-                     "(they can't be resumed); -a/--all includes them."),
+                     "Accepts one or more `agent`, `agent/session_id`, or "
+                     "`agent/<path>` references. With no arguments, lists all "
+                     "known agents. With an agent name, lists sessions for "
+                     "that agent. With agent/session_id, shows that session's "
+                     "row (contents live in ccat). The session part may also be "
+                     "a directory: `cdir opencode .` (or `cdir opencode/.`) "
+                     "lists the sessions relevant to that directory — the ones "
+                     "that ran there or in a subdirectory of it — and a bare "
+                     "path (`cdir .`) does that across every agent. With "
+                     "-R and no arguments, recurses all agents. Sort flags are "
+                     "ls-style: -t by time, -S by size, -u by creation time; "
+                     "when several are given the last one wins (-tS == -S). "
+                     "Subagent sessions are hidden by default (they can't be "
+                     "resumed); -a/--all includes them."),
     )
     parser.add_argument("paths", nargs="*",
-                        help="One or more agent or agent/session_id references")
+                        help=("One or more agent, agent/session_id, or "
+                              "agent/<path> references (a path filters "
+                              "sessions by working directory)"))
     parser.add_argument("-t", "--time", action="store_true",
                         help="Sort by modification time")
     parser.add_argument("-S", "--size", action="store_true", help="Sort by size")
@@ -737,10 +949,21 @@ def main(argv=None) -> int:
 
     def _is_exact(ref: str) -> bool:
         _, sid = parse_ref(ref)
-        return bool(sid) and not any(c in sid for c in "*?[")
+        if not sid or any(c in sid for c in "*?["):
+            return False
+        return not _looks_like_path(sid)
 
     # Remote references (ssh://...) are handled before the local agent glob /
     # exact split, which assumes an `agent[/session]` local shape.
+    # `cdir opencode .` (two words) is the same listing as `cdir opencode/.`:
+    # fold a bare agent name followed by a path-looking token into one ref so
+    # the path filter rides the usual `agent/session` machinery.
+    paths = _merge_path_args(paths)
+
+    # A bare path argument (no agent part) filters every installed agent:
+    # `cdir .` is `cdir '*/.'` — every agent, rows agent-prefixed.
+    paths = _bare_path_refs(paths)
+
     remotes = [p for p in paths if p.startswith("ssh://")]
     local = [p for p in paths if not p.startswith("ssh://")]
 

@@ -256,7 +256,7 @@ def main(argv=None) -> int:
         console.print(f"\n[yellow]Will remove {len(doomed)} message(s):[/yellow]")
         for idx in sorted(doomed):
             preview = messages[idx].content[:100].replace("\n", " ")
-            console.print(f"  {idx}: [{messages[idx].role}] {preview}...")
+            console.print(f"  {idx}: [{messages[idx].role}] {preview}…")
 
         if not Confirm.ask("\nProceed with removal?"):
             console.print("[dim]Aborted[/dim]")

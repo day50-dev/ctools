@@ -35,6 +35,14 @@ A single-agent listing ends with a resume hint \(em the command to pick a
 session back up under that agent, plus a pointer to\ \fBccat\fP for reading it
 (e.g.\ \fIResume a session with: opencode -s <id>\fP). The hint follows your
 per-machine overrides (see the FILES section). Machine output (\fB\-1\fP,\n\fB\-f\fP) and the cross-agent listings (\fB\-R\fP, globs) carry no hint.
+.PP
+On a terminal, the table is fitted to the terminal width
+(via \fIshutil.get_terminal_size()\fP: the \fBCOLUMNS\fP environment variable, then
+the platform query, on POSIX and Windows alike). A too-wide table first
+squeezes the free-text columns with an ellipsis (\fBPATH\fP, then \fBNAME\fR);
+a column that would shrink below about 8 characters is dropped outright
+instead. IDs, dates, sizes and counts are never truncated. Piped output is
+untouched: \fBcdir | less\fR and \fBcdir > file\fR always get the full table.
 .SH OPTIONS
 Sort flags follow
 .B ls
@@ -175,7 +183,7 @@ Print version information and exit.
 .SH ARGUMENTS
 .TP
 .I path
-Agent name or agent/session_id path.
+Agent name, agent/session_id, or agent/<path> path.
 Without argument, lists all known agents.
 With agent name (e.g., \fBopencode/\fR), lists sessions.
 With agent/session_id (e.g., \fBopencode/ses_abc123\fR), lists that session's row.
@@ -184,6 +192,11 @@ filters sessions instead: the pattern is matched, case-insensitively,
 against the session id, name (one-line description), and working directory, and
 sessions matching any are listed.
 .PP
+The session part may also be a \fIdirectory\fR (\fB/...\fR, \fB~/...\fR,
+or \fB.\fR): \fBcdir opencode .\fR lists the sessions \fIrelevant to\fR that
+directory (see \fBPATH FILTERING\fR). A bare path with no agent part
+(\fBcdir .\fR) does the same across every agent.
+.PP
 Multiple \fIpath\fR arguments are listed as rows (ls \fBfile1 file2\fR
 semantics), sorted like a normal listing. Globs, bare agent names, and
 exact ids may be mixed. A missing id is reported and skipped. This makes cdir the
@@ -191,6 +204,47 @@ end of a \fBcgrep -l | xargs cdir\fR pipeline.
 .PP
 A reference may instead address another host: \fBssh://[user@]host[:port][/agent]\fR
 (see \fBREMOTE HOSTS\fR).
+.SH "PATH FILTERING"
+The session part of a reference may be a \fIdirectory\fR instead of a session
+id or glob: \fBcdir opencode .\fR (two words) or \fBcdir opencode/.\fR (one
+ref) lists the sessions \fIrelevant to\fR that directory \(em the sessions
+\fIof that tree\fR. A session is relevant when its working directory is the
+given directory itself or is \fIunder\fR it: \fBcdir opencode .\fR run in a
+repo finds sessions started in the repo and in its subdirectories, and a
+session started \fIabove\fR the query directory is not relevant to it (so
+sessions started at \fB~\fR do not pollute the listing from anywhere under
+\fB~\fR; \fBcdir opencode ..\fR reaches the project-root session from a
+subdirectory). Comparisons are on canonical paths (symlinks resolved,
+\fB~\fR expanded, case-insensitive). Globs are matched as a pattern over the working directory
+(\fBcdir opencode /home/user/*\fR).
+.PP
+.RS
+.nf
+$ cdir opencode .
+  Source: /home/user/.local/share/opencode/opencode.db
+
+  ID            NAME
+  ses_abc123    Python Help
+
+  1 session(s)
+
+$ cdir .                     # cross-agent, rows agent-prefixed
+  ID                              NAME
+  opencode/ses_abc123             Python Help
+  pi/01a115c5-85e9-7548-9799-...  look at session.json we need to pick up this task
+
+  2 session(s)
+.fi
+.RE
+.PP
+The path is simply a filter on the listing, so it applies to any agent
+selection: \fBcdir '*' .\fR filters the cross-agent listing, and
+\fBcdir 'p*' .\fR filters the pi-glob listing the same way.
+.PP
+A bare path (no agent part, e.g. \fBcdir .\fR or \fBcdir ~/day50\fR) is a
+cross-agent listing \(em \fBcdir '*/.'\fR \(em with rows prefixed by agent name
+and no resume hint. All other flags compose as usual (\fB\-1\fR, \fB\-l\fR,
+\fB\-o\fR, \fB\-S\fR, \fB\-q\fR, \fB\-a\fR).
 .SH FILTERING
 Put a glob in the session part to filter sessions by id, name, or working
 directory (any match is shown, case-insensitive):
@@ -435,6 +489,7 @@ and
 .
 Read/export-only (Gateway-owned store).
 .SH SEE ALSO
+.BR ccat (1),
 .BR ccopy (1),
 .BR cextract (1),
 .BR cgrep (1),

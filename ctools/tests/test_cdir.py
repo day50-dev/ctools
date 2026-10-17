@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import pytest
+import ctools.cdir as cdir
 from ctools.testing import Runner
 from datetime import datetime
 from ctools.cdir import app
@@ -1806,6 +1807,403 @@ def test_cli_goose_lists(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert '20260101_1' in result.stdout
     assert 'Monitor Bug' in result.stdout
+
+
+# --- Path filtering (cdir agent <path>) ---
+
+def _s(id, name, path):
+    return Session(id=id, name=name, ctime=None, mtime=None, size=0, path=path)
+
+
+def test_session_path_matches_exact():
+    s = _s('a', 'A', '/home/user/project')
+    assert cdir._session_path_matches(s, '/home/user/project')
+    assert cdir._session_path_matches(s, '/home/user/project/')
+
+
+def test_session_path_matches_descendant():
+    """A session in a subdirectory of the query dir is relevant."""
+    s = _s('a', 'A', '/home/user/project/src')
+    assert cdir._session_path_matches(s, '/home/user/project')
+
+
+def test_session_path_matches_ancestor_not_relevant():
+    """A session started ABOVE the query dir is not relevant to it: otherwise
+    every session ever started at ~ would show up in `cdir opencode .` from
+    anywhere under ~."""
+    # A session ABOVE the query dir is not relevant to it.
+    assert not cdir._session_path_matches(_s('a', 'A', '/home/user'),
+                                          '/home/user/project')
+    assert not cdir._session_path_matches(_s('h', 'H', '/home/chris'),
+                                          '/home/chris/day50/ctools')
+    # A query at the session's own level or above is fine (descendant case).
+    assert cdir._session_path_matches(_s('b', 'B', '/home/user/project'),
+                                      '/home/user')
+
+
+def test_session_path_matches_no_prefix_collision():
+    """/project2 is not under /project: no string-prefix false positives."""
+    s = _s('a', 'A', '/home/user/project')
+    assert not cdir._session_path_matches(s, '/home/user/project2')
+    assert not cdir._session_path_matches(s, '/home/other/project')
+
+
+def test_session_path_matches_case_insensitive():
+    s = _s('a', 'A', '/home/user/Project')
+    assert cdir._session_path_matches(s, '/home/user/project')
+
+
+def test_session_path_matches_none_path():
+    """A session with no recorded working directory matches nothing."""
+    s = _s('a', 'A', None)
+    assert not cdir._session_path_matches(s, '/home/user')
+
+
+def test_session_path_matches_glob():
+    """Glob characters turn the path arg into a pattern over the session dir."""
+    s = _s('a', 'A', '/home/user/project')
+    assert cdir._session_path_matches(s, '/home/user/*')
+    assert not cdir._session_path_matches(s, '/home/other/*')
+
+
+def test_session_path_matches_root():
+    """A query at / matches every session (everything is under /); a session
+    at / does not match a deeper query (that would be the ancestor case)."""
+    assert cdir._session_path_matches(_s('a', 'A', '/home/user'), '/')
+    assert not cdir._session_path_matches(_s('b', 'B', '/'), '/home/user')
+
+
+def test_session_path_matches_tilde(tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    s = _s('a', 'A', str(tmp_path))
+    assert cdir._session_path_matches(s, '~')
+
+
+def _make_opencode_db_in(tmp_path, rows):
+    """opencode.db from (id, title, directory) rows in one real directory."""
+    db_path = tmp_path / 'opencode.db'
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE session (
+            id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, title TEXT,
+            time_created INTEGER, time_updated INTEGER,
+            model TEXT, tokens_input INTEGER, tokens_output INTEGER
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE message (
+            id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER,
+            data TEXT
+        )
+    ''')
+    for i, (sid, title, directory) in enumerate(rows):
+        cursor.execute(
+            'INSERT INTO session (id, title, directory, time_created, time_updated) '
+            'VALUES (?, ?, ?, ?, ?)',
+            (sid, title, directory, 1700000000000 + i, 1700000000000 + i))
+        cursor.execute(
+            'INSERT INTO message (id, session_id, time_created, data) '
+            'VALUES (?, ?, ?, ?)',
+            (f'm_{sid}', sid, 1700000000000,
+             '{"role":"user","content":"hi"}'))
+    conn.commit()
+    conn.close()
+
+
+def test_cli_path_arg_lists_relevant_sessions(tmp_path):
+    """cdir opencode <path>: only the session that ran in that directory."""
+    _make_opencode_db_in(tmp_path, [
+        ('ses_here', 'Here', str(tmp_path)),
+        ('ses_other', 'Other', '/home/user/elsewhere'),
+    ])
+    result = _run_opencode_cli(tmp_path, ['opencode', str(tmp_path)])
+    assert result.exit_code == 0
+    assert 'ses_here' in result.stdout
+    assert 'ses_other' not in result.stdout
+
+
+def test_cli_path_dot_two_word_form(tmp_path, monkeypatch):
+    """cdir opencode . (two words) is the same listing as cdir opencode/."""
+    _make_opencode_db_in(tmp_path, [
+        ('ses_here', 'Here', str(tmp_path)),
+        ('ses_elsewhere', 'Elsewhere', str(tmp_path) + '-elsewhere'),
+    ])
+    monkeypatch.chdir(tmp_path)
+    two_word = _run_opencode_cli(tmp_path, ['opencode', '.'])
+    one_ref = _run_opencode_cli(tmp_path, ['opencode/.'])
+    assert two_word.exit_code == 0
+    assert 'ses_here' in two_word.stdout
+    assert 'ses_elsewhere' not in two_word.stdout
+    assert two_word.stdout == one_ref.stdout
+
+
+def test_cli_path_dot_includes_subdirectories(tmp_path, monkeypatch):
+    """A session started in a subdirectory of the query dir is relevant too."""
+    _make_opencode_db_in(tmp_path, [
+        ('ses_root', 'Root', str(tmp_path)),
+        ('ses_sub', 'Sub', str(tmp_path / 'packages')),
+    ])
+    monkeypatch.chdir(tmp_path)
+    result = _run_opencode_cli(tmp_path, ['opencode', '.'])
+    assert result.exit_code == 0
+    assert 'ses_root' in result.stdout
+    assert 'ses_sub' in result.stdout
+
+
+def test_cli_path_from_subdirectory_scopes_to_subdirectory(tmp_path, monkeypatch):
+    """From a subdirectory, cdir opencode . lists sessions of THAT directory,
+    not of the project root above it; `..` reaches the root sessions."""
+    _make_opencode_db_in(tmp_path, [
+        ('ses_root', 'Root', str(tmp_path)),
+        ('ses_deep', 'Deep', str(tmp_path / 'sub' / 'deep')),
+    ])
+    (tmp_path / 'sub' / 'deep').mkdir(parents=True)
+    monkeypatch.chdir(tmp_path / 'sub' / 'deep')
+    result = _run_opencode_cli(tmp_path, ['opencode', '.'])
+    assert result.exit_code == 0
+    assert 'ses_deep' in result.stdout
+    assert 'ses_root' not in result.stdout
+
+    result_up = _run_opencode_cli(tmp_path, ['opencode', '../..'])
+    assert 'ses_deep' in result_up.stdout
+    assert 'ses_root' in result_up.stdout
+
+
+def test_cli_path_home_sessions_do_not_leak_into_project_listing(tmp_path, monkeypatch):
+    """Regression (2026-10-17): `cdir . -l` from ~/day50/ctools listed every
+    session ever started at ~ (goose's home-dir chats and friends) because
+    the ancestor direction treated ~ as relevant to everything under it. A
+    project's listing must be the project's sessions, not its home's."""
+    home = tmp_path / 'home'
+    project = home / 'day50' / 'ctools'
+    project.mkdir(parents=True)
+    _make_opencode_db_in(tmp_path, [
+        ('ses_home_chat', 'New Chat', str(home)),
+        ('ses_disk_space', 'look at this computer disk space', str(home)),
+        ('ses_project', 'ctools work', str(project)),
+    ])
+    monkeypatch.chdir(project)
+    result = _run_opencode_cli(tmp_path, ['opencode', '.'])
+    assert result.exit_code == 0
+    assert 'ses_project' in result.stdout
+    # the home-directory sessions are NOT relevant to the project dir
+    assert 'ses_home_chat' not in result.stdout
+    assert 'ses_disk_space' not in result.stdout
+
+
+def test_cli_path_descendant_matches(tmp_path):
+    """A path above the session's directory matches (descendant session)."""
+    _make_opencode_db_in(tmp_path, [('ses_sub', 'Sub', str(tmp_path / 'sub'))])
+    result = _run_opencode_cli(tmp_path, ['opencode', str(tmp_path)])
+    assert result.exit_code == 0
+    assert 'ses_sub' in result.stdout
+
+
+def test_cli_path_no_match(tmp_path):
+    _make_opencode_db_in(tmp_path, [('ses_here', 'Here', str(tmp_path))])
+    result = _run_opencode_cli(tmp_path, ['opencode', '/home/user/nowhere'])
+    assert result.exit_code == 0
+    assert 'No sessions matching' in result.stdout
+
+
+def test_cli_path_tilde_expands(tmp_path, monkeypatch):
+    """~ in the path argument is expanded against $HOME."""
+    _make_opencode_db_in(tmp_path, [('ses_home', 'Home', str(tmp_path))])
+    monkeypatch.setenv('HOME', str(tmp_path))
+    result = _run_opencode_cli(tmp_path, ['opencode', '~'])
+    assert result.exit_code == 0
+    assert 'ses_home' in result.stdout
+
+
+def test_fit_to_terminal_shrinks_path_first(monkeypatch):
+    """A table wider than the terminal: PATH absorbs the squeeze, NAME keeps
+    its width, fixed columns are untouched."""
+    monkeypatch.setattr(cdir, '_term_width', lambda default=200: 100)
+    widths = {'id': 10, 'name': 30, 'mtime': 16, 'size': 5, 'msgs': 4, 'path': 40}
+    fields = ['id', 'name', 'mtime', 'size', 'msgs', 'path']
+    cdir._fit_to_terminal(widths, fields, True)
+    # fixed 35 + gaps 12 = 47; room = 53; flex was 70 -> path = 53 - 30
+    assert widths['name'] == 30
+    assert widths['path'] == 23
+    assert widths['id'] == 10 and widths['mtime'] == 16
+
+
+def test_fit_to_terminal_drops_path_when_squeeze_insufficient(monkeypatch):
+    """Squeezing alone cannot fit the table: PATH is dropped outright, NAME
+    keeps its label floor."""
+    monkeypatch.setattr(cdir, '_term_width', lambda default=200: 70)
+    widths = {'id': 36, 'name': 10, 'mtime': 16, 'size': 8, 'msgs': 4, 'path': 19}
+    fields = ['id', 'name', 'mtime', 'size', 'msgs', 'path']
+    cdir._fit_to_terminal(widths, fields, True)
+    assert 'path' not in fields
+    assert widths['name'] == 4  # 'NAME' label floor
+    assert 'id' in fields and 'name' in fields
+
+
+def test_fit_to_terminal_unchanged_when_fits(monkeypatch):
+    monkeypatch.setattr(cdir, '_term_width', lambda default=200: 200)
+    widths = {'id': 10, 'name': 12}
+    cdir._fit_to_terminal(widths, ['id', 'name'], True)
+    assert widths == {'id': 10, 'name': 12}
+
+
+def test_cli_table_fits_narrow_terminal(tmp_path, monkeypatch):
+    """A wide -l listing fits a 60-column terminal: PATH is dropped (it would
+    be too narrow to read), NAME stays intact, and no row wraps."""
+    _make_opencode_db_in(tmp_path, [
+        ('ses_abc123', 'Python Help', '/home/user/llcat'),
+    ])
+    monkeypatch.setattr(cdir, '_term_width', lambda default=200: 60)
+    result = _run_opencode_cli(tmp_path, ['opencode', '/home/user/llcat', '-l'])
+    assert result.exit_code == 0
+    assert 'ses_abc123' in result.stdout
+    assert 'Python Help' in result.stdout  # NAME keeps its width
+    lines = result.stdout.splitlines()
+    # Table rows only: from the ID header to (not including) the count line.
+    start = next(i for i, l in enumerate(lines) if l.startswith('  ID'))
+    end = next(i for i, l in enumerate(lines) if 'session(s)' in l)
+    header = lines[start]
+    assert 'PATH' not in header  # dropped, not squeezed to noise
+    for line in lines[start:end]:
+        assert len(line) <= 60, line
+
+
+def test_cli_table_ellipsizes_name_when_only_flex(tmp_path, monkeypatch):
+    """With only NAME as a flex column (default fields), NAME is ellipsized
+    to fit the terminal rather than dropped."""
+    _make_opencode_db_in(tmp_path, [
+        ('ses_abc123', 'A rather long session name for truncation testing',
+         '/home/user/llcat'),
+    ])
+    monkeypatch.setattr(cdir, '_term_width', lambda default=200: 60)
+    result = _run_opencode_cli(tmp_path, ['opencode', '/home/user/llcat'])
+    assert result.exit_code == 0
+    assert '…' in result.stdout
+    lines = result.stdout.splitlines()
+    start = next(i for i, l in enumerate(lines) if l.startswith('  ID'))
+    end = next(i for i, l in enumerate(lines) if 'session(s)' in l)
+    for line in lines[start:end]:
+        assert len(line) <= 60, line
+
+
+def test_non_tty_never_truncates(tmp_path):
+    """Non-terminal stdout (pipe, file, pager): the table is content-sized,
+    never squeezed, no ellipses — the pager wraps and scrolls itself."""
+    _make_opencode_db_in(tmp_path, [
+        ('ses_abc123', 'A' * 80, '/home/user/llcat'),
+    ])
+    result = _run_opencode_cli(tmp_path, ['opencode', '/home/user/llcat', '-l'])
+    assert result.exit_code == 0
+    assert 'A' * 80 in result.stdout  # full name, no squeeze
+    assert '…' not in result.stdout
+
+
+def test_agent_listing_fits_narrow_terminal(monkeypatch):
+    """The agent registry table squeezes its path column on a narrow
+    terminal, and drops it when it would be too narrow to read."""
+    monkeypatch.setattr(cdir, '_term_width', lambda default=10**9: 70)
+    squeezed = runner.invoke(app, [])
+    assert squeezed.exit_code == 0
+    for line in squeezed.stdout.splitlines():
+        assert len(line) <= 70, line
+
+    monkeypatch.setattr(cdir, '_term_width', lambda default=10**9: 60)
+    dropped = runner.invoke(app, [])
+    assert dropped.exit_code == 0
+    for line in dropped.stdout.splitlines():
+        assert len(line) <= 60, line
+    # 60 cols: name+desc (58) leaves < 8 for the path -> dropped outright
+    assert '/home/' not in dropped.stdout
+
+
+def test_pi_name_truncated_with_one_column_ellipsis(tmp_path):
+    """A pi name from user text over 80 chars is cut with '…' (1 column),
+    not '...' (3), so the table loses fewer columns."""
+    sess_dir = tmp_path / 'sessions' / '--home-user-project--'
+    sess_dir.mkdir(parents=True)
+    long_text = 'a' * 120
+    lines = [
+        {"type": "session", "version": 3,
+         "id": "eeeeeeee-0000-1111-2222-333333333333",
+         "timestamp": "2026-08-08T22:29:28.354Z",
+         "cwd": "/home/user/project"},
+        {"type": "message", "id": "m1", "parentId": "s",
+         "timestamp": "2026-08-08T22:29:29Z",
+         "message": {"role": "user", "content": long_text}},
+    ]
+    (sess_dir / '2026-08-08T22-29-28-354Z_eeeeeeee-0000-1111-2222-333333333333.jsonl')\
+        .write_text('\n'.join(json.dumps(l) for l in lines) + '\n')
+    session = _pi_agent(tmp_path).sessions()[0]
+    assert len(session.name) == 80
+    assert session.name.endswith('…')
+    assert not session.name.endswith('...')
+
+
+def test_merge_path_args_star_then_path():
+    """`* .` / `p* .` merge: the path is a filter on any agent selection."""
+    assert cdir._merge_path_args(['*', '.']) == ['*/.']
+    assert cdir._merge_path_args(['p*', '.']) == ['p*/.']
+    assert cdir._merge_path_args(['*']) == ['*']
+
+
+def test_cli_path_star_two_word_merges(tmp_path):
+    """`cdir '*' <path>` (two words) merges into the cross-agent ref `* <path>`:
+    the path is a filter on the agent-glob listing, same result as the bare
+    path form."""
+    _make_opencode_db_glob(tmp_path)   # project, llcat, other dirs
+    _make_pi_session_for_glob(tmp_path)  # pi: cwd /home/user/project
+    star = _run_two_agent_cli(tmp_path, ['*', '/home/user/project'])
+    bare = _run_two_agent_cli(tmp_path, ['/home/user/project'])
+    assert star.exit_code == 0
+    assert 'ses_abc123' in star.stdout
+    assert '019fe37e-d6a2-7344-8a05-5b04d8d40161' in star.stdout
+    assert 'ses_llcat1' not in star.stdout   # /home/user/llcat: not relevant
+    assert 'ses_def456' not in star.stdout   # /home/user/other: not relevant
+    assert star.stdout == bare.stdout
+
+
+def test_cli_path_bare_cross_agent(tmp_path):
+    """A bare path (no agent part) searches every agent, rows prefixed."""
+    _make_opencode_db_glob(tmp_path)   # opencode: ses_abc123 in /home/user/project
+    _make_pi_session_for_glob(tmp_path)  # pi: cwd /home/user/project
+    result = _run_two_agent_cli(tmp_path, ['/home/user/project'])
+    assert result.exit_code == 0
+    assert 'opencode/ses_abc123' in result.stdout
+    assert 'pi/019fe37e-d6a2-7344-8a05-5b04d8d40161' in result.stdout
+    assert 'ses_llcat1' not in result.stdout
+    assert 'ses_def456' not in result.stdout
+
+
+def test_cli_path_glob(tmp_path):
+    """A glob in the path argument filters like a pattern over the dir."""
+    _make_opencode_db_glob(tmp_path)
+    result = _run_opencode_cli(tmp_path, ['opencode', '/home/user/*'])
+    assert result.exit_code == 0
+    assert 'ses_llcat1' in result.stdout
+    assert 'ses_abc123' in result.stdout
+    assert 'ses_def456' in result.stdout
+
+
+def test_cli_path_one_line(tmp_path, monkeypatch):
+    """-1 with a path filter prints bare session ids, one per line."""
+    _make_opencode_db_in(tmp_path, [('ses_here', 'Here', str(tmp_path))])
+    monkeypatch.chdir(tmp_path)
+    result = _run_opencode_cli(tmp_path, ['-1', 'opencode', '.'])
+    assert result.exit_code == 0
+    assert result.stdout.splitlines() == ['ses_here']
+
+
+def test_cli_path_exact_id_still_wins(tmp_path):
+    """An exact session id is never misread as a path filter."""
+    _make_opencode_db_in(tmp_path, [
+        ('ses_here', 'Here', str(tmp_path)),
+        ('ses_other', 'Other', '/home/user/elsewhere'),
+    ])
+    result = _run_opencode_cli(tmp_path, ['opencode/ses_other'])
+    assert result.exit_code == 0
+    assert 'ses_other' in result.stdout
+    assert 'No sessions matching' not in result.stdout
 
 
 def test_cli_version():

@@ -23,6 +23,8 @@ cdir -R                     # all agents, recursive
 cdir opencode/ses_abc123    # show that session's row (contents: ccat)
 cdir opencode/*llcat*       # filter: glob on session id, name, or working dir
 cdir '*/*ctools*'           # cross-agent glob: any agent, session matching the pattern
+cdir opencode .             # sessions relevant to the current directory
+cdir .                      # cross-agent: every agent, sessions for this directory
 ```
 
 ## Subagent sessions
@@ -105,6 +107,42 @@ $ cdir '*/*ctools*'    # any agent, session id/name/dir matching *ctools*
   glob over id/name/dir, or empty (`cdir '*/'` lists every session).
 - Rows are prefixed with the agent name so the merged listing is unambiguous,
   and they sort like a normal listing (`-t`, `-S`, `-u`, `-r` all apply).
+
+## Path filtering
+
+The session part can also be a **directory** instead of an id: `cdir opencode .`
+lists the sessions **relevant to** that directory. A session is relevant when
+its working directory (the `PATH` column) is the given directory itself or is
+**under** it — the listing is the sessions *of that tree*:
+
+- `cdir opencode .` run in a repo finds sessions started in the repo *and*
+  in its subdirectories.
+- `cdir opencode ~/day50` lists everything that ever ran under `~/day50`,
+  across every project in it.
+- a session started *above* the query dir is not relevant to it: sessions
+  started at `~` do not pollute `cdir opencode .` from anywhere under `~`.
+  From a subdirectory, `cdir opencode ..` reaches the session that started
+  at the project root.
+
+Paths are compared canonically (symlinks resolved, `~` expanded, case-
+insensitive), so the spelling does not matter. Globs work as usual: `cdir
+opencode /home/user/*` is a pattern over the working directory.
+
+```sh
+cdir opencode .            # sessions for the current directory
+cdir opencode ~/day50      # anything that ran under ~/day50
+cdir opencode /home/u/prj  # an absolute path
+cdir opencode/.            # the same as one ref
+cdir .                     # cross-agent: every agent, rows agent-prefixed
+```
+
+The path may be the second word or part of the ref (`opencode .` ==
+`opencode/.`) — it is simply a filter on the listing, so it applies to any
+agent selection: `cdir '*' .` and `cdir 'p*' .` filter the cross-agent
+and pi-glob listings the same way. A bare path with no agent part
+(`cdir .`) is a cross-agent listing — `cdir '*/.'` with rows prefixed by
+agent name, no resume hint. Every other flag composes as usual (`-1`, `-l`,
+`-o`, `-S`, `-q`, `-a`).
 
 ## Multiple sessions
 
@@ -218,6 +256,15 @@ Available fields for `-o`:
 
 Default fields are `id,name`; `-l` expands to `id,name,mtime,size,msgs,path`.
 Only the last-modified date is shown — the creation date is suppressed.
+
+**Terminal fitting.** On a TTY the table is fitted to the terminal width
+(`shutil.get_terminal_size` — the COLUMNS env var, then the platform query,
+so it works on POSIX and Windows). When the table is too wide, the free-text
+columns absorb it: PATH is squeezed first with an ellipsis, then NAME. A
+column that would shrink below ~8 chars is dropped outright instead (PATH
+before NAME), so narrow terminals lose columns rather than getting noise.
+IDs, dates, sizes and counts are never truncated. Piped output is untouched:
+`cdir | less` and `cdir > file` always get the full content-sized table.
 
 ## Agent listing
 
