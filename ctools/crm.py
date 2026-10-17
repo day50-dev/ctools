@@ -3,8 +3,12 @@ crm - scalpel remove concepts from sessions.
 
 Surgically removes concept-containing sections from agent sessions.
 Concept JSON files are NOT deleted - only the relevant sections from the context.
+
+With no concept files, the user is the strategy: the messages are listed and
+the ones to remove are picked by hand (`crm claude-code/<uuid>`).
 """
 
+import shutil
 import sys
 from pathlib import Path
 from typing import List
@@ -14,9 +18,10 @@ from rich.console import Console
 from rich.prompt import Confirm
 
 from ctools.agents import Message
+from ctools.backup import BackupError, _vacuum_into
 from ctools.cextract import concept_text, load_strategy, read_concepts_from_file
 from ctools.cli import reporting, require_session, version_option
-from ctools.lib import install_clean_sigint
+from ctools.lib import gettmp, install_clean_sigint
 
 console = Console()
 
@@ -163,6 +168,119 @@ SEARCHES = {
 }
 
 
+def _parse_index_spec(spec: str, n: int) -> set:
+    """`"3 7 12-15"` -> {3, 7, 12, 13, 14, 15} within 0..n-1.
+
+    Raises ValueError on garbage or out-of-range values.
+    """
+    picked = set()
+    for tok in spec.split():
+        lo, _, hi = tok.partition('-')
+        if (not lo.isdigit() or tok.endswith('-') or (hi and not hi.isdigit())):
+            raise ValueError(f"'{tok}' is not an index or a-b range")
+        lo_i = int(lo)
+        hi_i = int(hi) if hi else lo_i
+        if lo_i > hi_i or hi_i >= n:
+            raise ValueError(f"'{tok}' out of range (valid: 0-{n - 1})")
+        picked.update(range(lo_i, hi_i + 1))
+    return picked
+
+
+def _preview(m: Message, limit: int = 100) -> str:
+    return m.content[:limit].replace("\n", " ")
+
+
+def _backup_session(agent, session_id: str) -> Path:
+    """Back up one session's storage to ``gettmp()/ctools/<agent>/<uuid>``.
+
+    File agents (claude-code, pi, ...) get their session file copied; sqlite
+    agents (opencode) get a consistent full-database snapshot via
+    ``VACUUM INTO``, since a session's rows live in a shared database.  An
+    existing backup is never clobbered: the next free ``<uuid>-N`` name is
+    used, so every removal gets its own snapshot.
+    """
+    base = gettmp() / "ctools" / agent.name
+    base.mkdir(parents=True, exist_ok=True)
+    dest = base / session_id
+    n = 0
+    while dest.exists():
+        n += 1
+        dest = base / f"{session_id}-{n}"
+    if getattr(type(agent), "db_name", None):
+        storage = agent.storage_path
+        if not storage.is_file():
+            raise BackupError(
+                f"cannot back up {agent.name}: no storage file at {storage}")
+        _vacuum_into(storage, dest)
+    else:
+        src = None
+        for s in agent.sessions():
+            if s.id == session_id and s.path and Path(s.path).is_file():
+                src = Path(s.path)
+                break
+        if src is None:
+            raise BackupError(
+                f"cannot back up {agent.name}/{session_id}: "
+                f"session file not found")
+        shutil.copy2(str(src), str(dest))
+    return dest
+
+
+def _interactive_remove(messages: List[Message], agent, session_id: str,
+                        backup: bool = False) -> int:
+    """No concept files: the user is the strategy.
+
+    List every message with an index and a preview, ask which to remove
+    (space-separated indices, `a-b` ranges), confirm, remove.
+    EOF or an empty answer aborts — removing is never done blindly.
+    """
+    console.print(f"[dim]{len(messages)} messages in {agent.name}/{session_id}[/dim]")
+    for idx, m in enumerate(messages):
+        console.print(f"  {idx}: [{m.role}] {_preview(m)}")
+    try:
+        spec = input("\nIndices to remove (e.g. 3 7 12-15), empty to abort: ")
+    except EOFError:
+        console.print("[dim]Aborted (no input)[/dim]")
+        return 0
+    if not spec.strip():
+        console.print("[dim]Aborted[/dim]")
+        return 0
+    try:
+        doomed = _parse_index_spec(spec, len(messages))
+    except ValueError as e:
+        console.print(f"[red]Bad index spec: {e}[/red]")
+        raise SystemExit(1)
+    if not doomed:
+        console.print("[dim]Nothing selected, aborted[/dim]")
+        return 0
+
+    console.print(f"\n[yellow]Will remove {len(doomed)} message(s):[/yellow]")
+    for idx in sorted(doomed):
+        console.print(f"  {idx}: [{messages[idx].role}] {_preview(messages[idx])}\u2026")
+
+    if not Confirm.ask("\nProceed with removal?"):
+        console.print("[dim]Aborted[/dim]")
+        return 0
+
+    if backup:
+        dest = _backup_session(agent, session_id)
+        console.print(f"[dim]Backed up session to {dest}[/dim]")
+    with reporting():
+        removed = agent.remove_messages(session_id, sorted(doomed))
+
+    console.print(f"[green]Removed {removed} message(s) from {agent.name}/{session_id}[/green]")
+    return 0
+
+
+
+def _maybe_backup(ns, agent, session_id: str) -> None:
+    """Take the pre-removal backup when --backup was given."""
+    if not ns.backup:
+        return
+    dest = _backup_session(agent, session_id)
+    console.print(f"[dim]Backed up session to {dest}[/dim]")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="crm",
@@ -172,15 +290,19 @@ def build_parser() -> argparse.ArgumentParser:
                      "the relevant sections from the context."),
     )
     parser.add_argument("session",
-                        help="Session to remove from (@agent/session_id)")
-    parser.add_argument("concepts", nargs="+",
-                        help="Concept JSON files to remove")
+                        help="Session to remove from (agent/session_id)")
+    parser.add_argument("concepts", nargs="*",
+                        help="Concept JSON files to remove (omit to pick "
+                             "messages to remove by hand)")
     parser.add_argument("-a", "--algo", default="divide",
                         help="Algorithm: divide, sliding")
     parser.add_argument("--size", type=int, default=5,
                         help="Window size for sliding algorithm")
     parser.add_argument("-s", "--strategy",
                         help="Strategy JSON file for detection")
+    parser.add_argument("--backup", action="store_true",
+                        help="Back up the session to gettmp()/ctools/<agent>/"
+                             "<uuid> before removing")
     parser.add_argument("-i", "--interactive", action="store_true",
                         help="Confirm each removal")
     parser.add_argument("-v", "--verbose", action="store_true",
@@ -217,6 +339,11 @@ def main(argv=None) -> int:
 
     if verbose:
         console.print(f"[dim]Loaded {len(messages)} messages from {agent.name}/{session_id}[/dim]")
+
+    if not concepts:
+        # No concept files: the user is the strategy — list the messages,
+        # pick the indices to remove by hand.
+        return _interactive_remove(messages, agent, session_id, ns.backup)
 
     all_concepts = []
     for concept_path in concepts:
@@ -262,6 +389,7 @@ def main(argv=None) -> int:
             console.print("[dim]Aborted[/dim]")
             return 0
 
+    _maybe_backup(ns, agent, session_id)
     with reporting():
         removed = agent.remove_messages(session_id, sorted(doomed))
 
