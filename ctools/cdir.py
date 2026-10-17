@@ -212,7 +212,8 @@ def _render_table(body_rows: list, fields: List[str], color: bool = False,
     body_rows is a list of {field: display_value} dicts. Tree connectors are
     embedded in the anchor field's value so later columns stay aligned. With
     header=False the column-label row is omitted; with indent=False the two-space
-    left indent is dropped (clean for screen-scraping).
+    left indent is dropped (clean for screen-scraping). The last column is
+    never right-padded, so lines carry no trailing whitespace.
     """
     if not body_rows:
         return
@@ -228,19 +229,31 @@ def _render_table(body_rows: list, fields: List[str], color: bool = False,
 
     pad = "  " if indent else ""
 
-    def fmt(f: str, v: str) -> str:
+    # Padded alignment is only useful where a terminal renders it. Piped or
+    # paged output wraps, so padding to the widest row becomes pages of
+    # whitespace: off-terminal, rows are fixed-gap separated, no padding.
+    align = sys.stdout.isatty()
+
+    def fmt(f: str, v: str, last: bool = False) -> str:
         w = widths[f]
         if len(v) > w:
             v = v[:w - 1] + '…' if w > 1 else v[:1]
+        if last or not align:
+            # The last column is never padded, and off-terminal nothing is.
+            return v
         if f in RIGHT_ALIGNED:
             return f"{v:>{w}}"
         return f"{v:<{w}}"
 
+    def row(cells_iter):
+        return pad + "  ".join(cells_iter)
+
     if header:
-        print(pad + "  ".join(fmt(f, FIELD_LABELS[f]) for f in fields))
+        print(row(fmt(f, FIELD_LABELS[f], last=(i == len(fields) - 1))
+                  for i, f in enumerate(fields)))
     for values in body_rows:
-        cells = [fmt(f, values[f]) for f in fields]
-        print(pad + "  ".join(cells))
+        print(row(fmt(f, values[f], last=(i == len(fields) - 1))
+                  for i, f in enumerate(fields)))
 
 
 def _term_width(default: int = 10**9) -> int:
@@ -466,13 +479,18 @@ def _list_agents(formatter) -> None:
         if not group:
             continue
         print(label)
+        align = sys.stdout.isatty()
         for name, desc, tail, _ in group:
-            line = f"  {name:<{w_name}}  {desc:<{w_desc}}"
-            if w_tail is not None:
-                if w_tail < len(tail):
-                    tail = tail[:w_tail - 1] + '…'
-                line += f"  {tail}"
-            print(line)
+            if w_tail is not None and w_tail < len(tail):
+                tail = tail[:w_tail - 1] + '…'
+            if not align:
+                # fixed gap, no padding (same rule as _render_table)
+                cells = [name, desc, tail] if w_tail is not None else [name, desc]
+                print("  " + "  ".join(cells))
+            elif w_tail is None:
+                print(f"  {name:<{w_name}}  {desc}")
+            else:
+                print(f"  {name:<{w_name}}  {desc:<{w_desc}}  {tail}")
 
 
 def _remote_agents_installed(remote: Remote) -> list:

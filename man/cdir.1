@@ -41,8 +41,10 @@ On a terminal, the table is fitted to the terminal width
 the platform query, on POSIX and Windows alike). A too-wide table first
 squeezes the free-text columns with an ellipsis (\fBPATH\fP, then \fBNAME\fR);
 a column that would shrink below about 8 characters is dropped outright
-instead. IDs, dates, sizes and counts are never truncated. Piped output is
-untouched: \fBcdir | less\fR and \fBcdir > file\fR always get the full table.
+instead. IDs, dates, sizes and counts are never truncated.
+Off\-terminal, rows are fixed\-gap separated with no column padding:
+\fBcdir | less\fR, \fBcdir > file\fR and \fBcdir | grep\fR get full, untruncated
+rows that are only as long as their own content.
 .SH OPTIONS
 Sort flags follow
 .B ls

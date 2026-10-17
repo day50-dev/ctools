@@ -1390,9 +1390,10 @@ def test_cli_suppress_keeps_data_and_sort(tmp_path):
     supp = _run_opencode_cli(tmp_path, ["-q", "-l", "opencode/"])
     assert supp.exit_code == 0
     # same rows, same order, just without the header/footer/indent
+    # (non-terminal output is fixed-gap, never padded)
     supp_rows = [l.rstrip() for l in supp.stdout.splitlines() if l.strip()]
-    assert supp_rows == ['ses_small  Small  2023-11-14 14:14    30 B     1  /tmp',
-                         'ses_big    Big    2023-11-14 14:13  2.0 KB     1  /tmp']
+    assert supp_rows == ['ses_small  Small  2023-11-14 14:14  30 B  1  /tmp',
+                         'ses_big  Big  2023-11-14 14:13  2.0 KB  1  /tmp']
 
 
 def test_cli_suppress_long_format(tmp_path):
@@ -2117,9 +2118,10 @@ def test_agent_listing_fits_narrow_terminal(monkeypatch):
     assert '/home/' not in dropped.stdout
 
 
-def test_pi_name_truncated_with_one_column_ellipsis(tmp_path):
-    """A pi name from user text over 80 chars is cut with '…' (1 column),
-    not '...' (3), so the table loses fewer columns."""
+def test_pi_name_not_truncated_in_data_layer(tmp_path):
+    """Names are stored in full (no data-layer truncation): the display
+    layer (the terminal-width fitter) owns width, so pipes/pagers see the
+    whole name, not an ellipsis."""
     sess_dir = tmp_path / 'sessions' / '--home-user-project--'
     sess_dir.mkdir(parents=True)
     long_text = 'a' * 120

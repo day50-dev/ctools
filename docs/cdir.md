@@ -263,8 +263,12 @@ so it works on POSIX and Windows). When the table is too wide, the free-text
 columns absorb it: PATH is squeezed first with an ellipsis, then NAME. A
 column that would shrink below ~8 chars is dropped outright instead (PATH
 before NAME), so narrow terminals lose columns rather than getting noise.
-IDs, dates, sizes and counts are never truncated. Piped output is untouched:
-`cdir | less` and `cdir > file` always get the full content-sized table.
+IDs, dates, sizes and counts are never truncated.
+
+Off-terminal, the table is fixed-gap separated with no column padding at
+all: `cdir | less`, `cdir > file` and `cdir | grep` get full, untruncated
+rows that are only as long as their own content (a 2000-char session name
+must not turn every other row into pages of wrapping whitespace).
 
 ## Agent listing
 
