@@ -929,7 +929,9 @@ class ClaudeCodeAgent(JsonlAgent):
             session_id = path.stem
             entries, message_count = scan_jsonl_head(path)
             title, first_user, model, cwd = self._session_meta(entries)
-            name = title or (first_user or '').strip().replace('\n', ' ')[:50] or session_id[:8]
+            # No truncation here: the display layer owns column width.
+            name = title or (first_user or '').strip().replace('\n', ' ') \
+                or session_id[:8]
             sessions.append(Session(
                 id=session_id,
                 name=name,
@@ -1246,11 +1248,12 @@ class PiAgent(JsonlAgent):
 
             session_id = header.get('id') or path.stem
             if not name:
-                name = (first_user_text or '').strip()
-                if len(name) > 80:
-                    # One-column unicode ellipsis: '…' costs 1 char, not 3.
-                    name = name[:79] + '…'
-                name = name or session_id[:8]
+                # No truncation here: the display layer (the terminal-width
+                # fitter) owns column width, and pipes/pagers want full names.
+                # Whitespace is normalized (not cut) so the name stays one
+                # row in tables: a multi-line first message would otherwise
+                # break the table layout.
+                name = ' '.join((first_user_text or '').split()) or session_id[:8]
             ctime = parse_timestamp(header_ts)
             try:
                 file_size = path.stat().st_size
@@ -2448,12 +2451,9 @@ class ClineAgent(Agent):
                 created = epoch_ms(ts)
                 if created:
                     ctime = mtime = created
-            name_str = str(name)
-            if len(name_str) > 80:
-                name_str = name_str[:79] + '…'
             sessions.append(Session(
                 id=session_id,
-                name=name_str,
+                name=str(name),
                 ctime=ctime,
                 mtime=mtime,
                 size=int(_hist_size),

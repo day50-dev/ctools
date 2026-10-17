@@ -2135,9 +2135,30 @@ def test_pi_name_truncated_with_one_column_ellipsis(tmp_path):
     (sess_dir / '2026-08-08T22-29-28-354Z_eeeeeeee-0000-1111-2222-333333333333.jsonl')\
         .write_text('\n'.join(json.dumps(l) for l in lines) + '\n')
     session = _pi_agent(tmp_path).sessions()[0]
-    assert len(session.name) == 80
-    assert session.name.endswith('…')
-    assert not session.name.endswith('...')
+    assert session.name == long_text  # full text, no ellipsis anywhere
+
+
+def test_pi_name_multiline_user_text_stays_one_row(tmp_path):
+    """A multi-line first user message becomes a single-line name (all
+    whitespace normalized, nothing cut), so it can't break table rows."""
+    sess_dir = tmp_path / 'sessions' / '--home-user-project--'
+    sess_dir.mkdir(parents=True)
+    log = "5f76cea8] trickset loaded\n13:01:03INFO: INFO: calling upstream\n13:01:05ERROR: Error"
+    lines = [
+        {"type": "session", "version": 3,
+         "id": "eeeeeeee-0000-1111-2222-333333333333",
+         "timestamp": "2026-08-08T22:29:28.354Z",
+         "cwd": "/home/user/project"},
+        {"type": "message", "id": "m1", "parentId": "s",
+         "timestamp": "2026-08-08T22:29:29Z",
+         "message": {"role": "user", "content": log}},
+    ]
+    (sess_dir / '2026-08-08T22-29-28-354Z_eeeeeeee-0000-1111-2222-333333333333.jsonl')\
+        .write_text('\n'.join(json.dumps(l) for l in lines) + '\n')
+    session = _pi_agent(tmp_path).sessions()[0]
+    assert '\n' not in session.name
+    assert session.name == '5f76cea8] trickset loaded 13:01:03INFO: INFO: ' \
+        'calling upstream 13:01:05ERROR: Error'
 
 
 def test_merge_path_args_star_then_path():
