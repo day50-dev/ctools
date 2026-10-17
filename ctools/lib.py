@@ -8,10 +8,12 @@ everything they need for presentation from one place.
 """
 
 import json
+import os
 import signal
 import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional, Dict
 from xml.dom import minidom
 
@@ -30,7 +32,7 @@ __all__ = [
     'RESUME_COMMANDS', 'get_resume_command',
     'format_size', 'format_datetime', 'get_formatter',
     'OutputFormatter', 'JsonFormatter', 'XmlFormatter', 'MarkdownFormatter',
-    'install_clean_sigint',
+    'install_clean_sigint', 'gettmp',
 ]
 
 
@@ -356,3 +358,23 @@ def get_formatter(fmt: str) -> OutputFormatter:
         raise ValueError(f"Unknown format: {fmt}. Available: {', '.join(formatters.keys())}")
     
     return formatters[fmt]()
+
+
+# --- Durable tmp base ---
+
+def gettmp() -> Path:
+    """The durable tmp base for ctools data.
+
+    Like ``tempfile.gettempdir()`` in intent but not in lifetime: the system
+    tmp may be wiped on reboot or by a janitor, while ctools puts things here
+    it expects to find again (session backups, dumps).  Honours ``$CTOOLS_TMP``
+    for testing and relocation; otherwise the XDG data home
+    (``$XDG_DATA_HOME``, default ``~/.local/share``).
+    """
+    env = os.environ.get("CTOOLS_TMP", "").strip()
+    if env:
+        return Path(env)
+    xdg = os.environ.get("XDG_DATA_HOME", "").strip()
+    if xdg:
+        return Path(xdg)
+    return Path.home() / ".local" / "share"
