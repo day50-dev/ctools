@@ -667,6 +667,38 @@ def test_cli_include_exclude_globs(tmp_path):
     _with_opencode_db(tmp_path, run)
 
 
+def test_cli_exclude_from_file(tmp_path):
+    """--exclude-from reads session globs from a file (one per line); blank
+    lines and # comments are ignored, and it combines with --exclude."""
+    create_test_opencode_db(tmp_path, "ses_test123")
+    exclude_file = tmp_path / "excludes.txt"
+    exclude_file.write_text("# sessions to skip\n\nopencode/ses_*\n")
+
+    def run():
+        plain = runner.invoke(app, ["python", "opencode/ses_test123"])
+        assert plain.exit_code == 0
+
+        from_file = runner.invoke(app,
+                                  ["--exclude-from", str(exclude_file),
+                                   "python", "opencode/ses_test123"])
+        assert from_file.exit_code == 1  # excluded: no matches
+
+    _with_opencode_db(tmp_path, run)
+
+
+def test_cli_exclude_from_missing_file_is_error(tmp_path):
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    def run():
+        result = runner.invoke(app, ["--exclude-from",
+                                     str(tmp_path / "nope.txt"),
+                                     "python", "opencode/ses_test123"])
+        assert result.exit_code != 0
+        assert "Cannot read exclude file" in _out(result)
+
+    _with_opencode_db(tmp_path, run)
+
+
 def test_cli_missing_agent_data_is_error(tmp_path):
     """Searching an agent that has no data is an error, not a silent miss."""
     original = AGENTS['opencode'].base_path

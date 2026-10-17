@@ -31,8 +31,9 @@ like `grep` over a slow directory, not a buffered dump.
 case-insensitive, `-A/-B/-C` context, `-h`/`-H` filename prefix, `-q` quiet (exit
 code only), `-m N` max matches per session, `-o` only the matched text, `-w`
 whole word, `-x` whole line, `-E` extended/POSIX regex (default), `-F` fixed
-string, `--include`/`--exclude` session ID globs, `-a`/`--all` search every
-installed agent.
+string, `--include`/`--exclude` session ID globs, `--exclude-from FILE`
+same globs from a file (one per line, `#` comments ignored), `-a`/`--all`
+search every installed agent.
 
 Count and list modes (`-c`, `-l`, `-L`, `--format`) still buffer, since they need
 the whole picture — same as real `grep`.

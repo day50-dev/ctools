@@ -289,6 +289,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="search only sessions matching this glob (repeatable)")
     g.add_argument("--exclude", action="append",
                    help="skip sessions matching this glob (repeatable)")
+    g.add_argument("--exclude-from", metavar="FILE",
+                   help="skip sessions matching any glob in FILE (one glob "
+                        "per line; blank lines and # comments ignored)")
     g.add_argument("-a", "--all", action="store_true",
                    help="search every installed agent (same as omitting paths)")
     g.add_argument("-t", "--type", dest="fmt", default="default",
@@ -363,6 +366,17 @@ def main(argv=None) -> int:
     fixed_string = ns.fixed_strings
     include = ns.include
     exclude = ns.exclude
+    if ns.exclude_from:
+        exclude = list(exclude or [])
+        try:
+            with open(ns.exclude_from, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    pat = line.strip()
+                    if pat and not pat.startswith("#"):
+                        exclude.append(pat)
+        except OSError as e:
+            console.print(f"[red]Cannot read exclude file {ns.exclude_from}: {e}[/red]")
+            raise SystemExit(EXIT_ERROR)
     all_agents = ns.all
     count = ns.count
     invert = ns.invert_match

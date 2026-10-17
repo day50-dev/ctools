@@ -28,6 +28,8 @@ cgrep \- search through LLM context window sessions
 .IR glob ]
 .RB [ \-\-exclude
 .IR glob ]
+.RB [ \-\-exclude-from
+.IR FILE ]
 .RB [ \-a ]
 .RB [ \-f
 .IR format ]
@@ -119,6 +121,16 @@ path matches the glob. Repeatable; both may be combined, where a session
 must match an
 .B \-\-include
 and must not match any
+.BR \-\-exclude .
+.TP
+.BR \-\-exclude-from
+.IR FILE .
+Skip sessions whose
+.I agent/session_id
+path matches any glob in
+.IR FILE ,
+one per line; blank lines and
+.BR \# -comments are ignored. Combines with
 .BR \-\-exclude .
 .TP
 .BR \-v ", " \-\-invert\-match
