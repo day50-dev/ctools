@@ -201,11 +201,13 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- plumbing ---------------------------------------------------------
 
-    def _send(self, code: int, body: bytes, ctype: str):
+    def _send(self, code: int, body: bytes, ctype: str, headers: dict = None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -708,8 +710,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, err)
             return self._json(result)
 
-        if parts[1:] == ["sessions", "backup"]:
-            return self._mass_backup(body)
+        if parts[1:] == ["sessions", "export"]:
+            return self._mass_export(body)
 
         if parts[1:] == ["sessions", "remove"]:
             return self._mass_remove(body)
@@ -792,36 +794,77 @@ class Handler(BaseHTTPRequestHandler):
             return None, msg
         return self._parse_copy_result(out, dest), None
 
-    def _mass_backup(self, body: dict):
-        """Snapshot the storage of every agent that has a selected session.
+    def _mass_export(self, body: dict):
+        """Export the selected sessions to a single downloadable Markdown file.
 
-        Reuses :func:`take_backup` (one timestamped snapshot per agent), the
-        same safety net ctools takes before any write. A full snapshot covers
-        all selected sessions in that agent, so one backup per distinct agent.
+        Read-only: touches no agent storage. Each session becomes a
+        ``## agent/session_id`` section with a few metadata lines (name, model,
+        modified, message count) followed by the conversation as
+        ``### role`` / content blocks. Served as an attachment (Content-
+        Disposition) so the browser saves it.
         """
         refs, err = self._parse_refs(body)
         if err:
             return self._error(400, err)
-        if take_backup is None:
-            return self._error(503, "Backups unavailable (ctools.backup failed to import).")
-        agents = []
-        for agent_name, _sid in refs:
-            if agent_name not in agents:
-                agents.append(agent_name)
-        out, errors = [], []
-        for agent_name in agents:
+        import datetime
+        now = datetime.datetime.now()
+        sections, errors, exported = [], [], 0
+        for agent_name, sid in refs:
             agent = get_agent(agent_name)
             if agent is None:
-                errors.append(f"{agent_name}: unknown agent")
+                errors.append(f"{agent_name}/{sid}: unknown agent")
                 continue
             try:
-                b = take_backup(agent, note="webui mass backup")
-            except Exception as e:  # noqa: BLE001 - surface any backup failure
-                errors.append(f"{agent_name}: {e}")
+                messages = agent.messages(sid)
+            except Exception as e:  # noqa: BLE001 - surface any read failure
+                errors.append(f"{agent_name}/{sid}: {e}")
                 continue
-            out.append({"agent": agent_name, "when": b.when, "path": str(b.path),
-                        "bytes": b.bytes, "note": b.note})
-        return self._json({"backups": out, "errors": errors})
+            if not messages:
+                errors.append(f"{agent_name}/{sid}: no messages")
+                continue
+            sess = None
+            try:
+                sess = agent.session(sid)
+            except Exception:  # noqa: BLE001 - metadata is best-effort
+                sess = None
+            lines = [f"## {agent_name}/{sid}", ""]
+            if sess:
+                meta = []
+                if getattr(sess, "name", None):
+                    meta.append(f"Name: {sess.name}")
+                if getattr(sess, "model", None):
+                    meta.append(f"Model: {sess.model}")
+                if getattr(sess, "mtime", None):
+                    meta.append(f"Modified: {sess.mtime.isoformat()}")
+                if getattr(sess, "message_count", None) is not None:
+                    meta.append(f"Messages: {sess.message_count}")
+                if meta:
+                    lines += [f"- {m}" for m in meta]
+                    lines.append("")
+            for m in messages:
+                lines += [f"### {m.role}", "", (m.content or "").rstrip(), ""]
+            sections.append("\n".join(lines))
+            exported += 1
+        if not sections:
+            return self._error(400, "Nothing to export — " + "; ".join(errors[:3]))
+        header = [
+            "# ctools session export",
+            "",
+            f"Exported {now.isoformat(timespec='seconds')} — {exported} "
+            f"session(s){f', {len(errors)} error(s)' if errors else ''}.",
+            "",
+        ]
+        doc = "\n".join(header)
+        for i, s in enumerate(sections):
+            doc += ("\n\n---\n\n" if i else "\n") + s
+        if errors:
+            doc += "\n\n---\n\n## Errors\n\n" + "\n".join(f"- {e}" for e in errors)
+        doc += "\n"
+        data = doc.encode("utf-8")
+        filename = f"ctools-export-{now.strftime('%Y%m%d-%H%M%S')}.md"
+        self._send(200, data, "text/markdown; charset=utf-8",
+                   {"Content-Disposition": f'attachment; filename="{filename}"'})
+        return None
 
     def _mass_remove(self, body: dict):
         """Delete the selected sessions from agent storage.
@@ -2074,7 +2117,7 @@ function sortSessions(col) {
 
 // --- mass operations (multi-select in the Sessions view) -----------------
 // A checkbox per row lets the user pick several sessions, then act on all of
-// them at once: remove, backup, copy or merge. Selection is keyed by
+// them at once: remove, export, copy or merge. Selection is keyed by
 // agent/session id so it survives re-sorts and filters. The bar appears as
 // soon as anything is ticked and hides again when the selection is empty.
 
@@ -2166,7 +2209,7 @@ function updateMassBar() {
   bar.innerHTML =
     `<span class="massbar-n">${sel.length} selected</span>` +
     `<button class="danger" onclick="massRemove()" title="Delete these sessions (a backup is taken of each affected agent first)">Remove</button>` +
-    `<button onclick="massBackup()" title="Snapshot the storage of each selected session's agent">Backup</button>` +
+    `<button onclick="massExport()" title="Download the selected sessions as a single Markdown file">Export</button>` +
     `<label class="massbar-dest">to ${massDestOptions()}</label>` +
     `<button onclick="massCopy()" title="Copy each into a NEW session in the destination">Copy</button>` +
     `<button onclick="massMerge()" title="Merge all into ONE new session in the destination, in the order ticked">Merge</button>` +
@@ -2207,19 +2250,30 @@ async function massRemove() {
   } catch (e) { massStatus("error: " + esc(e.message), false); }
 }
 
-async function massBackup() {
+async function massExport() {
   const refs = massRefs();
   if (!refs) return;
-  massStatus("backing up…", true);
+  massStatus("exporting…", true);
   try {
-    const d = await api("/api/sessions/backup", {
+    const r = await fetch("/api/sessions/export", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({refs})
     });
-    const errs = d.errors || [];
-    const n = (d.backups || []).length;
-    massStatus(`backed up ${n} agent(s)${errs.length ? " · " + errs.length + " failed" : ""}${errs.length ? " — " + esc(errs[0]) : ""}`, !errs.length);
-  } catch (e) { massStatus("error: " + esc(e.message), false); }
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || r.status);
+    }
+    const blob = await r.blob();
+    const cd = r.headers.get("Content-Disposition") || "";
+    const m = /filename="?([^";]+)"?/.exec(cd);
+    const name = m ? m[1] : "ctools-export.md";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    massStatus(`exported ${refs.length} session(s) → ${esc(name)}`, true);
+  } catch (e) { massStatus("export failed — " + esc(e.message), false); }
 }
 
 async function massCopy() {
