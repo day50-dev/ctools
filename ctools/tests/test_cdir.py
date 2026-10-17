@@ -995,6 +995,30 @@ def test_cli_sort_last_flag_wins_size_then_time(tmp_path):
     assert result.stdout.index('ses_small') < result.stdout.index('ses_big')
 
 
+def test_cli_sort_bundled_short_flags(tmp_path):
+    """argparse bundles short flags: `-lS` means `-l -S`, so the size sort
+    must survive inside a bundle (the raw token is `-lS`, not `-S`)."""
+    _make_opencode_db_two_sizes(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["-lS", "opencode/"])
+    assert result.exit_code == 0
+    assert result.stdout.index('ses_big') < result.stdout.index('ses_small')
+
+
+def test_cli_sort_bundled_flag_last_wins(tmp_path):
+    """Inside and across bundles, the later sort flag still wins: `-lSt`
+    sorts by time, `-ltS` by size."""
+    _make_opencode_db_two_sizes(tmp_path)
+
+    result = _run_opencode_cli(tmp_path, ["-lSt", "opencode/"])
+    assert result.exit_code == 0
+    assert result.stdout.index('ses_small') < result.stdout.index('ses_big')
+
+    result = _run_opencode_cli(tmp_path, ["-ltS", "opencode/"])
+    assert result.exit_code == 0
+    assert result.stdout.index('ses_big') < result.stdout.index('ses_small')
+
+
 def test_cli_sort_last_flag_wins_time_then_size(tmp_path):
     """With -t -S, the later -S wins: size order (ls style)."""
     _make_opencode_db_two_sizes(tmp_path)

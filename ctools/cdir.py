@@ -321,11 +321,21 @@ _SORT_ALIASES = {
 def _resolve_sort(argv: List[str]) -> str:
     """Return 'time', 'size', or 'ctime'; the last sort flag on the command
     line wins (ls semantics for `cdir -tS` vs `cdir -St`). Scans the raw argv
-    because the order of boolean flags is what matters, not their set."""
+    because the order of boolean flags is what matters, not their set.
+
+    argparse bundles short flags (`-lS` means `-l -S`), so every character
+    of a bare `-xyz` token is checked as well: a sort flag hidden in a
+    bundle must not be lost.
+    """
     last = None
     for token in argv:
         if token in _SORT_ALIASES:
             last = _SORT_ALIASES[token]
+        elif len(token) > 2 and token.startswith('-') and not token.startswith('--'):
+            for ch in token[1:]:
+                key = '-' + ch
+                if key in _SORT_ALIASES:
+                    last = _SORT_ALIASES[key]
     return last or 'time'
 
 
