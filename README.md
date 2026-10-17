@@ -6,7 +6,8 @@
 <br/><br/><b>Try it now</b><br/>
 <code>uvx --from ctxttools cdir</code>
 <br/><br/><b>Then install it</b><br/>
-<code>uv tool install ctxttools</co
+<code>uv tool install ctxttools</code>
+</p>
 
 ------
 **ctools** is a suite of simple tools for navigating through the sessions of the most popular LLM agents and coding tools. It allows you to search your history, transfer conversations, filter them, and even share them among machines and users.
