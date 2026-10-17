@@ -4,7 +4,7 @@
 <img width="500" alt="ctools" src="https://github.com/user-attachments/assets/ee781bbe-6364-44ed-be2d-72114f1e6d8a" /><br/>
 <a href=https://pypi.org/project/ctxttools><img src=https://badge.fury.io/py/ctxttools.svg/></a>
 <br/><br/><b>Try it now</b><br/>
-<code>uvx --from ctxttools cdir</code>
+<code>uvx --from ctxttools cdir</code><br/>
 <code>uvx --from ctxttools ctools-web</code>
 <br/><br/><b>Then install it</b><br/>
 <code>uv tool install ctxttools</code>
