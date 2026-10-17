@@ -1,14 +1,48 @@
 # ctools
 
-Your coding agents are scattered across your machine: sessions in
-`~/.claude`, `~/.pi`, `~/.local/share/opencode`, and so on. **ctools** is a
-set of Python tools that gives you a single way to find, read, copy, and
-share those conversations.
+<p align="center">
+<img width="500" alt="ctools" src="https://github.com/user-attachments/assets/ee781bbe-6364-44ed-be2d-72114f1e6d8a" /><br/>
+<a href=https://pypi.org/project/ctxttools><img src=https://badge.fury.io/py/ctxttools.svg/></a>
+<br/><br/><b>Try it now</b><br/>
+<code>uvx --from ctxttools cdir</code>
+<br/><br/><b>Then install it</b><br/>
+<code>uv tool install ctxttools</co
 
-You can use it from the terminal, from a small web dashboard, or from any
-AI coding agent (via an MCP server).
+------
+**ctools** is a suite of simple tools for navigating through the sessions of the most popular LLM agents and coding tools. It allows you to search your history, transfer conversations, filter them, and even share them among machines and users.
 
----
+It supports [Claude Desktop](https://claude.com/download), [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [Hermes](https://github.com/NousResearch/hermes-agent), [Goose](https://github.com/aaif-goose/goose), [Kilo](https://github.com/Kilo-Org/kilocode), [FreeBuff](https://github.com/CodebuffAI/freebuff), [Cline](https://github.com/cline/cline), [omp](https://github.com/can1357/oh-my-pi), and [OpenClaw](https://openclaw.ai/).
+
+You can use it from the terminal, from a small web dashboard, or from any AI coding agent (via an MCP server).
+
+Here's an example:
+
+> I look for mentions of snake game in opencode using cgrep
+<pre>
+$ <b>cgrep</b> "snake game" opencode
+opencode/ses_a1d1a5a4df984ee698cab4a7:1:user: make a simple snake game in python
+opencode/ses_a1d1a5a4df984ee698cab4a7:2:assistant: I'll make a terminal-based snake game using `curses` (standard library, no dependencies).
+opencode/ses_a1d1a5a4df984ee698cab4a7:3:assistant: Done — `snake.py` is a terminal snake game using Python's built-in `curses` module (no dependencies).
+</pre>
+
+> cool let's look at the status of that session using cdir
+<pre>
+$ <b>cdir</b> -l opencode/ses_a1d1a5a4df984ee698cab4a7
+  ID                            NAME                                MODIFIED            SIZE  MSGS  PATH
+  ses_a1d1a5a4df984ee698cab4a7  make a simple snake game in python  2026-10-07 16:56  2.7 KB     3  /home/chris/.local/share/opencode
+
+  1 session(s)
+</pre>
+
+> Alright let's copy that session from opencode into pi!
+<pre>
+$ <b>ccopy</b> opencode/ses_a1d1a5a4df984ee698cab4a7 pi
+Copied 3 message(s) from opencode/ses_a1d1a5a4df984ee698cab4a7 to a new pi session: e357f435-f813-463a-b313-f97f1051f3cb
+Resume it with:
+  pi --session e357f435-f813-463a-b313-f97f1051f3cb
+</pre>
+
+As you can see, these are unix-friendly tools using simple paradigms that you are already familiar with.
 
 ## What it can do
 
