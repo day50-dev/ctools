@@ -30,7 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ctools import __version__
 from ctools.agents import (
-    AGENT_CLASSES, REGISTRY, Agent, AgentError,
+    AGENT_CLASSES, REGISTRY, Agent, AgentError, FileAgent, Message,
     get_agent, get_resume_command, text_of,
 )
 # Some ctools submodules may be mid-refactor and fail to import (e.g. the
@@ -41,9 +41,14 @@ try:
 except Exception:  # pragma: no cover - depends on repo state
     session_concepts = None
 try:
-    from ctools.ccopy import copy_conversation
+    from ctools.ccopy import copy_conversation, export_conversation
 except Exception:  # pragma: no cover - depends on repo state
     copy_conversation = None
+    export_conversation = None
+try:
+    from ctools.backup import take_backup, guard_write, BackupError
+except Exception:  # pragma: no cover - depends on repo state
+    take_backup = guard_write = BackupError = None
 try:
     from ctools.cgrep import _compile_pattern
 except Exception:  # pragma: no cover - depends on repo state
@@ -698,43 +703,259 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, "Source must be agent/session_id")
             if not dest:
                 return self._error(400, "Destination is required")
-            # Reject lone surrogates / undecodable text before it reaches the
-            # subprocess argv (which would otherwise raise UnicodeEncodeError).
-            try:
-                source.encode("utf-8")
-                dest.encode("utf-8")
-            except UnicodeEncodeError:
-                return self._error(400, "Source/destination contains invalid characters")
-            try:
-                import subprocess
-                proc = subprocess.run(
-                    [sys.executable, "-m", "ctools.ccopy", source, dest],
-                    capture_output=True, text=True, timeout=120)
-            except subprocess.TimeoutExpired:
-                return self._error(504, "Copy timed out")
-            except Exception as e:  # pragma: no cover - unexpected subprocess failure
-                return self._error(500, f"Copy failed: {e}")
-            out = proc.stdout or ""
-            # ccopy uses a Rich Console on stdout (stderr is empty) for its normal
-            # errors, but an unhandled exception (e.g. a missing source session)
-            # prints a Python traceback to stderr. Fold both together so the
-            # error is always surfaced. Strip ANSI and surface the best line.
-            ansi = re.compile(r"\x1b\[[0-9;]*m")
-            combined = ansi.sub("", out + ("\n" + (proc.stderr or "")))
-            lines = [l.strip() for l in combined.splitlines() if l.strip()]
-            if proc.returncode != 0:
-                if "Traceback (most recent call last):" in combined:
-                    msg = lines[-1] if lines else "Copy failed"
-                else:
-                    # First line is the actual error message.
-                    msg = lines[0] if lines else "Copy failed"
-                return self._error(400, msg)
-            return self._json(self._parse_copy_result(out, dest))
+            result, err = self._run_ccopy(source, dest)
+            if err:
+                return self._error(400, err)
+            return self._json(result)
+
+        if parts[1:] == ["sessions", "backup"]:
+            return self._mass_backup(body)
+
+        if parts[1:] == ["sessions", "remove"]:
+            return self._mass_remove(body)
+
+        if parts[1:] == ["sessions", "copy"]:
+            return self._mass_copy(body)
+
+        if parts[1:] == ["sessions", "merge"]:
+            return self._mass_merge(body)
 
         if parts[1:] == ["strategies"] or parts[1:] == ["filters"]:
             return self._save_config(parts[1], body)
 
         return self._error(404, "Not found")
+
+    # --- mass operations (multi-select in the Sessions view) --------------
+    #
+    # The Sessions table renders a checkbox per row; these endpoints act on a
+    # list of `agent/session_id` references. They reuse the same building
+    # blocks the single-action paths use (take_backup, ccopy, create_session)
+    # so behaviour is identical whether one or many sessions are selected.
+
+    @staticmethod
+    def _parse_refs(body: dict, key: str = "refs"):
+        """Validate `body[key]` as a non-empty list of `agent/session_id` refs.
+
+        Returns `(refs, error)` where refs is a list of (agent, sid) tuples and
+        error is a message string (refs is None) when the input is bad. De-dupes
+        while preserving order so selecting a row twice is harmless.
+        """
+        refs = body.get(key)
+        if not isinstance(refs, list) or not refs:
+            return None, "'refs' must be a non-empty list of agent/session_id"
+        out, seen = [], set()
+        for r in refs:
+            if not isinstance(r, str) or "/" not in r:
+                return None, "each ref must be 'agent/session_id'"
+            agent, sid = r.split("/", 1)
+            if not agent or not sid:
+                return None, f"bad ref: {r!r}"
+            try:
+                r.encode("utf-8")
+            except UnicodeEncodeError:
+                return None, f"ref contains invalid characters: {r!r}"
+            if r not in seen:
+                seen.add(r)
+                out.append((agent, sid))
+        return out, None
+
+    def _run_ccopy(self, source: str, dest: str):
+        """Run the ccopy CLI for one source/destination pair.
+
+        Returns `(result_dict, error)` — error is a message string and result
+        is None on failure. Shared by the single Copy action and the batch
+        Copy so both take the exact same code path (including ssh:// dests).
+        """
+        try:
+            source.encode("utf-8")
+            dest.encode("utf-8")
+        except UnicodeEncodeError:
+            return None, "Source/destination contains invalid characters"
+        import subprocess
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "ctools.ccopy", source, dest],
+                capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            return None, "Copy timed out"
+        except Exception as e:  # pragma: no cover - unexpected subprocess failure
+            return None, f"Copy failed: {e}"
+        out = proc.stdout or ""
+        ansi = re.compile(r"\x1b\[[0-9;]*m")
+        combined = ansi.sub("", out + ("\n" + (proc.stderr or "")))
+        lines = [l.strip() for l in combined.splitlines() if l.strip()]
+        if proc.returncode != 0:
+            if "Traceback (most recent call last):" in combined:
+                msg = lines[-1] if lines else "Copy failed"
+            else:
+                msg = lines[0] if lines else "Copy failed"
+            return None, msg
+        return self._parse_copy_result(out, dest), None
+
+    def _mass_backup(self, body: dict):
+        """Snapshot the storage of every agent that has a selected session.
+
+        Reuses :func:`take_backup` (one timestamped snapshot per agent), the
+        same safety net ctools takes before any write. A full snapshot covers
+        all selected sessions in that agent, so one backup per distinct agent.
+        """
+        refs, err = self._parse_refs(body)
+        if err:
+            return self._error(400, err)
+        if take_backup is None:
+            return self._error(503, "Backups unavailable (ctools.backup failed to import).")
+        agents = []
+        for agent_name, _sid in refs:
+            if agent_name not in agents:
+                agents.append(agent_name)
+        out, errors = [], []
+        for agent_name in agents:
+            agent = get_agent(agent_name)
+            if agent is None:
+                errors.append(f"{agent_name}: unknown agent")
+                continue
+            try:
+                b = take_backup(agent, note="webui mass backup")
+            except Exception as e:  # noqa: BLE001 - surface any backup failure
+                errors.append(f"{agent_name}: {e}")
+                continue
+            out.append({"agent": agent_name, "when": b.when, "path": str(b.path),
+                        "bytes": b.bytes, "note": b.note})
+        return self._json({"backups": out, "errors": errors})
+
+    def _mass_remove(self, body: dict):
+        """Delete the selected sessions from agent storage.
+
+        Takes a backup of each affected agent first (the same pre-write
+        snapshot ctools always takes), then unlinks each session's file. File-
+        backed agents (claude-code, codex, pi, …) are supported; database-
+        backed agents are reported as unsupported rather than guessed at.
+        """
+        refs, err = self._parse_refs(body)
+        if err:
+            return self._error(400, err)
+        # Group by agent so each agent is snapshotted once.
+        by_agent = {}
+        for agent_name, sid in refs:
+            by_agent.setdefault(agent_name, []).append(sid)
+        results, errors = [], []
+        for agent_name, sids in by_agent.items():
+            agent = get_agent(agent_name)
+            if agent is None:
+                for sid in sids:
+                    errors.append(f"{agent_name}/{sid}: unknown agent")
+                continue
+            if not isinstance(agent, FileAgent):
+                for sid in sids:
+                    errors.append(
+                        f"{agent_name}/{sid}: removal not supported for "
+                        f"{agent.storage_format}-backed storage")
+                continue
+            # Safety net: snapshot the whole storage before unlinking anything.
+            if take_backup is not None:
+                try:
+                    take_backup(agent, note="pre-remove (webui)")
+                except Exception as e:  # noqa: BLE001 - refuse to delete on failure
+                    for sid in sids:
+                        errors.append(f"{agent_name}/{sid}: backup failed, not removed: {e}")
+                    continue
+            for sid in sids:
+                try:
+                    path = agent.session_file(sid)
+                except AgentError as e:
+                    errors.append(f"{agent_name}/{sid}: {e}")
+                    continue
+                if path is None or not path.exists():
+                    errors.append(f"{agent_name}/{sid}: session file not found")
+                    continue
+                try:
+                    path.unlink()
+                    results.append({"ref": f"{agent_name}/{sid}", "removed": str(path)})
+                except OSError as e:
+                    errors.append(f"{agent_name}/{sid}: {e}")
+        return self._json({"removed": results, "errors": errors,
+                           "count": len(results)})
+
+    def _mass_copy(self, body: dict):
+        """Copy each selected session into a NEW session in the destination.
+
+        Loops the same ccopy subprocess the single Copy action uses, so the
+        destination may be a bare agent or an ssh:// URI. The sources are never
+        touched.
+        """
+        refs, err = self._parse_refs(body)
+        if err:
+            return self._error(400, err)
+        dest = (body.get("destination") or "").strip()
+        if not dest:
+            return self._error(400, "Destination is required")
+        results, errors = [], []
+        for agent_name, sid in refs:
+            result, cerr = self._run_ccopy(f"{agent_name}/{sid}", dest)
+            if cerr:
+                errors.append(f"{agent_name}/{sid}: {cerr}")
+            else:
+                results.append({"ref": f"{agent_name}/{sid}", **result})
+        return self._json({"copied": results, "errors": errors,
+                           "count": len(results)})
+
+    def _mass_merge(self, body: dict):
+        """Merge the selected sessions into ONE new session in the destination.
+
+        Messages are concatenated in selection order (so the user controls the
+        merge order by the order they tick). The destination agent is snapshotted
+        first (guard_write) then verified after the write, exactly like any
+        other ctools write. Sources are left untouched.
+        """
+        refs, err = self._parse_refs(body)
+        if err:
+            return self._error(400, err)
+        dest = (body.get("destination") or "").strip()
+        if not dest:
+            return self._error(400, "Destination is required")
+        if copy_conversation is None or export_conversation is None:
+            return self._error(503, "Merge unavailable (ctools.ccopy failed to import).")
+        destination = get_agent(dest)
+        if destination is None:
+            return self._error(404, f"Unknown destination agent: {dest}")
+        messages = []
+        errors = []
+        for agent_name, sid in refs:
+            agent = get_agent(agent_name)
+            if agent is None:
+                errors.append(f"{agent_name}/{sid}: unknown agent")
+                continue
+            try:
+                recs = export_conversation(agent, sid)
+            except AgentError as e:
+                errors.append(f"{agent_name}/{sid}: {e}")
+                continue
+            for rec in recs:
+                messages.append({"role": rec["role"], "content": rec["content"]})
+        if not messages:
+            return self._json({"new_session": None, "destination": dest,
+                               "messages": 0, "errors": errors or ["no messages to merge"]})
+        guard = guard_write(destination, note="webui merge") if guard_write else None
+        try:
+            new_id = destination.create_session(
+                [Message(role=m["role"], content=m["content"]) for m in messages])
+        except AgentError as e:
+            if guard is not None:
+                guard.rollback()
+            return self._error(400, f"Merge failed: {e}")
+        except Exception as e:  # noqa: BLE001 - create_session can raise other errors
+            if guard is not None:
+                guard.rollback()
+            return self._error(500, f"Merge failed: {e}")
+        if guard is not None:
+            try:
+                guard.finish()
+            except BackupError as e:
+                return self._error(500, str(e))
+        resume = get_resume_command(destination.name, new_id)
+        return self._json({"new_session": new_id, "destination": dest,
+                           "messages": len(messages), "resume": resume,
+                           "errors": errors})
 
     def _parse_copy_result(self, out: str, dest: str) -> dict:
         """Parse ccopy's stdout into {new_session, destination, messages,
@@ -748,24 +969,27 @@ class Handler(BaseHTTPRequestHandler):
         ansi = re.compile(r"\x1b\[[0-9;]*m")
         text = ansi.sub("", out)
         lines = [l.rstrip() for l in text.splitlines() if l.strip()]
+        # Rich wraps the console at ~80 columns, so the success line can break
+        # across multiple physical lines. Collapse whitespace for the
+        # id/count search so wrapping never defeats the regex; the resume
+        # command is still read line-by-line below (it is its own line).
+        collapsed = re.sub(r"\s+", " ", text)
 
         new_id = None
         count = None
         m = re.search(r"Copied\s+(\d+)\s+message\(s\)\s+from\s+.+?to a new\s+(\S+)\s+session(?::\s*(\S+))?",
-                      text)
+                      collapsed)
         if m:
             count = int(m.group(1))
             new_id = m.group(3)  # may be None if the id is on the same token
-        # Fallback: the new session id is the last whitespace token on the
-        # "Copied ... session" line.
+        # Fallback: the id is the token after "session:" anywhere in the text.
         if new_id is None:
-            for l in lines:
-                if l.startswith("Copied") and "session" in l:
-                    new_id = l.split()[-1]
-                    break
+            sm = re.search(r"session:\s*(\S+)", collapsed)
+            if sm:
+                new_id = sm.group(1)
         # Message count fallback.
         if count is None:
-            cm = re.search(r"Copied\s+(\d+)\s+message", text)
+            cm = re.search(r"Copied\s+(\d+)\s+message", collapsed)
             if cm:
                 count = int(cm.group(1))
 
@@ -990,6 +1214,53 @@ td { padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 13px;
 tr.click { cursor: pointer; } tr.click:hover td { background: var(--panel2); }
 td.mono, .mono { font-family: var(--mono); font-size: 12px; }
 td .sub { color: var(--dim); font-size: 11px; }
+/* checkbox column (Sessions multi-select) */
+th.ck, td.ck { width: 40px; text-align: center; padding: 4px 6px; }
+/* .ckbox is the padded hit region (the "margin" around the control) and draws
+   the visual via pseudo-elements; the invisible full-size <input> inside it is
+   the real checkbox (state, keyboard/a11y, and the click target). */
+.ckbox { position: relative; display: inline-flex; align-items: center;
+  justify-content: center; width: 28px; height: 28px; border-radius: 8px;
+  cursor: pointer; }
+.ckbox:hover { background: var(--panel2); }
+.ckbox::before { content: ""; position: absolute; left: 50%; top: 50%;
+  width: 16px; height: 16px; transform: translate(-50%, -50%);
+  border: 1.5px solid var(--border); border-radius: 5px; background: var(--panel);
+  transition: background .12s, border-color .12s; }
+.ckbox:hover::before { border-color: var(--accent); }
+.ckbox:has(input:checked)::before,
+.ckbox:has(input:indeterminate)::before { background: var(--accent); border-color: var(--accent); }
+.ckbox:has(input:checked)::after { content: ""; position: absolute; left: 50%; top: 50%;
+  width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0;
+  transform: translate(-50%, -55%) rotate(45deg); }
+.ckbox:has(input:indeterminate)::after { content: ""; position: absolute; left: 50%; top: 50%;
+  width: 8px; height: 2px; background: #fff; border-radius: 1px;
+  transform: translate(-50%, -50%); }
+.ckbox:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* invisible, full-size checkbox: the real control + the click target */
+input.sess-ck, input.ckall { position: absolute; inset: 0; margin: 0;
+  opacity: 0; cursor: pointer; }
+/* mass-ops bar (appears when one or more sessions are selected) */
+.massbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--accent); border-radius: 10px;
+  padding: 8px 12px; margin-bottom: 12px; }
+.massbar-n { font-weight: 700; font-size: 13px; margin-right: 4px; }
+.massbar button { background: var(--panel2); border: 1px solid var(--border);
+  color: var(--text); border-radius: 8px; padding: 5px 12px; font-size: 12px;
+  cursor: pointer; white-space: nowrap; }
+.massbar button:hover { border-color: var(--accent); color: var(--accent); }
+.massbar button.danger { border-color: var(--red); color: var(--red); }
+.massbar button.danger:hover { background: var(--red); color: #fff; }
+.massbar button.ghost { border-color: transparent; color: var(--dim); }
+.massbar button.ghost:hover { color: var(--text); }
+.massbar-dest { font-size: 12px; color: var(--dim); display: flex;
+  align-items: center; gap: 6px; }
+.massbar-dest select { background: var(--panel2); border: 1px solid var(--border);
+  color: var(--text); border-radius: 8px; padding: 4px 8px; font-size: 12px; }
+.massbar-status { font-size: 12px; color: var(--dim); margin-left: auto;
+  max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.massbar-status.ok { color: var(--green); }
+.massbar-status.bad { color: var(--red); }
 .msg { background: var(--panel); border: 1px solid var(--border);
   border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
 .msg .role { font-size: 11px; font-weight: 700; text-transform: uppercase;
@@ -1243,6 +1514,7 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
       <input type="search" id="s-filter" placeholder="filter: id, name or model…" style="flex:1;min-width:180px">
       <button class="primary" id="s-btn">List</button>
     </div>
+    <div id="s-massbar" class="massbar" style="display:none"></div>
     <div id="s-result"></div>
   </section>
 
@@ -1741,10 +2013,14 @@ function renderSessions() {
     (s.name || "").toLowerCase().includes(f) ||
     (s.path || "").toLowerCase().includes(f) ||
     (s.agent || "").toLowerCase().includes(f)) : sessions;
+  const sel = window._sessSel || (window._sessSel = new Set());
   const rows = shown.map(s => {
     const a = s.agent || agent;
+    const ref = `${a}/${s.id}`;
+    const checked = sel.has(ref) ? "checked" : "";
     return `
       <tr class="click" onclick="openConverse('${esc(a)}','${esc(s.id)}')">
+        <td class="ck"><span class="ckbox" title="Select (shift+click for a range)"><input type="checkbox" class="sess-ck" data-ref="${esc(ref, true)}" ${checked} onclick="sessCkClick(event)" onchange="sessSelChanged()"></span></td>
         <td style="max-width:280px"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.name || s.id)}</div>
         <div class="sub mono">${esc(s.id)}</div></td>
         ${isAll ? `<td class="mono">${esc(s.agent || "")}</td>` : ""}
@@ -1761,13 +2037,17 @@ function renderSessions() {
   const th = (col, label) =>
     `<th class="sorth" onclick="sortSessions('${col}')" title="Click to sort">${label}${arrow(col)}</th>`;
   const agentTh = isAll ? th("agent", "Agent") : "";
-  const colspan = isAll ? 5 : 4;
+  const colspan = isAll ? 6 : 5;
+  const ckAll = `<th class="ck"><span class="ckbox" title="Select all shown"><input type="checkbox" class="ckall" id="s-ckall" onclick="sessToggleAllClick(event)" onchange="sessToggleAllChange()"></span></th>`;
   $("#s-result").innerHTML = `
-      <table><thead><tr>${th("name","Session")}${agentTh}${th("mtime","Modified")}${th("path","Path")}${th("message_count","Msgs")}</tr></thead>
+      <table><thead><tr>${ckAll}${th("name","Session")}${agentTh}${th("mtime","Modified")}${th("path","Path")}${th("message_count","Msgs")}</tr></thead>
       <tbody>${rows || `<tr><td colspan="${colspan}" class="dim">No sessions match “${esc(f)}”.</td></tr>`}</tbody></table>
       <div class="pager">${total} session(s)${total > sessions.length
         ? " — first " + sessions.length + " loaded" : ""}${f
         ? ` · ${shown.length} match(es)` : ""}</div>`;
+  // keep the select-all checkbox in sync with what is actually checked
+  syncCkAll();
+  updateMassBar();
 }
 
 // Click-to-sort on the Sessions table columns (client-side, works for “all” too).
@@ -1790,6 +2070,203 @@ function sortSessions(col) {
     return (av > bv ? 1 : -1) * dir;
   });
   renderSessions();
+}
+
+// --- mass operations (multi-select in the Sessions view) -----------------
+// A checkbox per row lets the user pick several sessions, then act on all of
+// them at once: remove, backup, copy or merge. Selection is keyed by
+// agent/session id so it survives re-sorts and filters. The bar appears as
+// soon as anything is ticked and hides again when the selection is empty.
+
+function sessSelectedRefs() {
+  return [...document.querySelectorAll("#view-sessions .sess-ck:checked")]
+    .map(c => c.dataset.ref).filter(Boolean);
+}
+
+// Click the select-all box: native toggle fires, then onchange syncs the rows.
+function sessToggleAllClick(ev) {
+  ev.stopPropagation();
+  window._sessAnchor = null;  // a full (de)selection resets any range anchor
+}
+function sessToggleAllChange() {
+  const box = document.getElementById("s-ckall");  // the select-all header box
+  const cks = [...document.querySelectorAll("#view-sessions input.sess-ck")];
+  cks.forEach(c => { c.checked = box.checked; });
+  sessSelChanged();
+}
+
+// Click a row checkbox (the invisible full-size <input> is the click target).
+// Plain click: let the native toggle happen (onchange -> sessSelChanged) and
+// (re)set the range anchor. Shift+click: record a pending range fill (anchor
+// -> here, using the anchor's state, so you can select OR clear a span); it is
+// applied in sessSelChanged, which runs after the native toggle has occurred.
+function sessCkClick(ev) {
+  ev.stopPropagation();  // don't open the row's conversation
+  const box = ev.currentTarget;
+  const cks = [...document.querySelectorAll("#view-sessions input.sess-ck")];
+  const idx = cks.indexOf(box);
+  if (ev.shiftKey && window._sessAnchor != null) {
+    const aIdx = cks.findIndex(c => c.dataset.ref === window._sessAnchor);
+    if (aIdx !== -1) {
+      const lo = Math.min(aIdx, idx), hi = Math.max(aIdx, idx);
+      window._pendingShiftFill = { lo, hi, fill: cks[aIdx].checked };
+      return;  // keep the anchor so the range can be re-anchored/extended
+    }
+  }
+  window._sessAnchor = box.dataset.ref;  // plain click: (re)set the range anchor
+  window._pendingShiftFill = null;
+}
+
+function sessSelChanged() {
+  // If a shift+click range fill is pending, apply it now: the change event
+  // fires AFTER the clicked box's native toggle has already happened, so this
+  // cleanly overrides that single toggle (we don't rely on preventDefault,
+  // which does not suppress the native checkbox toggle in this engine).
+  if (window._pendingShiftFill) {
+    const { lo, hi, fill } = window._pendingShiftFill;
+    window._pendingShiftFill = null;
+    const cks = [...document.querySelectorAll("#view-sessions input.sess-ck")];
+    for (let i = lo; i <= hi; i++) if (cks[i]) cks[i].checked = fill;
+  }
+  const sel = window._sessSel || (window._sessSel = new Set());
+  sel.clear();
+  document.querySelectorAll("#view-sessions .sess-ck:checked")
+    .forEach(c => sel.add(c.dataset.ref));
+  syncCkAll();
+  updateMassBar();
+}
+
+// Keep the header select-all box in sync (checked / indeterminate) with the rows.
+function syncCkAll() {
+  const cks = [...document.querySelectorAll("#view-sessions input.sess-ck")];
+  const ckall = document.getElementById("s-ckall");
+  if (!ckall || !cks.length) return;
+  const all = cks.every(c => c.checked);
+  const some = cks.some(c => c.checked);
+  ckall.checked = all;
+  ckall.indeterminate = !all && some;
+}
+
+function massDestOptions() {
+  const cur = window._sessDest || ((AGENTS.find(x => x.installed) || {}).name) || "";
+  const opts = AGENTS.filter(a => a.installed).map(a =>
+    `<option value="${esc(a.name)}" ${a.name === cur ? "selected" : ""}>${esc(a.name)}</option>`
+  ).join("");
+  return `<select id="s-massdest" onchange="window._sessDest=this.value">${opts || `<option value="">no installed agents</option>`}</select>`;
+}
+
+function updateMassBar() {
+  const bar = document.getElementById("s-massbar");
+  if (!bar) return;
+  const sel = sessSelectedRefs();
+  if (!sel.length) { bar.style.display = "none"; bar.innerHTML = ""; return; }
+  const old = document.getElementById("s-massstatus");
+  const statusHtml = old ? old.innerHTML : "";
+  bar.style.display = "flex";
+  bar.innerHTML =
+    `<span class="massbar-n">${sel.length} selected</span>` +
+    `<button class="danger" onclick="massRemove()" title="Delete these sessions (a backup is taken of each affected agent first)">Remove</button>` +
+    `<button onclick="massBackup()" title="Snapshot the storage of each selected session's agent">Backup</button>` +
+    `<label class="massbar-dest">to ${massDestOptions()}</label>` +
+    `<button onclick="massCopy()" title="Copy each into a NEW session in the destination">Copy</button>` +
+    `<button onclick="massMerge()" title="Merge all into ONE new session in the destination, in the order ticked">Merge</button>` +
+    `<button class="ghost" onclick="massClear()">clear</button>` +
+    `<span id="s-massstatus" class="massbar-status">${statusHtml}</span>`;
+}
+
+function massStatus(html, ok) {
+  const el = document.getElementById("s-massstatus");
+  if (el) { el.innerHTML = html; el.className = "massbar-status " + (ok ? "ok" : "bad"); }
+}
+
+function massRefs() {
+  const refs = sessSelectedRefs();
+  if (!refs.length) { massStatus("nothing selected", false); return null; }
+  return refs;
+}
+
+function massDest() {
+  const el = document.getElementById("s-massdest");
+  return el ? el.value : "";
+}
+
+async function massRemove() {
+  const refs = massRefs();
+  if (!refs) return;
+  if (!confirm(`Remove ${refs.length} session(s) permanently?\n\nA backup is taken of each affected agent's storage first (restorable via crecover), but the sessions are deleted from live storage.`)) return;
+  massStatus("removing…", true);
+  try {
+    const d = await api("/api/sessions/remove", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({refs})
+    });
+    const errs = d.errors || [];
+    massStatus(`removed ${d.count}${errs.length ? " · " + errs.length + " failed" : ""}${errs.length ? " — " + esc(errs[0]) : ""}`, !errs.length);
+    window._sessSel = new Set();
+    listSessions();
+  } catch (e) { massStatus("error: " + esc(e.message), false); }
+}
+
+async function massBackup() {
+  const refs = massRefs();
+  if (!refs) return;
+  massStatus("backing up…", true);
+  try {
+    const d = await api("/api/sessions/backup", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({refs})
+    });
+    const errs = d.errors || [];
+    const n = (d.backups || []).length;
+    massStatus(`backed up ${n} agent(s)${errs.length ? " · " + errs.length + " failed" : ""}${errs.length ? " — " + esc(errs[0]) : ""}`, !errs.length);
+  } catch (e) { massStatus("error: " + esc(e.message), false); }
+}
+
+async function massCopy() {
+  const refs = massRefs();
+  if (!refs) return;
+  const dest = massDest();
+  if (!dest) { massStatus("choose a destination agent", false); return; }
+  if (!confirm(`Copy ${refs.length} session(s) into NEW ${dest} session(s)? Sources are left untouched.`)) return;
+  massStatus("copying…", true);
+  try {
+    const d = await api("/api/sessions/copy", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({refs, destination: dest})
+    });
+    const errs = d.errors || [];
+    massStatus(`copied ${d.count} → ${esc(dest)}${errs.length ? " · " + errs.length + " failed" : ""}${errs.length ? " — " + esc(errs[0]) : ""}`, !errs.length);
+  } catch (e) { massStatus("error: " + esc(e.message), false); }
+}
+
+async function massMerge() {
+  const refs = massRefs();
+  if (!refs) return;
+  if (refs.length < 2) { massStatus("tick at least 2 sessions to merge", false); return; }
+  const dest = massDest();
+  if (!dest) { massStatus("choose a destination agent", false); return; }
+  if (!confirm(`Merge ${refs.length} sessions into ONE new ${dest} session (in the order they're ticked)? Sources are left untouched.`)) return;
+  massStatus("merging…", true);
+  try {
+    const d = await api("/api/sessions/merge", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({refs, destination: dest})
+    });
+    const errs = d.errors || [];
+    if (d.new_session) {
+      massStatus(`merged into new ${esc(dest)} session ${esc(d.new_session)} (${d.messages} msgs)${errs.length ? " · " + errs.length + " skipped" : ""}`, !errs.length);
+      window._sessSel = new Set();
+      listSessions();
+    } else {
+      massStatus("merge failed — " + esc((d.errors || ["no messages"])[0]), false);
+    }
+  } catch (e) { massStatus("error: " + esc(e.message), false); }
+}
+
+function massClear() {
+  window._sessSel = new Set();
+  document.querySelectorAll("#view-sessions .sess-ck").forEach(c => c.checked = false);
+  updateMassBar();
 }
 
 // --- global search (navbar) ---------------------------------------------
