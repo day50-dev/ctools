@@ -85,6 +85,12 @@ pip install "ctxttools[mcp]"
 # or: pip install "ctxttools[web]"
 ```
 
+From a local checkout, `uv` keeps it editable and reproducible:
+
+```bash
+uv tool install --editable ".[mcp]"          # or ".[mcp,web]" for the dashboard too
+```
+
 > **Heads up:** `ctools-mcp` needs `mcp<2` (see
 > [mcp dependency](#mcp-dependency) below).
 
