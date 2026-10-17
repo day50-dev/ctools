@@ -27,7 +27,9 @@ like `grep` over a slow directory, not a buffered dump.
 
 ## Flags
 
-`-l` list files, `-L` sessions without matches, `-c` count, `-v` invert, `-i`
+`-l` list files, `-L` sessions without matches, `-c` count, `-Z`/`--null` NUL
+byte after each session ID (feeds `xargs -0`; works with `-l`/`-L`/`-c`),
+`-v` invert, `-i`
 case-insensitive, `-A/-B/-C` context, `-h`/`-H` filename prefix, `-q` quiet (exit
 code only), `-m N` max matches per session, `-o` only the matched text, `-w`
 whole word, `-x` whole line, `-E` extended/POSIX regex (default), `-F` fixed

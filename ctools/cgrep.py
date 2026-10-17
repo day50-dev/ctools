@@ -275,6 +275,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="print only the session IDs with matches")
     g.add_argument("-L", "--files-without-match", action="store_true",
                    help="print only the session IDs without matches")
+    g.add_argument("-Z", "--null", dest="null", action="store_true",
+                   help="write a NUL byte after each session ID instead of "
+                        "a newline (for `xargs -0`; works with -l, -L, -c)")
     g.add_argument("-m", "--max-count", type=int,
                    help="stop after N matches per session")
     g.add_argument("-o", "--only-matching", action="store_true",
@@ -356,6 +359,7 @@ def main(argv=None) -> int:
         raise SystemExit(EXIT_ERROR)
     list_files = ns.files_with_matches
     list_files_neg = ns.files_without_match
+    null = ns.null
     no_filename = ns.no_filename
     with_filename = ns.with_filename
     max_matches = ns.max_count
@@ -488,6 +492,11 @@ def main(argv=None) -> int:
     if list_files or list_files_neg:
         if formatter:
             print(formatter.format_match_files(files, has_matches=list_files))
+        elif null:
+            # NUL-terminated IDs: `cgrep -Z -l PATTERN | xargs -0 ccat`
+            for path in files:
+                sys.stdout.write(path + "\0")
+            sys.stdout.flush()
         else:
             for path in files:
                 print(path)
@@ -497,6 +506,11 @@ def main(argv=None) -> int:
         elif not show_filename:
             for path, cnt in sorted(counts.items()):
                 print(cnt)
+        elif null:
+            # grep -Z -c shape: NUL after the session ID, newline after the count
+            for path, cnt in sorted(counts.items()):
+                sys.stdout.write(f"{path}\0{cnt}\n")
+            sys.stdout.flush()
         else:
             for path, cnt in sorted(counts.items()):
                 print(f"{path}:{cnt}")

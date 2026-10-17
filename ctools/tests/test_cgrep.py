@@ -699,6 +699,28 @@ def test_cli_exclude_from_missing_file_is_error(tmp_path):
     _with_opencode_db(tmp_path, run)
 
 
+def test_cli_null_terminates_session_ids(tmp_path):
+    """-Z/--null writes a NUL byte after each session ID instead of a
+    newline, so output feeds `xargs -0`. Works with -l, -L, and -c."""
+    import re
+    create_test_opencode_db(tmp_path, "ses_test123")
+
+    def run():
+        out = runner.invoke(app, ["-Z", "-l", "python", "opencode/"])
+        assert out.exit_code == 0
+        assert _out(out) == "opencode/ses_test123\0"  # NUL, no newline
+
+        neg = runner.invoke(app, ["-Z", "-L", "zzz_no_match", "opencode/"])
+        assert neg.exit_code == 0
+        assert _out(neg) == "opencode/ses_test123\0"
+
+        cnt = runner.invoke(app, ["-Z", "-c", "python", "opencode/"])
+        # grep -Z -c shape: NUL after the session ID, newline after the count
+        assert re.fullmatch(r"opencode/ses_test123\0\d+\n", _out(cnt))
+
+    _with_opencode_db(tmp_path, run)
+
+
 def test_cli_missing_agent_data_is_error(tmp_path):
     """Searching an agent that has no data is an error, not a silent miss."""
     original = AGENTS['opencode'].base_path

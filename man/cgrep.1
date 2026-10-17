@@ -5,6 +5,7 @@ cgrep \- search through LLM context window sessions
 .B cgrep
 .RB [ \-l ]
 .RB [ \-L ]
+.RB [ \-Z ]
 .RB [ \-h ]
 .RB [ \-H ]
 .RB [ \-c ]
@@ -68,6 +69,13 @@ or dump the matches (\fBcgrep -l PATTERN AGENT | xargs cdir -l\fR).
 .TP
 .BR \-L ", " \-\-files\-without\-match
 List only session IDs that do NOT contain matches.
+.TP
+.BR \-Z ", " \-\-null
+Write a NUL byte after each session ID instead of a newline, so the output
+feeds \fBxargs \-0\fR\n(\fBcgrep \-Z \-l PATTERN AGENT | xargs \-0 ccat\fR).
+Meaningful with
+.BR \-l ", " \-L ", or " \-c
+(the count follows the ID after the NUL).
 .TP
 .BR \-h ", " \-\-no\-filename
 Suppress the session path prefix. Match lines become
