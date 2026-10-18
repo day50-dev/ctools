@@ -23,7 +23,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 
@@ -149,6 +149,17 @@ def _summarize_args(inp: dict) -> str:
         if isinstance(v, str) and v.strip():
             return v.strip()[:200]
     return ''
+
+
+def _iso_utc(ts: float) -> str:
+    """Format epoch-seconds as ISO-8601 UTC with millisecond precision.
+
+    Claude Code's session reader expects timestamps in this form (e.g.
+    ``2026-10-18T05:17:29.204Z``); a seeded session that stored float epoch
+    values instead comes back as "No conversation found" on resume.
+    """
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    return dt.strftime('%Y-%m-%dT%H:%M:%S.') + f"{dt.microsecond // 1000:03d}Z"
 
 
 def parse_timestamp(ts) -> Optional[datetime]:
@@ -911,17 +922,49 @@ class ClaudeCodeAgent(JsonlAgent):
             return None
         return Message(role=role, content=content)
 
-    def _new_entry(self, message: Message, session_id: str, index: int) -> dict:
+    def _new_entry(self, message: Message, session_id: str, index: int,
+                   parent_uuid: Optional[str] = None) -> dict:
+        """One native entry for a fresh session.
+
+        Claude Code's reader needs a ``parentUuid`` chain (the seed entry's
+        parent is null) and ISO-8601 UTC timestamps; a flat list of entries
+        with float epoch timestamps is silently rejected with "No conversation
+        found" on ``claude --resume``.
+        """
         etype = 'user' if message.role in ('user', 'system') else 'assistant'
         entry = {'type': etype, 'uuid': str(uuid.uuid4()),
-                 'sessionId': session_id, 'timestamp': time.time(),
+                 'parentUuid': parent_uuid, 'isSidechain': False,
+                 'sessionId': session_id,
+                 'timestamp': _iso_utc(time.time() + index),
+                 'userType': 'external', 'entrypoint': 'cli',
+                 'cwd': os.getcwd(),
                  'message': {'role': message.role, 'content': message.content}}
         if etype == 'assistant':
             entry['message']['model'] = 'claude-sonnet-4-5'
         return entry
 
     def _session_dir(self) -> Path:
-        return self.base_path / 'projects' / '-ctools'
+        """New sessions land in the project dir for the *current* working
+        directory, so a following ``claude --resume`` (run from there) finds
+        them. Claude Code encodes a cwd into its project-dir name by turning
+        every non-alphanumeric character (notably ``/``) into ``-``.
+        """
+        encoded = ''.join(c if c.isalnum() else '-' for c in os.getcwd())
+        return self.base_path / 'projects' / encoded
+
+    def create_session(self, messages: List[Message]) -> str:
+        """Seed a new, resumable session by chaining entries with parentUuid."""
+        session_id = str(uuid.uuid4())
+        lines = []
+        prev_uuid = None
+        for i, m in enumerate(messages):
+            entry = self._new_entry(m, session_id, i, prev_uuid)
+            lines.append(json.dumps(entry))
+            prev_uuid = entry['uuid']
+        path = self._session_dir() / f'{session_id}.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('\n'.join(lines) + '\n' if lines else '')
+        return session_id
 
     def _session_meta(self, entries: List[dict]) -> Tuple[Optional[str], Optional[str],
                                                           Optional[str], Optional[str]]:
