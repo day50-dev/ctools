@@ -131,6 +131,26 @@ def text_of(content) -> str:
     return '\n'.join(parts)
 
 
+def _summarize_args(inp: dict) -> str:
+    """A short one-line description of a tool call, read from its argument dict.
+
+    Picks the most human-readable field (command, path, url, query, …). Used by
+    both Claude Code (``input``) and pi (``arguments``) tool-call blocks, which
+    share these key names.
+    """
+    if not isinstance(inp, dict):
+        inp = {}
+    for key in ('command', 'file_path', 'path', 'url', 'query', 'pattern',
+                'note', 'description', 'prompt', 'title'):
+        v = inp.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()[:200]
+    for v in inp.values():
+        if isinstance(v, str) and v.strip():
+            return v.strip()[:200]
+    return ''
+
+
 def parse_timestamp(ts) -> Optional[datetime]:
     """Parse an ISO-8601 / RFC-3339 timestamp into a naive local datetime.
 
@@ -376,6 +396,18 @@ class Agent:
 
         The list is parallel to :meth:`raw_messages` when the agent can produce
         it; an empty list is the honest "we can't" answer.
+        """
+        return []
+
+    def tool_calls(self, session_id: str) -> List[dict]:
+        """Tool calls that happened during the session, in conversation order.
+
+        Each item is ``{"name": str, "summary": str, "msg": int}`` where
+        ``msg`` is the index (into :meth:`messages`) of the closest
+        conversation message the call is attached to, so the web UI can place
+        and scroll to it. Agents that don't expose their tool calls (or whose
+        storage we can't introspect) return an empty list, in which case the
+        web UI hides the tool-call aside.
         """
         return []
 
@@ -944,6 +976,39 @@ class ClaudeCodeAgent(JsonlAgent):
             ))
         return sessions
 
+    def tool_calls(self, session_id: str) -> List[dict]:
+        """The tool_use calls in a transcript, aligned to the conversation.
+
+        Re-walks the JSONL: a conversation message is an entry whose type maps
+        to user/assistant and whose text is non-empty — exactly the rule
+        :meth:`messages` applies — so ``msg`` indexes line up with the list the
+        web UI renders. A tool_use in a tool-only turn (no text) attaches to the
+        last preceding conversation message.
+        """
+        path = self.require_file(session_id)
+        tools: List[dict] = []
+        msg_index = -1
+        for entry in read_json_lines(path):
+            role = self.ROLE_TYPES.get(entry.get('type', ''))
+            message = entry.get('message')
+            content = message.get('content', '') if isinstance(message, dict) else ''
+            if role in CONVERSATION_ROLES and text_of(content):
+                msg_index += 1
+            blocks = content if isinstance(content, list) else []
+            for block in blocks:
+                if isinstance(block, dict) and block.get('type') == 'tool_use':
+                    tools.append({
+                        'name': block.get('name') or 'tool',
+                        'summary': self._tool_summary(block),
+                        'msg': max(msg_index, 0),
+                    })
+        return tools
+
+    @staticmethod
+    def _tool_summary(block: dict) -> str:
+        """A short one-line description of a tool call, read from its input."""
+        return _summarize_args(block.get('input') or {})
+
 
 class CodexAgent(JsonlAgent):
     """OpenAI Codex CLI: JSONL rollout files, optionally indexed in SQLite."""
@@ -1111,10 +1176,9 @@ class PiAgent(JsonlAgent):
         stem = Path(str(path_str)).stem
         return stem.split('_', 1)[1] if '_' in stem else stem
 
-    def raw_messages(self, session_id: str) -> List[Message]:
-        """Walk the active branch: newest leaf back to the root."""
+    def _active_branch(self, session_id: str) -> List[dict]:
+        """The active branch (newest leaf back to the root), root->leaf order."""
         path = self.require_file(session_id)
-
         by_id = {}
         parents = {}
         children = {}
@@ -1127,17 +1191,14 @@ class PiAgent(JsonlAgent):
             parents[eid] = entry.get('parentId')
             children.setdefault(entry.get('parentId'), []).append(eid)
             last_id = eid
-
         if not by_id:
             return []
-
         leaves = [eid for eid in by_id if not children.get(eid)]
         if leaves:
             leaves.sort(key=lambda eid: by_id[eid].get('timestamp') or '')
             node = leaves[-1]
         else:
             node = last_id
-
         branch = []
         seen = set()
         while node and node in by_id and node not in seen:
@@ -1145,9 +1206,12 @@ class PiAgent(JsonlAgent):
             branch.append(by_id[node])
             node = parents.get(node)
         branch.reverse()
+        return branch
 
+    def raw_messages(self, session_id: str) -> List[Message]:
+        """Walk the active branch: newest leaf back to the root."""
         out = []
-        for entry in branch:
+        for entry in self._active_branch(session_id):
             if entry.get('type') != 'message':
                 continue
             message = entry.get('message') or {}
@@ -1155,6 +1219,32 @@ class PiAgent(JsonlAgent):
             if content:
                 out.append(Message(role=message.get('role', ''), content=content))
         return out
+
+    def tool_calls(self, session_id: str) -> List[dict]:
+        """The toolCall blocks on the active branch, aligned to the conversation.
+
+        A conversation message is a `message` entry with role user/assistant and
+        non-empty text (exactly the rule :meth:`messages` applies); a toolCall in
+        a tool-only entry attaches to the last preceding conversation message.
+        """
+        tools: List[dict] = []
+        msg_index = -1
+        for entry in self._active_branch(session_id):
+            if entry.get('type') != 'message':
+                continue
+            message = entry.get('message') or {}
+            content = message.get('content', '')
+            if message.get('role', '') in CONVERSATION_ROLES and text_of(content):
+                msg_index += 1
+            blocks = content if isinstance(content, list) else []
+            for block in blocks:
+                if isinstance(block, dict) and block.get('type') == 'toolCall':
+                    tools.append({
+                        'name': block.get('name') or 'tool',
+                        'summary': _summarize_args(block.get('arguments') or {}),
+                        'msg': max(msg_index, 0),
+                    })
+        return tools
 
     def raw_records(self, session_id: str) -> List[dict]:
         """The active-branch message entries, verbatim (lossless replay form)."""

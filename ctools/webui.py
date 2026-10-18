@@ -518,12 +518,17 @@ class Handler(BaseHTTPRequestHandler):
                     formatter = get_formatter(fmt)
                 except ValueError as e:
                     return self._error(400, str(e))
+            try:
+                tool_calls = agent.tool_calls(sid)
+            except Exception:
+                tool_calls = []
             result = {
                 "agent": agent.name,
                 "session_id": sid,
                 "messages": [_msg_brief(m) for m in messages],
                 "tokens": tokens,
                 "resume": get_resume_command(agent.name, sid),
+                "tool_calls": tool_calls,
             }
             if formatter is not None:
                 result["formatted"] = formatter.format_session_export(messages, sid, agent.name)
@@ -1337,6 +1342,42 @@ input.sess-ck, input.ckall { position: absolute; inset: 0; margin: 0;
   left: 0; right: 0; height: 60px;
   background: linear-gradient(transparent, var(--panel)); pointer-events: none; }
 .msg-long:not(.collapsed) { max-height: none; }
+/* --- tool-call aside (converse view) --- */
+.conv-layout { display: flex; gap: 18px; align-items: flex-start; }
+.conv-layout #c-body { flex: 1 1 auto; min-width: 0; }
+.tools-aside { flex: 0 0 218px; position: sticky; top: 64px;
+  max-height: calc(100vh - 88px); overflow: auto; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 10px; font-size: 12px; }
+.tools-aside.collapsed { flex: 0 0 34px; overflow: hidden; }
+.tools-head { position: sticky; top: 0; z-index: 1; background: var(--panel);
+  display: flex; justify-content: space-between; align-items: center; gap: 6px;
+  padding: 9px 10px; border-bottom: 1px solid var(--border); }
+.tools-head .tools-title { font-size: 11px; font-weight: 700; text-transform:
+  uppercase; letter-spacing: .04em; color: var(--dim); }
+.tools-head .tools-hide { border: 1px solid var(--border); background: var(--panel2);
+  color: var(--dim); border-radius: 5px; cursor: pointer; font-size: 11px;
+  line-height: 1; padding: 2px 7px; }
+.tools-head .tools-hide:hover { color: var(--text); }
+.tools-aside.collapsed .tools-title { display: none; }
+.tools-aside.collapsed .tools-head { flex-direction: column; padding: 8px 4px; }
+.tools-list { list-style: none; margin: 0; padding: 4px; }
+.tool-item { padding: 5px 7px; border-radius: 6px; cursor: pointer; margin-bottom: 2px;
+  border-left: 2px solid transparent; }
+.tool-item:hover { background: var(--panel2); }
+.tool-item.active { background: var(--panel2); border-left-color: var(--accent); }
+.tool-item .tool-name { display: block; font-weight: 700; font-size: 11.5px;
+  color: var(--text); }
+.tool-item .tool-sum { display: block; color: var(--dim); font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* inline: mark the conversation messages that made a tool call */
+.msg.has-tools { border-left: 3px solid #e0a458; }
+.tool-inline { font-size: 11px; color: #e0a458; margin: 0 0 7px; line-height: 1.5; }
+.tool-inline .tn { font-weight: 700; }
+.tool-inline .ts { color: var(--dim); }
+@media (max-width: 900px) {
+  .conv-layout { display: block; }
+  .tools-aside { display: none !important; }
+}
 .md { font-family: var(--sans); font-size: 13.5px; line-height: 1.55;
   color: var(--text); overflow-wrap: anywhere; }
 .md > :first-child { margin-top: 0; }
@@ -1689,7 +1730,10 @@ code { font-family: var(--mono); background: var(--panel2); padding: 1px 6px;
     <div id="c-sub"></div>
     <div id="c-banner" class="copybanner" style="display:none"></div>
     <div id="c-meta" class="toolbar" style="align-items:center"></div>
-    <div id="c-body"></div>
+    <div class="conv-layout">
+      <div id="c-body"></div>
+      <aside id="c-tools" class="tools-aside" style="display:none"></aside>
+    </div>
     <div id="c-export" style="display:none;background:var(--panel);border:1px solid
       var(--border);border-radius:10px;padding:14px;font-size:12px;max-height:60vh;overflow:auto"></div>
   </section>
@@ -2424,6 +2468,8 @@ async function openConverse(agent, sid) {
   $("#c-sub").textContent = "";
   $("#c-body").innerHTML = `<div class="loading" style="padding:20px 0"><span class="spin"></span>loading conversation…</div>`;
   $("#c-meta").innerHTML = "";
+  if (window._toolsSpy) { window._toolsSpy.detach(); window._toolsSpy = null; }
+  const aside0 = $("#c-tools"); if (aside0) { aside0.style.display = "none"; aside0.classList.remove("collapsed"); }
   dismissBanner();
   CONV = {agent, session_id: sid};
   try {
@@ -2445,17 +2491,96 @@ async function openConverse(agent, sid) {
       onclick="showExport()">⬇ Export</button>`;
     $("#c-meta").innerHTML = meta;
     window._lastMessages = d.messages;   // kept for showExport()
+    const toolMap = toolMapFromCalls(d.tool_calls);
     $("#c-dest").addEventListener("keydown", e => {
       if (e.key === "Enter") doCopy();
     });
-    $("#c-body").innerHTML = messagesHtml(d.messages)
+    $("#c-body").innerHTML = messagesHtml(d.messages, toolMap)
       + resumePanel(agent, sid, d.resume);
+    buildToolsAside(d.tool_calls);
     // wire the copy-command buttons in the resume panel
     $("#c-body").querySelectorAll(".resume-panel [data-cp]").forEach(b =>
       b.onclick = () => copyToClipboard(b.dataset.cp, b));
   } catch (e) {
     $("#c-body").innerHTML = `<div class="err">${esc(e.message)}</div>`;
   }
+}
+
+// --- tool-call aside: overview, scrollspy, click-to-scroll ---
+function toolMapFromCalls(calls) {
+  const map = {};
+  (calls || []).forEach(c => { (map[c.msg] = map[c.msg] || []).push(c); });
+  return map;
+}
+
+function buildToolsAside(calls) {
+  const aside = $("#c-tools");
+  if (!aside) return;
+  calls = calls || [];
+  if (!calls.length) { aside.style.display = "none"; return; }
+  const items = calls.map((c, idx) =>
+    `<li class="tool-item" data-midx="${c.msg}" data-ti="${idx}" title="${esc(c.summary || c.name)}">
+       <span class="tool-name">${esc(c.name)}</span>
+       ${c.summary ? `<span class="tool-sum">${esc(c.summary)}</span>` : ""}
+     </li>`).join("");
+  aside.style.display = "";
+  aside.innerHTML =
+    `<div class="tools-head">
+       <span class="tools-title">Tool calls · ${calls.length}</span>
+       <button class="tools-hide" title="Collapse" onclick="toggleToolsAside(this)">—</button>
+     </div>
+     <ol class="tools-list">${items}</ol>`;
+  aside.querySelectorAll(".tool-item").forEach(li => {
+    li.onclick = () => {
+      const t = document.querySelector(`#c-body .msg[data-midx="${li.dataset.midx}"]`);
+      if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+  });
+  if (window._toolsSpy) { window._toolsSpy.detach(); window._toolsSpy = null; }
+  window._toolsSpy = setupToolsSpy();
+}
+
+function toggleToolsAside(btn) {
+  const aside = $("#c-tools");
+  const collapsed = aside.classList.toggle("collapsed");
+  btn.textContent = collapsed ? "⚙" : "—";
+  btn.title = collapsed ? "Expand" : "Collapse";
+}
+
+// Scrollspy: highlight the aside item(s) for the conversation message nearest
+// the top of the viewport. Runs on window scroll, rAF-throttled.
+function setupToolsSpy() {
+  const aside = $("#c-tools");
+  const items = Array.from(aside.querySelectorAll(".tool-item"));
+  const byMsg = {};
+  items.forEach(li => { (byMsg[li.dataset.midx] = byMsg[li.dataset.midx] || []).push(li); });
+  let ticking = false;
+  function currentMsg() {
+    const msgs = document.querySelectorAll("#c-body .msg[data-midx]");
+    const line = 130;   // focus line, px from the top of the viewport
+    let current = null;
+    for (const el of msgs) {
+      if (el.getBoundingClientRect().top <= line) current = el; else break;
+    }
+    return current ? current.dataset.midx : null;
+  }
+  function update() {
+    ticking = false;
+    if (aside.classList.contains("collapsed") || aside.offsetParent === null) return;
+    const midx = currentMsg();
+    items.forEach(li => li.classList.remove("active"));
+    if (midx != null && byMsg[midx]) byMsg[midx].forEach(li => li.classList.add("active"));
+  }
+  function onScroll() { if (!ticking) { ticking = true; requestAnimationFrame(update); } }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", onScroll);
+  update();
+  return {
+    detach() {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    },
+  };
 }
 
 // Destination choices for the copy dropdown: every installed agent except the
@@ -2506,24 +2631,32 @@ function md(text) {
   return pre;
 }
 
-function msgHtml(m, i) {
+function msgHtml(m, i, tools) {
   const full = m.content;
   const long = full.length > 900;
   const body = md(full);
   const inner = long
     ? `<div class="msg-long collapsed">${body.outerHTML}</div>`
     : body.outerHTML;
-  return `<div class="msg">
+  const t = tools || [];
+  const badge = t.length
+    ? `<div class="tool-inline">⚙ ${t.map(c =>
+        `<span class="tn">${esc(c.name)}</span>${c.summary ? `<span class="ts"> ${esc(c.summary).slice(0, 64)}</span>` : ""}`).join(" · ")}</div>`
+    : "";
+  return `<div class="msg${t.length ? " has-tools" : ""}" data-midx="${i}">
     <div style="display:flex;justify-content:space-between;gap:12px">
       <span class="role ${esc(m.role)}">${esc(m.role)}</span>
       ${long ? `<span class="expand">show more ▾</span>` : ""}
-    </div>${inner}</div>`;
+    </div>${badge}${inner}</div>`;
 }
 
 // Cluster consecutive same-role messages into one shared container: the role
 // header shows once, each message body separated by a hairline. Runs of
 // assistant messages (common in agentic sessions) read as a single block.
-function messagesHtml(messages) {
+// `toolMap` maps a message index -> the tool calls that happened on it, so
+// each message gets a data-midx anchor and an inline tool-call badge.
+function messagesHtml(messages, toolMap) {
+  toolMap = toolMap || {};
   let html = "";
   let i = 0;
   while (i < messages.length) {
@@ -2531,13 +2664,13 @@ function messagesHtml(messages) {
     while (j < messages.length && messages[j].role === messages[i].role) j++;
     const run = messages.slice(i, j);
     if (run.length === 1) {
-      html += msgHtml(run[0]);
+      html += msgHtml(run[0], i, toolMap[i] || []);
     } else {
       html += `<div class="msggroup">
         <div class="msghead">
           <span class="role ${esc(run[0].role)}">${esc(run[0].role)} × ${run.length}</span>
         </div>
-        ${run.map(m => msgHtml(m)).join("")}
+        ${run.map((m, k) => msgHtml(m, i + k, toolMap[i + k] || [])).join("")}
       </div>`;
     }
     i = j;
