@@ -1342,39 +1342,60 @@ input.sess-ck, input.ckall { position: absolute; inset: 0; margin: 0;
   left: 0; right: 0; height: 60px;
   background: linear-gradient(transparent, var(--panel)); pointer-events: none; }
 .msg-long:not(.collapsed) { max-height: none; }
-/* --- tool-call aside (converse view) --- */
-.conv-layout { display: flex; gap: 18px; align-items: flex-start; }
+/* --- tool-call aside (converse view): a floating card pinned right --- */
+.conv-layout { display: flex; gap: 20px; align-items: flex-start; }
 .conv-layout #c-body { flex: 1 1 auto; min-width: 0; }
-.tools-aside { flex: 0 0 218px; position: sticky; top: 64px;
-  max-height: calc(100vh - 88px); overflow: auto; background: var(--panel);
-  border: 1px solid var(--border); border-radius: 10px; font-size: 12px; }
-.tools-aside.collapsed { flex: 0 0 34px; overflow: hidden; }
+.tools-aside { flex: 0 0 250px; position: sticky; top: 74px; align-self: flex-start;
+  max-height: calc(100vh - 94px); overflow: auto; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 12px 34px rgba(0,0,0,.42); font-size: 12px; }
+.tools-aside.collapsed { flex: 0 0 40px; overflow: hidden; }
 .tools-head { position: sticky; top: 0; z-index: 1; background: var(--panel);
   display: flex; justify-content: space-between; align-items: center; gap: 6px;
-  padding: 9px 10px; border-bottom: 1px solid var(--border); }
+  padding: 10px 11px; border-bottom: 1px solid var(--border);
+  border-radius: 12px 12px 0 0; }
 .tools-head .tools-title { font-size: 11px; font-weight: 700; text-transform:
-  uppercase; letter-spacing: .04em; color: var(--dim); }
+  uppercase; letter-spacing: .05em; color: var(--dim); display: flex;
+  align-items: center; gap: 6px; }
+.tools-head .tools-gear { color: #e0a458; font-size: 13px; line-height: 1; }
+.tools-head .tools-right { display: flex; align-items: center; gap: 6px; }
+.tools-head .tools-count { font-size: 10px; font-weight: 700; color: var(--accent);
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 1px 7px; letter-spacing: 0; text-transform: none; }
 .tools-head .tools-hide { border: 1px solid var(--border); background: var(--panel2);
   color: var(--dim); border-radius: 5px; cursor: pointer; font-size: 11px;
   line-height: 1; padding: 2px 7px; }
 .tools-head .tools-hide:hover { color: var(--text); }
-.tools-aside.collapsed .tools-title { display: none; }
-.tools-aside.collapsed .tools-head { flex-direction: column; padding: 8px 4px; }
-.tools-list { list-style: none; margin: 0; padding: 4px; }
-.tool-item { padding: 5px 7px; border-radius: 6px; cursor: pointer; margin-bottom: 2px;
+.tools-aside.collapsed .tools-title,
+.tools-aside.collapsed .tools-count,
+.tools-aside.collapsed .tools-summary { display: none; }
+.tools-aside.collapsed .tools-head { flex-direction: column; padding: 10px 4px; gap: 6px; }
+/* by-type summary: the mix of tools at a glance (710 calls is a wall; this
+   is the digestible view). A chip per tool, click to jump to its first call. */
+.tools-summary { display: flex; flex-wrap: wrap; gap: 5px; padding: 10px 10px 4px; }
+.tool-chip { display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  font-size: 11px; background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 11px; padding: 2px 8px 2px 9px; color: var(--text); }
+.tool-chip b { font-weight: 700; }
+.tool-chip i { font-style: normal; font-size: 10px; color: var(--dim); font-weight: 700; }
+.tool-chip:hover { border-color: var(--accent); color: var(--accent); }
+.tools-list { list-style: none; margin: 0; padding: 5px; }
+.tool-item { padding: 5px 8px; border-radius: 7px; cursor: pointer; margin-bottom: 2px;
   border-left: 2px solid transparent; }
 .tool-item:hover { background: var(--panel2); }
 .tool-item.active { background: var(--panel2); border-left-color: var(--accent); }
+.tool-item.active .tool-name { color: var(--accent); }
 .tool-item .tool-name { display: block; font-weight: 700; font-size: 11.5px;
-  color: var(--text); }
+  color: var(--text); letter-spacing: .01em; }
 .tool-item .tool-sum { display: block; color: var(--dim); font-size: 11px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* inline: mark the conversation messages that made a tool call */
 .msg.has-tools { border-left: 3px solid #e0a458; }
-.tool-inline { font-size: 11px; color: #e0a458; margin: 0 0 7px; line-height: 1.5; }
+.tool-inline { font-size: 11px; color: #e0a458; margin: 0 0 7px; line-height: 1.5;
+  font-family: var(--mono); }
 .tool-inline .tn { font-weight: 700; }
 .tool-inline .ts { color: var(--dim); }
-@media (max-width: 900px) {
+@media (max-width: 960px) {
   .conv-layout { display: block; }
   .tools-aside { display: none !important; }
 }
@@ -2518,6 +2539,19 @@ function buildToolsAside(calls) {
   if (!aside) return;
   calls = calls || [];
   if (!calls.length) { aside.style.display = "none"; return; }
+
+  // By-type summary: the mix of tools at a glance. A long agentic session can
+  // have hundreds of calls, so a chip per tool (name + count) is the digestible
+  // view; clicking a chip jumps to that tool's first call.
+  const counts = {};
+  calls.forEach(c => { counts[c.name] = (counts[c.name] || 0) + 1; });
+  const topTools = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const summary = topTools.length > 1
+    ? `<div class="tools-summary">${topTools.map(([n, k]) =>
+        `<span class="tool-chip" data-tool="${esc(n)}" title="${k}× ${esc(n)}">` +
+        `<b>${esc(n)}</b><i>${k}</i></span>`).join("")}</div>`
+    : "";
+
   const items = calls.map((c, idx) =>
     `<li class="tool-item" data-midx="${c.msg}" data-ti="${idx}" title="${esc(c.summary || c.name)}">
        <span class="tool-name">${esc(c.name)}</span>
@@ -2526,14 +2560,33 @@ function buildToolsAside(calls) {
   aside.style.display = "";
   aside.innerHTML =
     `<div class="tools-head">
-       <span class="tools-title">Tool calls · ${calls.length}</span>
-       <button class="tools-hide" title="Collapse" onclick="toggleToolsAside(this)">—</button>
+       <span class="tools-title"><span class="tools-gear">⚙</span> Tools</span>
+       <span class="tools-right">
+         <span class="tools-count">${calls.length}</span>
+         <button class="tools-hide" title="Collapse" onclick="toggleToolsAside(this)">—</button>
+       </span>
      </div>
+     ${summary}
      <ol class="tools-list">${items}</ol>`;
   aside.querySelectorAll(".tool-item").forEach(li => {
     li.onclick = () => {
       const t = document.querySelector(`#c-body .msg[data-midx="${li.dataset.midx}"]`);
       if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+  });
+  // Chip -> scroll to (and briefly flash) that tool's first call in the list.
+  aside.querySelectorAll(".tool-chip").forEach(chip => {
+    chip.onclick = () => {
+      const name = chip.dataset.tool;
+      const li = Array.from(aside.querySelectorAll(".tool-item")).find(el => {
+        const n = el.querySelector(".tool-name");
+        return n && n.textContent === name;
+      });
+      if (li) {
+        li.scrollIntoView({ behavior: "smooth", block: "center" });
+        li.classList.add("active");
+        setTimeout(() => li.classList.remove("active"), 1200);
+      }
     };
   });
   if (window._toolsSpy) { window._toolsSpy.detach(); window._toolsSpy = null; }
