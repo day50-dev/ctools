@@ -67,10 +67,16 @@ def export_conversation(agent: Agent, session_id: str) -> List[dict]:
     return [{"role": m.role, "content": m.content} for m in agent.messages(session_id)]
 
 
-def import_conversation(agent: Agent, records: List[dict]) -> str:
-    """Create a NEW session in `agent` holding `records`; return its id."""
+def import_conversation(agent: Agent, records: List[dict],
+                        cwd: Optional[str] = None) -> str:
+    """Create a NEW session in `agent` holding `records`; return its id.
+
+    ``cwd`` seeds the session for that working directory: the destination
+    files it under that dir's project dir (e.g.
+    ``~/.claude/projects/<encoded-cwd>/``) so it resumes from there.
+    """
     messages = [Message(role=r["role"], content=r["content"]) for r in records]
-    return agent.create_session(messages)
+    return agent.create_session(messages, cwd=cwd)
 
 
 def export_common(agent: Agent, session_id: str) -> dict:
@@ -169,7 +175,7 @@ def _do_export(ref: str) -> None:
     sys.stdout.write("\n")
 
 
-def _do_import(agent_name: str) -> None:
+def _do_import(agent_name: str, cwd: Optional[str] = None) -> None:
     """--import-json agent: read a conversation JSON from stdin into a new
     session in agent, and print the new session id on stdout.
 
@@ -204,7 +210,7 @@ def _do_import(agent_name: str) -> None:
     # main copy path does (snapshot -> write -> verify/restore).
     guard = guard_write(dest, note="ccopy --import-json")
     try:
-        new_id = import_conversation(dest, records)
+        new_id = import_conversation(dest, records, cwd=cwd)
     except BaseException:
         guard.rollback()
         raise
@@ -281,13 +287,16 @@ def _remote_common_doc(remote: Remote, agent: Agent, session_id: str) -> Optiona
     return doc
 
 
-def _remote_import_records(remote: Remote, agent: Agent, records: List[dict]) -> Optional[str]:
+def _remote_import_records(remote: Remote, agent: Agent, records: List[dict],
+                           cwd: Optional[str] = None) -> Optional[str]:
     """Seed a new session in `agent` on `remote` over one ssh: the records
     are piped into the far side's ``ccopy --import-json AGENT``, whose stdout
     is the new session id. Returns None on any failure so the caller can
     fall back to the tar pull/create/push.
     """
     cmd = f"ccopy --import-json {shlex.quote(agent.name)}"
+    if cwd:
+        cmd += f" --cwd {shlex.quote(cwd)}"
     proc = _run(remote.ssh_command(cmd), input_text=json.dumps(records))
     if proc.returncode != 0:
         # Silent: the caller falls back to the tar path, which reports its
@@ -398,17 +407,17 @@ def _local_agent(agent: Agent, base: Path) -> Agent:
     return type(agent)(Path(base) / root)
 
 
-def _remote_destination(remote: Remote, dest: Agent,
-                        records: List[dict]) -> str:
+def _remote_destination(remote: Remote, dest: Agent, records: List[dict],
+                        cwd: Optional[str] = None) -> str:
     """Create a new session in `dest` on `remote` and return its id.
 
     First pass: if the remote runs ctools, pipe the records into its
     ``ccopy --import-json`` -- one ssh, only the conversation crosses. Second
     pass: pull its storage, create the session against the local mirror,
-    push the storage back.
+    push the storage back. ``cwd`` seeds the new session for that directory.
     """
     if _remote_has_ctools(remote):
-        new_id = _remote_import_records(remote, dest, records)
+        new_id = _remote_import_records(remote, dest, records, cwd=cwd)
         if new_id:
             return new_id
     with tempfile.TemporaryDirectory() as tmp:
@@ -420,7 +429,7 @@ def _remote_destination(remote: Remote, dest: Agent,
                           f"(no storage at {dest.default_base_path()})[/yellow]")
             raise SystemExit(1)
         try:
-            new_id = import_conversation(mirror, records)
+            new_id = import_conversation(mirror, records, cwd=cwd)
         except UnsupportedOperation:
             raise SystemExit(1)
         _push(remote, dest, base)
@@ -469,6 +478,13 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Read a conversation JSON from stdin into a NEW "
                              "session in AGENT and print the new id (raw wire "
                              "format; also what runs over ssh)")
+    parser.add_argument("--cwd", metavar="DIR", dest="cwd", default=None,
+                        help="Seed the new session for DIR instead of the "
+                             "source session's working directory")
+    parser.add_argument("--here", action="store_true", dest="here",
+                        help="Seed the new session for the current directory "
+                             "instead of the source session's working "
+                             "directory")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Verbose output")
     version_option(parser, "ccopy")
@@ -491,7 +507,7 @@ def main(argv=None) -> int:
     configure_logging(verbose=verbose)
 
     if import_json is not None:
-        _do_import(import_json)
+        _do_import(import_json, cwd=args.cwd)
         return 0
     if export_json is not None:
         _do_export(export_json)
@@ -612,6 +628,20 @@ def main(argv=None) -> int:
     # a snapshot first, verify integrity after, and auto-restore if the write
     # corrupted the database. (A remote write happens on the other host, so
     # there is no local storage to protect here.)
+    # Seed the new session for a working directory. Default: the source
+    # session's own cwd (so the copy lands in the destination's matching
+    # project dir and resumes from there). --here forces the invocation
+    # directory; --cwd DIR forces an explicit one.
+    src_cwd = (common_doc or {}).get('cwd')
+    if args.here:
+        dest_cwd = os.getcwd()
+    elif args.cwd:
+        dest_cwd = os.path.abspath(os.path.expanduser(args.cwd))
+    else:
+        dest_cwd = src_cwd
+    if dst_remote is None and dest_cwd is not None:
+        common_doc['cwd'] = dest_cwd
+
     if dst_remote is None:
         guard = guard_write(dst_agent, note="ccopy")
         try:
@@ -628,7 +658,8 @@ def main(argv=None) -> int:
             raise SystemExit(1)
         backup_path = guard.backup.path if guard.backup else None
     else:
-        new_id = _remote_destination(dst_remote, dst_agent, records)
+        new_id = _remote_destination(dst_remote, dst_agent, records,
+                                     cwd=dest_cwd)
         backup_path = None
 
     where = f" on {dst_remote.target}" if dst_remote else ""

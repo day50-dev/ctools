@@ -115,6 +115,29 @@ def test_copies_conversation_to_new_session(tmp_path):
         AGENTS["opencode"].base_path = original
 
 
+def test_copy_seeds_destination_for_source_cwd(tmp_path):
+    """A copy seeds the destination session for the SOURCE session's cwd, so a
+    claude-code copy lands in that project dir (not the invocation dir) and
+    resumes from there -- the fix for 'No conversation found' on resume."""
+    _make_opencode_conversation_db(tmp_path, "ses_src")  # source directory = '/tmp'
+    cc_base = tmp_path / "cc"
+    (cc_base / "projects").mkdir(parents=True, exist_ok=True)
+    original_oc = AGENTS["opencode"].base_path
+    original_cc = AGENTS["claude-code"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    AGENTS["claude-code"].base_path = cc_base
+    try:
+        result = runner.invoke(app, ["opencode/ses_src", "claude-code"])
+        assert result.exit_code == 0, result.output
+        new_id = result.stdout.split("claude-code session:")[-1].strip().split()[0]
+        # Source cwd is '/tmp' -> encoded project dir '-tmp'.
+        path = cc_base / "projects" / "-tmp" / f"{new_id}.jsonl"
+        assert path.exists(), f"expected the copy under {path}"
+    finally:
+        AGENTS["opencode"].base_path = original_oc
+        AGENTS["claude-code"].base_path = original_cc
+
+
 def test_does_not_touch_source(tmp_path):
     """ccopy is a copy: the source session still exists and is unchanged."""
     _make_opencode_conversation_db(tmp_path, "ses_src")
@@ -483,8 +506,8 @@ def _mock_transport(monkeypatch, remote_home: "object", has_ctools: bool = False
             except Exception:
                 return None
 
-        def fake_import(remote, agent, records):
-            return import_conversation(_mirror(agent), records)
+        def fake_import(remote, agent, records, cwd=None):
+            return import_conversation(_mirror(agent), records, cwd=cwd)
 
         monkeypatch.setattr(ccopy, "_remote_has_ctools", fake_has_ctools)
         monkeypatch.setattr(ccopy, "_remote_common_doc", fake_common_doc)

@@ -214,6 +214,38 @@ def test_claude_code_records_model(tmp_path):
     assert ClaudeCodeAgent(tmp_path).sessions()[0].model == 'claude-opus-5'
 
 
+def test_claude_code_create_session_seeds_source_cwd(tmp_path):
+    """create_session(cwd=...) files the session under that cwd's project dir
+    and records the cwd on every entry -- the source-cwd threading that makes
+    `claude --resume` (run from that project dir) find a ccopy'd session.
+    """
+    from ctools.agents import Message
+    agent = ClaudeCodeAgent(tmp_path)
+    msgs = [Message(role='user', content='hi'),
+            Message(role='assistant', content='hello')]
+    new_id = agent.create_session(msgs, cwd='/home/u/proj')
+    encoded = ''.join(c if c.isalnum() else '-' for c in '/home/u/proj')
+    path = tmp_path / 'projects' / encoded / f'{new_id}.jsonl'
+    assert path.exists(), f'expected the session at {path}'
+    entries = [json.loads(line) for line in path.read_text().splitlines() if line]
+    assert entries, 'no entries written'
+    assert all(e.get('cwd') == '/home/u/proj' for e in entries if 'cwd' in e)
+
+
+def test_claude_code_create_session_defaults_to_cwd(tmp_path, monkeypatch):
+    """With no cwd, the session files under the invocation dir's project dir
+    (the pre-existing behavior, kept as the fallback)."""
+    import os
+    from ctools.agents import Message
+    monkeypatch.chdir(tmp_path)
+    agent = ClaudeCodeAgent(tmp_path)
+    new_id = agent.create_session([Message(role='user', content='hi')], cwd=None)
+    files = list((tmp_path / 'projects').glob('*/' + f'{new_id}.jsonl'))
+    assert len(files) == 1, f'expected one session file, found {files}'
+    entry = json.loads(files[0].read_text().splitlines()[0])
+    assert entry.get('cwd') == os.getcwd()
+
+
 def test_claude_code_listing_only_scans_head(tmp_path):
     """Listing must not JSON-parse the whole transcript.
 

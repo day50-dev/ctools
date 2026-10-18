@@ -453,20 +453,63 @@ class Agent:
             for key in ('model', 'created', 'modified'):
                 if info.get(key):
                     doc[key] = info[key]
+        # The working directory the source session ran in, so a copy can be
+        # seeded into the destination agent's matching project dir and resumed
+        # from there (e.g. `cd <cwd> && claude --resume <id>`).
+        cwd = self._session_cwd(session_id)
+        if cwd:
+            doc['cwd'] = cwd
         raw = self.raw_records(session_id)
         if raw:
             doc['raw'] = raw
         return doc
 
-    def from_common(self, doc: Dict[str, object]) -> str:
-        """Import a common-format envelope into a NEW session; return its id."""
+    def _session_cwd(self, session_id: str) -> Optional[str]:
+        """The working directory this session was recorded in, or None.
+
+        Read from the session's ``path`` (the cwd for every agent that records
+        one). A value that is the session's own storage *file* (not a working
+        directory) is rejected, so a fallback path never masquerades as a cwd.
+        """
+        try:
+            session = self.session(session_id)
+        except AgentError:
+            return None
+        if session is None:
+            return None
+        path = session.path
+        if not (isinstance(path, str) and path):
+            return None
+        if re.search(r'\.(jsonl|json|db)$', path) or os.path.isfile(path):
+            return None
+        return path
+
+    def session_cwd(self, session_id: str) -> Optional[str]:
+        """The working directory this session was recorded in, or None.
+
+        The seed target for a copy: a destination agent files the new session
+        under this directory's project dir so it resumes from there.
+        """
+        return self._session_cwd(session_id)
+
+    def from_common(self, doc: Dict[str, object], cwd: Optional[str] = None) -> str:
+        """Import a common-format envelope into a NEW session; return its id.
+
+        ``cwd`` (or ``doc['cwd']``) seeds the session for that working
+        directory when the agent records one, so the copy lands in the
+        destination's matching project dir and resumes from there.
+        """
         context = doc.get('context') or []
         if not isinstance(context, list):
             raise AgentError(f'{self.name}: common format missing a context list')
+        if cwd is None:
+            doc_cwd = doc.get('cwd')
+            if isinstance(doc_cwd, str) and doc_cwd.strip():
+                cwd = doc_cwd
         # If the envelope carries verbatim records *for this agent* (a same-
         # agent round trip), replay them; otherwise project the portable spine.
         messages = self._from_common_messages(doc, context)
-        return self.create_session(messages)
+        return self.create_session(messages, cwd=cwd)
 
     def _from_common_messages(self, doc: Dict[str, object],
                               context: List[dict]) -> List[Message]:
@@ -517,13 +560,18 @@ class Agent:
         """
         raise UnsupportedOperation(self.name, 'message removal')
 
-    def create_session(self, messages: List[Message]) -> str:
+    def create_session(self, messages: List[Message],
+                       cwd: Optional[str] = None) -> str:
         """Create a brand-new session holding `messages`; return its id.
 
         Used to seed a conversation into an agent that has none yet (e.g.
         migrating a transcript from another agent).  Agents whose storage
         cannot be written in a way the tool itself understands refuse with
         :class:`UnsupportedOperation`.
+
+        ``cwd`` is the working directory the new session is seeded for (used
+        by agents that file sessions under a per-cwd project dir, e.g. Claude
+        Code); ``None`` means the current working directory.
         """
         raise UnsupportedOperation(self.name, 'session creation')
 
@@ -531,6 +579,18 @@ class Agent:
         """Whether this agent can seed a new session from a conversation."""
         fn = type(self).create_session
         return fn is not Agent.create_session
+
+    @staticmethod
+    def _resolve_cwd(cwd: Optional[str]) -> str:
+        """Normalise a seed working directory.
+
+        ``None`` (or blank) means the current working directory; otherwise
+        expand ``~`` and resolve to an absolute path so the destination files
+        sessions under it (and the encoded project dir) are deterministic.
+        """
+        if not cwd or not str(cwd).strip():
+            return os.getcwd()
+        return os.path.abspath(os.path.expanduser(str(cwd)))
 
 
 # --- Storage shapes ---
@@ -731,7 +791,8 @@ class JsonlAgent(FileAgent):
         """An optional file header record, or None if the agent has none."""
         return None
 
-    def create_session(self, messages: List[Message]) -> str:
+    def create_session(self, messages: List[Message],
+                       cwd: Optional[str] = None) -> str:
         session_id = str(uuid.uuid4())
         lines = []
         header = self._new_header(session_id)
@@ -923,7 +984,8 @@ class ClaudeCodeAgent(JsonlAgent):
         return Message(role=role, content=content)
 
     def _new_entry(self, message: Message, session_id: str, index: int,
-                   parent_uuid: Optional[str] = None) -> dict:
+                   parent_uuid: Optional[str] = None,
+                   cwd: Optional[str] = None) -> dict:
         """One native entry for a fresh session.
 
         Claude Code's reader needs a ``parentUuid`` chain (the seed entry's
@@ -931,37 +993,50 @@ class ClaudeCodeAgent(JsonlAgent):
         with float epoch timestamps is silently rejected with "No conversation
         found" on ``claude --resume``.
         """
+        cwd = self._resolve_cwd(cwd)
         etype = 'user' if message.role in ('user', 'system') else 'assistant'
         entry = {'type': etype, 'uuid': str(uuid.uuid4()),
                  'parentUuid': parent_uuid, 'isSidechain': False,
                  'sessionId': session_id,
                  'timestamp': _iso_utc(time.time() + index),
                  'userType': 'external', 'entrypoint': 'cli',
-                 'cwd': os.getcwd(),
+                 'cwd': cwd,
                  'message': {'role': message.role, 'content': message.content}}
         if etype == 'assistant':
             entry['message']['model'] = 'claude-sonnet-4-5'
         return entry
 
-    def _session_dir(self) -> Path:
-        """New sessions land in the project dir for the *current* working
-        directory, so a following ``claude --resume`` (run from there) finds
-        them. Claude Code encodes a cwd into its project-dir name by turning
-        every non-alphanumeric character (notably ``/``) into ``-``.
+    def _session_dir(self, cwd: Optional[str] = None) -> Path:
+        """Project dir for a given working directory.
+
+        Claude Code encodes a cwd into its project-dir name by turning every
+        non-alphanumeric character (notably ``/``) into ``-``, so a session
+        seeded for ``cwd`` lands in the dir that ``claude --resume`` looks in
+        when run from that cwd.  ``None`` means the current working directory.
         """
-        encoded = ''.join(c if c.isalnum() else '-' for c in os.getcwd())
+        cwd = self._resolve_cwd(cwd)
+        encoded = ''.join(c if c.isalnum() else '-' for c in cwd)
         return self.base_path / 'projects' / encoded
 
-    def create_session(self, messages: List[Message]) -> str:
-        """Seed a new, resumable session by chaining entries with parentUuid."""
+    def create_session(self, messages: List[Message],
+                       cwd: Optional[str] = None) -> str:
+        """Seed a new, resumable session by chaining entries with parentUuid.
+
+        ``cwd`` is the working directory the session is seeded for: it selects
+        the destination project dir (``~/.claude/projects/<encoded-cwd>/``) and
+        is recorded on each entry, so the copy is found by ``claude --resume``
+        run from that directory.  ``None`` falls back to the current working
+        directory (the invocation dir).
+        """
         session_id = str(uuid.uuid4())
+        cwd = self._resolve_cwd(cwd)
         lines = []
         prev_uuid = None
         for i, m in enumerate(messages):
-            entry = self._new_entry(m, session_id, i, prev_uuid)
+            entry = self._new_entry(m, session_id, i, prev_uuid, cwd)
             lines.append(json.dumps(entry))
             prev_uuid = entry['uuid']
-        path = self._session_dir() / f'{session_id}.jsonl'
+        path = self._session_dir(cwd) / f'{session_id}.jsonl'
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('\n'.join(lines) + '\n' if lines else '')
         return session_id
@@ -1420,7 +1495,8 @@ class PiAgent(JsonlAgent):
                 'cost': {'input': 0, 'output': 0, 'cacheRead': 0,
                          'cacheWrite': 0, 'total': 0}}
 
-    def create_session(self, messages: List[Message]) -> str:
+    def create_session(self, messages: List[Message],
+                       cwd: Optional[str] = None) -> str:
         session_id = str(uuid.uuid4())
         now_iso = datetime.now().isoformat()
         first_user = next((m.content for m in messages if m.role == 'user'), '')
@@ -1428,7 +1504,7 @@ class PiAgent(JsonlAgent):
         # sessions/ (named `--<cwd-without-leading-slash>--`) and requires a
         # version-3 header; a session dropped at the top level of sessions/
         # is invisible to `pi --session` and `pi --resume`.
-        cwd = os.getcwd()
+        cwd = self._resolve_cwd(cwd)
         safe = f"--{cwd.lstrip('/').replace('/', '-')}--"
         session_dir = self.base_path / 'sessions' / safe
         session_dir.mkdir(parents=True, exist_ok=True)
@@ -1747,7 +1823,8 @@ class OpencodeAgent(SqliteAgent):
             conn.close()
         return len(targets)
 
-    def create_session(self, messages: List[Message]) -> str:
+    def create_session(self, messages: List[Message],
+                       cwd: Optional[str] = None) -> str:
         """Seed a real, loadable opencode session.
 
         The runtime (opencode -s / the TUI) reads richer message data than our
@@ -1759,7 +1836,7 @@ class OpencodeAgent(SqliteAgent):
         session_id = f"ses_{uuid.uuid4().hex[:24]}"
         now_ms = int(time.time() * 1000)
         first_user = next((m.content for m in messages if m.role == 'user'), '')
-        cwd = os.getcwd()
+        cwd = self._resolve_cwd(cwd)
         try:
             conn = sqlite3.connect(str(self.db_path))
         except sqlite3.Error as exc:
@@ -1996,7 +2073,8 @@ class GooseAgent(SqliteAgent):
                 out.append(Message(role=entry['role'], content=text))
         return out
 
-    def create_session(self, messages: List[Message]) -> str:
+    def create_session(self, messages: List[Message],
+                       cwd: Optional[str] = None) -> str:
         """Seed a real, loadable Goose session.
 
         The sessions row carries the columns goose's readers sort and list on
@@ -2021,13 +2099,14 @@ class GooseAgent(SqliteAgent):
             session_id = f"{base_id}_{uuid.uuid4().hex[:6]}"
         stamp = datetime.now().astimezone().isoformat()
         first_user = next((m.content for m in messages if m.role == 'user'), '')
+        cwd = self._resolve_cwd(cwd)
         try:
             cursor.execute('''
                 INSERT INTO sessions (id, name, description, working_dir,
                     created_at, updated_at)
                 VALUES (?, '', ?, ?, ?, ?)
             ''', (session_id, _truncated(first_user or 'ctools session'),
-                  os.getcwd(), stamp, stamp))
+                  cwd, stamp, stamp))
             cursor.executemany(
                 'INSERT INTO messages (session_id, role, content_json,'
                 ' created_timestamp) VALUES (?, ?, ?, ?)',
@@ -2170,7 +2249,8 @@ class HermesAgent(SqliteAgent):
     def messages(self, session_id: str) -> List[Message]:
         return [m for m in self.raw_messages(session_id) if m.role in CONVERSATION_ROLES]
 
-    def create_session(self, messages: List[Message]) -> str:
+    def create_session(self, messages: List[Message],
+                       cwd: Optional[str] = None) -> str:
         """Seed a real, loadable Hermes session.
 
         Mirrors hermes's own foreign-history import (hermes_state_portability):
@@ -2199,7 +2279,7 @@ class HermesAgent(SqliteAgent):
                 VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 0)
             ''', (session_id, 'import',
                   _truncated(first_user or 'ctools session'),
-                  os.getcwd(), now, now, len(messages)))
+                  self._resolve_cwd(cwd), now, now, len(messages)))
             cursor.executemany(
                 'INSERT INTO messages (session_id, role, content, timestamp, active)'
                 ' VALUES (?, ?, ?, ?, 1)',
