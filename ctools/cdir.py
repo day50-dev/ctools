@@ -237,7 +237,13 @@ def _render_table(body_rows: list, fields: List[str], color: bool = False,
     def fmt(f: str, v: str, last: bool = False) -> str:
         w = widths[f]
         if len(v) > w:
-            v = v[:w - 1] + '…' if w > 1 else v[:1]
+            if f == 'path' and w > 2:
+                # Keep the tail — the project name lives at the end of the
+                # path, so a squeezed path should read "…/code/music-explorer"
+                # rather than "/home/chris/…".
+                v = '…' + v[-(w - 1):]
+            else:
+                v = v[:w - 1] + '…' if w > 1 else v[:1]
         if last or not align:
             # The last column is never padded, and off-terminal nothing is.
             return v
@@ -272,18 +278,28 @@ def _term_width(default: int = 10**9) -> int:
 def _fit_to_terminal(widths: dict, fields: List[str], indent: bool) -> None:
     """Squeeze then drop columns so the table fits the terminal.
 
-    The free-text columns absorb the squeeze with ellipses — PATH first (the
-    redundant column), then NAME, which keeps at least its label. A column
-    that would be squeezed below ~8 chars conveys nothing, so it is dropped
-    outright and its space goes to the other flex column. IDs, dates, sizes
-    and counts are never truncated; a terminal narrower than the fixed
-    columns simply overflows. No-op when stdout is not a TTY or the table
-    fits. Mutates `widths` and `fields` (call with a copy).
+    IDs, dates, sizes and counts are fixed; NAME and PATH are the flex
+    columns. Which flex column gives way depends on which is the anomaly:
+
+    * NAME wider than PATH — a pi session's NAME is often the *entire* first
+      message, hundreds of characters. There the anomaly is NAME, so NAME is
+      ellipsized to keep PATH visible (the "which project" column the user
+      usually came for). PATH is dropped only if the terminal can't fit it
+      alongside even a floor-width NAME.
+    * PATH wider than (or equal to) NAME: PATH is the sacrificial column (the
+      long-standing behaviour) — it is squeezed first and dropped before NAME
+      is ever ellipsised.
+
+    A flex column is dropped rather than squeezed below ``useful_min``
+    characters, where it would be noise. No-op when stdout is not a TTY or the
+    table fits. Mutates `widths` and `fields` (call with a copy).
     """
     useful_min = 8  # narrower than this, a column is noise, not signal
     if 'name' not in fields and 'path' not in fields:
         return
     avail = _term_width()
+    floor_name = len(FIELD_LABELS['name'])
+    floor_path = len(FIELD_LABELS['path'])
 
     def total() -> int:
         return sum(widths[f] for f in fields) + 2 * (len(fields) - 1) \
@@ -291,24 +307,42 @@ def _fit_to_terminal(widths: dict, fields: List[str], indent: bool) -> None:
 
     if total() <= avail:
         return
-    # Squeeze order: PATH (floor 1), then NAME (floor: its label).
-    for f in ('path', 'name'):
-        if f not in fields:
-            continue
-        if total() <= avail:
-            break
-        room = avail - (total() - widths[f])
-        floor = len(FIELD_LABELS[f]) if f == 'name' else 1
-        other_flex = [x for x in ('path', 'name') if x in fields and x != f]
-        if room < useful_min and other_flex:
-            fields.remove(f)  # give the space to the other flex column
-            continue
-        if widths[f] > max(room, floor):
-            widths[f] = max(room, floor)
-    # Still too wide: drop PATH (the least useful column; the path is the
-    # filter, and the rows are already sorted and ID-addressed).
-    if 'path' in fields and total() > avail:
-        fields.remove('path')
+
+    if 'name' in fields and 'path' in fields:
+        if widths['name'] > widths['path']:
+            # NAME is the wide anomaly: ellipsize it to keep PATH readable.
+            fixed = total() - widths['name'] - widths['path']
+            room_for_path = avail - (fixed + floor_name)
+            if room_for_path >= useful_min:
+                widths['path'] = min(widths['path'], room_for_path)
+                overflow = total() - avail
+                if overflow > 0:
+                    widths['name'] = max(widths['name'] - overflow, floor_name)
+                if 'path' in fields and total() > avail:
+                    fields.remove('path')  # NAME hit its floor; PATH won't fit
+            else:
+                # Not even a floor-width NAME plus a readable PATH fit here.
+                fields.remove('path')
+                overflow = total() - avail
+                if overflow > 0:
+                    widths['name'] = max(widths['name'] - overflow, floor_name)
+        else:
+            # PATH is the sacrificial column: squeeze it, and drop it before
+            # ever ellipsising NAME.
+            room = avail - (total() - widths['path'])
+            if room < useful_min:
+                fields.remove('path')
+            elif widths['path'] > max(room, floor_path):
+                widths['path'] = max(room, floor_path)
+            overflow = total() - avail
+            if overflow > 0:
+                widths['name'] = max(widths['name'] - overflow, floor_name)
+    elif 'name' in fields:
+        # Only NAME is flexible: ellipsize it to fit.
+        widths['name'] = max(widths['name'] - max(0, total() - avail), floor_name)
+    else:
+        # Only PATH is flexible: squeeze it to fit.
+        widths['path'] = max(widths['path'] - max(0, total() - avail), floor_path)
 
 
 _SORT_ALIASES = {

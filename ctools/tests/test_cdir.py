@@ -2073,6 +2073,28 @@ def test_fit_to_terminal_unchanged_when_fits(monkeypatch):
     assert widths == {'id': 10, 'name': 12}
 
 
+def test_fit_keeps_path_when_name_is_the_anomaly(monkeypatch):
+    """A pi session's NAME is the entire first message (hundreds of chars).
+    When NAME is wider than PATH, NAME must ellipsize so PATH stays visible —
+    PATH is the "which project" column, not the sacrificial one in this case.
+    (Regression: the old PATH-first squeeze dropped PATH entirely.)"""
+    monkeypatch.setattr(cdir, '_term_width', lambda default=200: 150)
+    widths = {'id': 36, 'name': 418, 'mtime': 16, 'size': 6, 'msgs': 4,
+              'path': 29}
+    fields = ['id', 'name', 'mtime', 'size', 'msgs', 'path']
+    cdir._fit_to_terminal(widths, fields, True)
+    # PATH survives and is shown in full; NAME is the one that ellipsizes.
+    assert 'path' in fields
+    assert widths['path'] == 29
+    assert widths['name'] < 418
+    # fixed 74 + path 29, so NAME fills the rest to fit: 150-74-29 = 47.
+    assert widths['name'] == 47
+    assert widths['id'] == 36 and widths['mtime'] == 16  # fixed untouched
+    # and the table now fits the terminal.
+    total = sum(widths[f] for f in fields) + 2 * (len(fields) - 1) + 2
+    assert total <= 150
+
+
 def test_cli_table_fits_narrow_terminal(tmp_path, monkeypatch):
     """A wide -l listing fits a 60-column terminal: PATH is dropped (it would
     be too narrow to read), NAME stays intact, and no row wraps."""
