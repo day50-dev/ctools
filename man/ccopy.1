@@ -6,6 +6,8 @@ ccopy \- copy a conversation from one agent to a new session in another
 .RB [ \-\-dry-run ]
 .RB [ \-v ]
 .RB [ \-\-version ]
+.RB [ \-\-cwd DIR ]
+.RB [ \-\-here ]
 .I source
 .I destination
 .br
@@ -36,10 +38,27 @@ an fd from process substitution
 for stdin. The destination is a bare agent name; a fresh session is created
 there holding the copied conversation, and ccopy prints the command to resume
 it.
+.PP
+By default the new session is seeded for the source session's own working
+directory, so agents that file sessions under a per-cwd project folder (e.g.
+Claude Code) land the copy where resume will find it. Use
+.B \-\-cwd
+or
+.B \-\-here
+to override.
 .SH OPTIONS
 .TP
 .B \-\-dry-run
 Show what would happen without writing anything.
+.TP
+.BI \-\-cwd " DIR"
+Seed the new session for
+.IR DIR
+instead of the source session's working directory.
+.TP
+.B \-\-here
+Seed the new session for the current directory instead of the source
+session's working directory.
 .TP
 .BR \-v ", " \-\-verbose
 Structured logging to stderr.

@@ -31,6 +31,27 @@ Only agents that support session creation work as destinations (claude-code,
 opencode, kilo, codex, pi). The others refuse with a clean error. `--dry-run`
 shows what would happen without writing anything.
 
+## Where the new session lands (working directory)
+
+Agents that file sessions under a per-working-directory project folder (notably
+Claude Code, under `~/.claude/projects/<encoded-cwd>/`) need the copy seeded for
+the **right directory**, or `claude --resume` can't find it from where you run
+it. By default ccopy seeds the new session for the **source session's own
+cwd** — so a pi session that ran in `/home/u/proj` copies into
+`~/.claude/projects/-home-u-proj/`, and `cd /home/u/proj && claude --resume <id>`
+works. When the source has no recorded cwd (e.g. a bare JSON file), ccopy falls
+back to the directory you run it from.
+
+Override the default:
+
+```sh
+ccopy pi/ses_abc claude-code --here        # seed for the current directory (old behavior)
+ccopy pi/ses_abc claude-code --cwd /x/y    # seed for an explicit directory
+```
+
+See [ccopy-claude-resume-notes.md](ccopy-claude-resume-notes.md) for why this
+matters (the "No conversation found" on resume bug and how it was fixed).
+
 ## Across hosts
 
 There are two ways to get a conversation across a machine boundary, and you
