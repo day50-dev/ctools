@@ -1088,6 +1088,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+/* theme-matched scrollbars: a dark track and dim thumb so a scroll bar reads
+   on the dark panels instead of as an OS-default light bar. Firefox uses the
+   standard properties; Chromium gets the ::-webkit-scrollbar treatment. */
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+::-webkit-scrollbar-corner { background: transparent; }
 /* initial-load overlay: shown until the first agent scan finishes */
 .bootload { position: fixed; inset: 0; background: var(--bg); z-index: 50;
   display: flex; flex-direction: column; align-items: center; justify-content:
@@ -1390,7 +1399,7 @@ input.sess-ck, input.ckall { position: absolute; inset: 0; margin: 0;
 .tool-item .tool-sum { display: block; color: var(--dim); font-size: 11px;
   margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* inline: mark the conversation messages that made a tool call */
-.msg.has-tools { border-left: 3px solid #e0a458; }
+.msg.has-tools { border-left: 3px solid #e0a458; padding-left: 14px; }
 .tool-inline { font-size: 11px; color: #e0a458; margin: 0 0 7px; line-height: 1.5;
   font-family: var(--mono); }
 .tool-inline .tn { font-weight: 700; }
