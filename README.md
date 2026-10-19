@@ -218,7 +218,7 @@ things that matter for picking it back up: the goal, the constraints, and
 what was decided.
 
 ```bash
-ctools concepts <agent> <session-id>
+cextract @<agent>/<session-id>
 ```
 
 Concepts are extracted with one of three paths, chosen automatically:
@@ -231,12 +231,8 @@ Concepts are extracted with one of three paths, chosen automatically:
    keep only certain types, etc.).
 
 Strategies and filters are stored as JSON config files that ctools reads at
-runtime. Create them in the dashboard (the **Concepts** tab) or by hand:
-
-```bash
-ctools strategies list
-ctools filters list
-```
+runtime, in the config dir (see below). Create them in the dashboard (the
+**Concepts** tab) or by hand.
 
 **Where ctools keeps its config.** Config and data live in a per-user
 directory resolved via `platformdirs` (no hand-rolled platform checks):

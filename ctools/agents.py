@@ -2428,7 +2428,7 @@ class OpenclawAgent(SqliteAgent):
     """
 
     name = 'openclaw'
-    description = 'OpenClaw (openclaw.ai) personal assistant'
+    description = 'OpenClaw'
     display_name = 'OpenClaw'
     storage_format = 'sqlite'
     db_name = 'openclaw-agent.sqlite'
@@ -2662,7 +2662,7 @@ class ClineAgent(Agent):
     """
 
     name = 'cline'
-    description = 'Cline (cline.bot)'
+    description = 'Cline'
     display_name = 'Cline'
     storage_format = 'json'
     files_read = 'data/tasks/'
@@ -2986,7 +2986,7 @@ class FreebuffAgent(Agent):
     """
 
     name = 'freebuff'
-    description = 'Freebuff (Codebuff)'
+    description = 'Freebuff'
     display_name = 'Freebuff'
     storage_format = 'json'
     files_read = 'projects/'
