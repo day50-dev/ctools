@@ -339,8 +339,46 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--tool", action="store_true",
                    help="shorthand for --role tool (tool results/output)")
 
+    g = parser.add_argument_group("Search scope")
+    g.add_argument("--hosts", action="store_true",
+                   help="also search the hosts in the [hosts] table of "
+                        "ctools.toml: ctools runs on each host and only the "
+                        "results cross the wire (prefixed with @<host>)")
+
     version_option(parser, "cgrep")
     return parser
+
+
+def _search_hosts(argv: List[str]) -> None:
+    """Run the same cgrep search on each configured host and print the results.
+
+    The remote ctools searches that host's own agents (its home); only the
+    result lines cross the wire, prefixed with ``@<host>``.  A stale host is
+    detected via the ``ctools <version>`` first line and reported, not treated
+    as matches.
+    """
+    from ctools.config import load_config
+    from ctools.remote_search import build_remote_command, run_remote_search
+    hosts = load_config().hosts
+    if not hosts:
+        console.print("[dim]No hosts configured (add a [hosts] table to "
+                     "ctools.toml)[/dim]")
+        return
+    cmd = build_remote_command("cgrep", argv, strip=["--hosts"])
+    for base in hosts:
+        res = run_remote_search(base, cmd)
+        if res.version is not None:
+            console.print(f"[yellow]@{base.name}: ctools {res.version} refused "
+                         f"this invocation: {res.error}[/yellow]")
+            continue
+        if not res.ok and res.error:
+            console.print(f"[red]@{base.name}: {res.error}[/red]")
+            continue
+        if res.lines:
+            for ln in res.lines:
+                print(ln, flush=True)
+        else:
+            console.print(f"[dim]@{base.name}: no matches[/dim]")
 
 
 def main(argv=None) -> int:
@@ -518,6 +556,9 @@ def main(argv=None) -> int:
                     all_matches.extend(matches)
             else:
                 without_matches.add(path)
+
+    if ns.hosts:
+        _search_hosts(argv)
 
     if list_files:
         has_result = bool(with_matches)
