@@ -246,8 +246,21 @@ directory resolved via `platformdirs` (no hand-rolled platform checks):
 - Windows: `%APPDATA%\ctools\` (config), `%LOCALAPPDATA%\ctools\` (data)
 
 Set `$CTOOLS_CONFIG` (and `$CTOOLS_DATA`) to relocate. This holds
-`resume-commands.json`, `strategies/`, `filters/` — and, going forward, the
-`bases` list for cross-location search (issue #2).
+`resume-commands.json`, `strategies/`, `filters/`, and the general
+**`ctools.toml`** config — one file, multiple sections.  The first section,
+`[hosts]`, is the search whitelist for cross-location search (issue #2):
+
+```toml
+# ~/.config/ctools/ctools.toml
+[hosts]
+fatty  = "ssh://bobby@fatty.local"
+workie = "ssh://10.0.0.4"
+```
+
+Each value is an `ssh://[user@]host[:port]` reference (the same form `ccat`
+and `ccopy` use for a remote side), so the host may be a `~/.ssh/config`
+alias.  A missing/malformed config never breaks a search — it just means
+"local only".
 
 The dashboard shows the full extraction pipeline (conversation → extraction
 → filter → concepts) so you can see exactly what was kept and why.
