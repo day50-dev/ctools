@@ -38,6 +38,9 @@ __all__ = ['app', 'parse_path_pattern', 'sessions_for_pattern', 'grep_session',
 
 console = Console()
 
+# Roles grep can be restricted to, in the order the --role choices list them.
+VALID_ROLES = ('user', 'assistant', 'system', 'tool')
+
 # grep-compatible exit statuses.
 EXIT_MATCH = 0
 EXIT_NO_MATCH = 1
@@ -118,12 +121,24 @@ def _compile_pattern(pattern: str, flags: int = 0, whole_word: bool = False,
 
 
 def grep_session(agent: Agent, session_id: str, pattern: re.Pattern,
-                 invert: bool = False, before: int = 0, after: int = 0) -> List[Match]:
-    """Search one session for pattern matches."""
+                 invert: bool = False, before: int = 0, after: int = 0,
+                 roles: Optional[List[str]] = None) -> List[Match]:
+    """Search one session for pattern matches.
+
+    ``roles`` limits matches to messages with one of those roles. None (the
+    default) searches the conversation lines — user and assistant — exactly as
+    before. With a role list, the session is read with :meth:`lines_with_role`
+    (all roles, from raw_messages) so system and tool turns are reachable.
+    """
     if not agent.exists():
         return []
     try:
-        lines = agent.lines(session_id)
+        if roles:
+            # (line_num, line, role) triples across every role.
+            lines = [(n, l) for n, l, r in agent.lines_with_role(session_id)
+                     if r in roles]
+        else:
+            lines = agent.lines(session_id)
     except AgentError:
         return []
 
@@ -310,6 +325,20 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("-v", "--invert-match", action="store_true",
                    help="select non-matching lines")
 
+    g = parser.add_argument_group("Role selection")
+    g.add_argument("--role", dest="role", action="append", metavar="ROLE",
+                   help="only match messages with ROLE; repeat or comma-separate "
+                        "(user, assistant, system, tool). Default: user + assistant "
+                        "(the conversation).")
+    g.add_argument("--user", action="store_true",
+                   help="shorthand for --role user")
+    g.add_argument("--assistant", action="store_true",
+                   help="shorthand for --role assistant")
+    g.add_argument("--system", action="store_true",
+                   help="shorthand for --role system")
+    g.add_argument("--tool", action="store_true",
+                   help="shorthand for --role tool (tool results/output)")
+
     version_option(parser, "cgrep")
     return parser
 
@@ -390,6 +419,27 @@ def main(argv=None) -> int:
     ignore_case = ns.ignore_case
     fmt = ns.fmt
 
+    # Role selection: --role (repeatable, comma-separated) plus the --user /
+    # --assistant / --system / --tool sugar. None means "the conversation"
+    # (user + assistant), which is the historical default.
+    roles: Optional[List[str]] = None
+    role_tokens: List[str] = []
+    if ns.role:
+        role_tokens.extend(r.strip() for chunk in ns.role for r in chunk.split(','))
+    for flag, role in ((ns.user, 'user'), (ns.assistant, 'assistant'),
+                       (ns.system, 'system'), (ns.tool, 'tool')):
+        if flag:
+            role_tokens.append(role)
+    role_tokens = [r for r in role_tokens if r]
+    if role_tokens:
+        bad = [r for r in role_tokens if r not in VALID_ROLES]
+        if bad:
+            console.print(f"[red]Invalid role(s): {', '.join(bad)} "
+                          f"(valid: {', '.join(VALID_ROLES)})[/red]")
+            raise SystemExit(EXIT_ERROR)
+        # De-duplicate, keep stable order.
+        roles = [r for i, r in enumerate(role_tokens) if r not in role_tokens[:i]]
+
     if max_matches is not None and max_matches < 1:
         console.print("[red]Invalid max count: must be >= 1[/red]")
         raise SystemExit(EXIT_ERROR)
@@ -453,7 +503,8 @@ def main(argv=None) -> int:
             if not _session_selected(path, include, exclude):
                 continue
             matches = grep_session(agent, session_id, compiled,
-                                   invert=invert, before=before, after=after)
+                                   invert=invert, before=before, after=after,
+                                   roles=roles)
             if max_matches is not None:
                 matches = matches[:max_matches]
             if only_matching:

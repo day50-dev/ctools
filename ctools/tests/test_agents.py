@@ -488,3 +488,75 @@ def test_goose_refuses_injection_rather_than_writing_the_wrong_db(tmp_path):
 
 def test_token_usage_defaults_to_none(tmp_path):
     assert ClaudeCodeAgent(tmp_path).token_usage('ses_a') is None
+
+
+# --- role canonicalisation (cgrep --role) ---
+
+def test_canonical_role_folds_variants():
+    assert Agent._canonical_role('toolResult') == 'tool'
+    assert Agent._canonical_role('tool_result') == 'tool'
+    assert Agent._canonical_role('human') == 'user'
+    assert Agent._canonical_role('assistant') == 'assistant'
+    assert Agent._canonical_role('system') == 'system'
+    # an unknown role is returned unchanged so it still shows / can be filtered
+    assert Agent._canonical_role('weirdrole') == 'weirdrole'
+    assert Agent._canonical_role('') == ''
+
+
+def test_lines_with_role_canonicalises_role_names(tmp_path):
+    """The base stream folds an agent's variant role name to its canonical one,
+    so a single --tool filter works even for agents that store tool output
+    under a name like pi's ``toolResult``."""
+    from ctools.agents import Message
+    agent = object.__new__(Agent)
+    agent.raw_messages = lambda _sid: [
+        Message(role='user', content='hi'),
+        Message(role='toolResult', content='df output'),
+        Message(role='system', content='sys'),
+    ]
+    lines = agent.lines_with_role('s')
+    assert {role for _, _, role in lines} == {'user', 'tool', 'system'}
+    # the line text carries the canonical role, not the raw one
+    assert any(line.startswith('tool: df output') for _, line, _ in lines)
+
+
+# --- Claude Code: tool calls/results live in content blocks, not roles ---
+
+def test_claude_code_lines_with_role_surfaces_tool_and_system(tmp_path):
+    """Claude Code keeps tool_use / tool_result as content blocks (not
+    role-tagged messages), so the base stream never exposes them.  The
+    override re-walks the JSONL and surfaces them under the ``tool`` role,
+    plus ``system`` entries, so ``cgrep --tool`` / ``--system`` work."""
+    sid = 'cc-lwr-1'
+    entries = [
+        {'type': 'system', 'message': {'role': 'system',
+                                       'content': 'You are Claude.'}},
+        {'type': 'user', 'message': {'role': 'user', 'content': 'user hello'}},
+        {'type': 'assistant', 'message': {'role': 'assistant', 'content': [
+            {'type': 'text', 'text': 'let me run it'},
+            {'type': 'tool_use', 'id': 't1', 'name': 'Bash',
+             'input': {'command': 'ls -la'}},
+        ]}},
+        {'type': 'user', 'message': {'role': 'user', 'content': [
+            {'type': 'tool_result', 'tool_use_id': 't1',
+             'content': 'total 5\nfile-a'},
+        ]}},
+        {'type': 'assistant', 'message': {'role': 'assistant',
+                                          'content': 'assistant done'}},
+    ]
+    proj = tmp_path / 'projects' / '-tmp'
+    proj.mkdir(parents=True, exist_ok=True)
+    (proj / f'{sid}.jsonl').write_text(
+        '\n'.join(json.dumps(e) for e in entries) + '\n')
+
+    lines = ClaudeCodeAgent(tmp_path).lines_with_role(sid)
+    roles = {role for _, _, role in lines}
+    assert roles == {'user', 'assistant', 'system', 'tool'}
+    text = '\n'.join(line for _, line, _ in lines)
+    # the tool call, the tool result, and the system prompt are all reachable
+    assert 'Bash' in text and 'ls -la' in text
+    assert 'total 5' in text and 'file-a' in text
+    assert 'You are Claude.' in text
+    # tool_result must NOT also leak in as a plain user conversation line
+    assert not any(role == 'user' and 'total 5' in line
+                   for _, line, role in lines)

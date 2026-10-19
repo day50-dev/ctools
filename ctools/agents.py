@@ -94,6 +94,18 @@ class UnsupportedOperation(AgentError):
 
 CONVERSATION_ROLES = ('user', 'assistant')
 
+# Canonical role names and the aliases we fold them into, so a role filter
+# (cgrep --tool) matches even when an agent records a role under a variant
+# name (e.g. pi's "toolResult" is a tool result, "human" is a user turn).
+# Keys are lowercase; looked up via Agent._canonical_role.
+_ROLE_CANON = {
+    'user': 'user', 'human': 'user',
+    'assistant': 'assistant',
+    'system': 'system',
+    'tool': 'tool', 'toolresult': 'tool', 'tool_result': 'tool',
+    'tooluse': 'tool', 'tool_use': 'tool', 'toolcall': 'tool',
+}
+
 _NANOS = re.compile(r'^(.*\.\d{6})\d+(.*)$')
 
 
@@ -534,6 +546,39 @@ class Agent:
                 if line.strip():
                     out.append((len(out) + 1, f"{message.role}: {line}"))
         return out
+
+    def lines_with_role(self, session_id: str) -> List[Tuple[int, str, str]]:
+        """Every message as ``(line_num, "role: text", role)``, all roles.
+
+        Built from :meth:`raw_messages` (user, assistant, system, tool) rather
+        than :meth:`messages` (user + assistant only), so role filtering can
+        reach system and tool turns. Line numbers count every non-blank line
+        across all roles, so for sessions with system/tool turns they differ
+        from :meth:`lines`. Role names are canonicalised (e.g. pi's
+        ``toolResult`` -> ``tool``) so a single ``--tool`` filter works across
+        agents. Agents whose storage keeps tool traffic in content blocks rather
+        than role-tagged messages (e.g. Claude Code) override this to surface
+        it.
+        """
+        out: List[Tuple[int, str, str]] = []
+        for message in self.raw_messages(session_id):
+            role = self._canonical_role(message.role)
+            for line in message.content.split('\n'):
+                if line.strip():
+                    out.append((len(out) + 1, f"{role}: {line}", role))
+        return out
+
+    @staticmethod
+    def _canonical_role(role: str) -> str:
+        """Fold a role name to its canonical form (user/assistant/system/tool).
+
+        Agents record the same logical role under different names (pi's
+        ``toolResult`` is a tool result; ``human`` is a user turn).  Matching is
+        case-insensitive; an unrecognised role is returned unchanged so it still
+        shows up and can be filtered by its literal name.
+        """
+        r = (role or '').strip()
+        return _ROLE_CANON.get(r.lower(), r)
 
     def token_usage(self, session_id: str) -> Optional[Dict[str, int]]:
         """Token counts the agent recorded itself, or None if it keeps none.
@@ -1126,6 +1171,71 @@ class ClaudeCodeAgent(JsonlAgent):
     def _tool_summary(block: dict) -> str:
         """A short one-line description of a tool call, read from its input."""
         return _summarize_args(block.get('input') or {})
+
+    def lines_with_role(self, session_id: str) -> List[Tuple[int, str, str]]:
+        """All-roles line stream, including tool calls, results and system.
+
+        Claude Code stores ``tool_use`` (in assistant entries) and
+        ``tool_result`` (in user-typed entries) as content *blocks*, not as
+        role-tagged messages, so the base stream (built from
+        :meth:`raw_messages`) never exposes them.  We re-walk the JSONL and
+        surface every block so role filters (``cgrep --tool`` / ``--system``)
+        can search tool traffic and the system prompt.  Isolated to this
+        method: it does not change :meth:`messages` or :meth:`raw_messages`,
+        so ccopy, the web UI and token counting are unaffected.
+        """
+        path = self.require_file(session_id)
+        out: List[Tuple[int, str, str]] = []
+
+        def emit(role: str, text: str) -> None:
+            for line in text.split('\n'):
+                if line.strip():
+                    out.append((len(out) + 1, f"{role}: {line}", role))
+
+        for entry in read_json_lines(path):
+            etype = entry.get('type', '')
+            message = entry.get('message')
+            content = (message.get('content', '')
+                      if isinstance(message, dict) else '')
+            role = self.ROLE_TYPES.get(etype)
+            if role in CONVERSATION_ROLES:
+                text = text_of(content)
+                if text:
+                    emit(role, text)
+            elif etype == 'system':
+                text = text_of(content)
+                if text:
+                    emit('system', text)
+            blocks = content if isinstance(content, list) else []
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get('type')
+                if btype == 'tool_use':
+                    emit('tool', f"{block.get('name') or 'tool'} "
+                                f"{self._tool_summary(block)}")
+                elif btype == 'tool_result':
+                    emit('tool', self._tool_result_text(block))
+        return out
+
+    @staticmethod
+    def _tool_result_text(block: dict) -> str:
+        """The text of a ``tool_result`` block (string or a list of parts)."""
+        content = block.get('content', '')
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    if item.get('type') == 'text' and item.get('text'):
+                        parts.append(item['text'])
+                    elif item.get('type') == 'tool_reference':
+                        parts.append(item.get('tool_name') or '')
+                elif isinstance(item, str):
+                    parts.append(item)
+            return ' '.join(p for p in parts if p)
+        return ''
 
 
 class CodexAgent(JsonlAgent):

@@ -40,6 +40,33 @@ search every installed agent.
 Count and list modes (`-c`, `-l`, `-L`, `--format`) still buffer, since they need
 the whole picture — same as real `grep`.
 
+## Roles
+
+By default cgrep searches the **conversation** — the `user` and `assistant`
+turns, which is what `ccat` and the web UI show. To search a specific message
+role, or to reach content the conversation hides (tool traffic, the system
+prompt), narrow by role:
+
+```sh
+cgrep --tool "Traceback" "pi/*"      # only tool results
+cgrep --system "You are" "claude-code/*"   # the system prompt
+cgrep --user "refactor" "*"          # only what the user said
+cgrep --role user,assistant "x"      # same as the default conversation
+cgrep --user --assistant "x"         # the sugar flags can be combined
+```
+
+`--user` / `--assistant` / `--system` / `--tool` are sugar for `--role`. Pass
+`--role` repeatedly (or comma-separated) to search several roles at once. With
+no role flag, cgrep searches the conversation (`user` + `assistant`), exactly as
+before — the role machinery is only engaged when you ask for it.
+
+A role filter switches the search to the agent's **full** message stream (all
+roles), so line numbers in `--tool` / `--system` output count every line and may
+differ from the default. Coverage varies by agent: pi exposes its tool results
+(via `--tool`), and Claude Code's tool calls, tool results and system entries are
+all reachable; agents whose storage doesn't record a role as a message simply
+yield nothing for that role.
+
 ## Exit status
 
 grep's: `0` if a match was found, `1` if none, `2` on error (bad pattern, missing

@@ -950,3 +950,119 @@ def test_cli_version():
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert result.stdout == f"cgrep (ctxttools) {__version__}\n"
+
+# --- Role filtering (cgrep --role / --user / --assistant / --system / --tool) ---
+
+class _RoleAgent:
+    """Minimal agent exposing one message per role, for role-filter tests.
+
+    Registered under the name 'roletest' in the REGISTRY (monkeypatched away
+    after the test) so the CLI path can resolve it.
+    """
+    name = 'roletest'
+
+    def __init__(self, base_path):
+        from pathlib import Path
+        self.base_path = Path(base_path)
+
+    def exists(self):
+        return self.base_path.exists()
+
+    def sessions(self):
+        from types import SimpleNamespace
+        return [SimpleNamespace(id='rs1', name='role session')]
+
+    def raw_messages(self, session_id):
+        from ctools.agents import Message
+        return [
+            Message(role='user', content='user weather line'),
+            Message(role='assistant', content='assistant weather line'),
+            Message(role='system', content='system secret-token line'),
+            Message(role='tool', content='tool result-42 line'),
+        ]
+
+    def messages(self, session_id):
+        return [m for m in self.raw_messages(session_id)
+                if m.role in ('user', 'assistant')]
+
+    def lines(self, session_id):
+        out = []
+        for message in self.messages(session_id):
+            for line in message.content.split('\n'):
+                if line.strip():
+                    out.append((len(out) + 1, f"{message.role}: {line}"))
+        return out
+
+    def lines_with_role(self, session_id):
+        out = []
+        for message in self.raw_messages(session_id):
+            for line in message.content.split('\n'):
+                if line.strip():
+                    out.append((len(out) + 1, f"{message.role}: {line}",
+                                message.role))
+        return out
+
+
+@pytest.fixture
+def role_agent(tmp_path, monkeypatch):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    agent = _RoleAgent(tmp_path)
+    monkeypatch.setitem(AGENTS, 'roletest', agent)
+    return agent
+
+
+def test_cli_role_system_only(role_agent):
+    out = _out(runner.invoke(app, ["secret-token", "--system", "roletest/rs1"]))
+    assert "system secret-token line" in out
+    assert "weather" not in out          # user/assistant excluded
+
+
+def test_cli_role_tool_only(role_agent):
+    out = _out(runner.invoke(app, ["result-42", "--tool", "roletest/rs1"]))
+    assert "tool result-42 line" in out
+    assert "weather" not in out
+
+
+def test_cli_role_flag_multiple(role_agent):
+    # comma-separated roles in one --role
+    out = _out(runner.invoke(app, ["weather", "--role", "user,assistant", "roletest/rs1"]))
+    assert "user weather line" in out
+    assert "assistant weather line" in out
+
+
+def test_cli_role_flags_combined(role_agent):
+    # --user and --assistant sugar together
+    out = _out(runner.invoke(app, ["weather", "--user", "--assistant", "roletest/rs1"]))
+    assert "user weather line" in out
+    assert "assistant weather line" in out
+
+
+def test_cli_default_excludes_system_and_tool(role_agent):
+    # No role flag: conversation only, so system/tool lines are not matched.
+    res = runner.invoke(app, ["secret-token", "roletest/rs1"])
+    assert "secret-token" not in _out(res)
+    res = runner.invoke(app, ["result-42", "roletest/rs1"])
+    assert "result-42" not in _out(res)
+
+
+def test_cli_role_no_match_exit_one(role_agent):
+    # The needle exists, but not in the requested role -> no match.
+    res = runner.invoke(app, ["secret-token", "--user", "roletest/rs1"])
+    assert "secret-token" not in _out(res)
+    assert res.exit_code == 1
+
+
+def test_cli_role_invalid_is_error(role_agent):
+    res = runner.invoke(app, ["weather", "--role", "bogus", "roletest/rs1"])
+    assert res.exit_code == cgrep.EXIT_ERROR
+    assert "Invalid role" in _out(res)
+
+
+def test_grep_session_roles_api(role_agent):
+    import re
+    all_matches = grep_session(role_agent, 'rs1', re.compile('weather'))
+    assert {m.line for m in all_matches} == {
+        'user: user weather line', 'assistant: assistant weather line'}
+    sys_only = grep_session(role_agent, 'rs1', re.compile('secret-token'),
+                            roles=['system'])
+    assert [m.line for m in sys_only] == ['system: system secret-token line']

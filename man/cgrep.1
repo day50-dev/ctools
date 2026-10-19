@@ -32,6 +32,12 @@ cgrep \- search through LLM context window sessions
 .RB [ \-\-exclude-from
 .IR FILE ]
 .RB [ \-a ]
+.RB [ \-\-role
+.IR role ]
+.RB [ \-\-user ]
+.RB [ \-\-assistant ]
+.RB [ \-\-system ]
+.RB [ \-\-tool ]
 .RB [ \-f
 .IR format ]
 .RB [ \-\-version ]
@@ -190,6 +196,32 @@ Search every installed agent, the same as omitting
 .I paths
 entirely.
 .TP
+.BR \-\-role
+.IR role
+Restrict the search to specific message role(s). Repeat the flag, or pass a
+comma-separated list, to search several roles at once (for example
+.BR \-\-role " " user,tool ). The roles are
+.BR user ,
+.BR assistant ,
+.BR system ,
+and
+.BR tool .
+With no role flag, cgrep searches the
+.B conversation
+(user + assistant) exactly as before; a role flag switches to the agent's full
+message stream so tool traffic and the system prompt become reachable.
+.TP
+.BR \-\-user ", " \-\-assistant ", " \-\-system ", " \-\-tool
+Sugar for
+.BR \-\-role user ,
+.BR \-\-role assistant ,
+.BR \-\-role system ,
+and
+.BR \-\-role tool
+respectively; they can be combined. Coverage varies by agent: pi exposes tool
+results and Claude Code exposes tool calls, tool results and system entries; an
+agent that doesn't record a role as a message yields nothing for it.
+.TP
 .B \-\-version
 Print version information and exit.
 .SH ARGUMENTS
@@ -286,6 +318,16 @@ Invert match (find lines WITHOUT "test"):
 $ cgrep -v "test" "opencode/ses_abc123"
 1:user: Hello world
 4:assistant: Here is some code
+.fi
+.RE
+.PP
+Search only tool results (a role the default conversation search cannot see):
+.PP
+.RS
+.nf
+$ cgrep --tool "Traceback" "pi/*"
+pi/01a141c9:42:tool: Traceback (most recent call last):
+pi/01a141c9:43:tool:   File "run.py", line 7, in <module>
 .fi
 .RE
 .PP
