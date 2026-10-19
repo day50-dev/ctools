@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 
+from ctools.paths import config_dir
+
 
 # --- Domain model ---
 
@@ -3191,7 +3193,7 @@ RESUME_COMMANDS: Dict[str, str] = {
 
 
 def _resume_override() -> Dict[str, str]:
-    path = Path.home() / '.config' / 'ctools' / 'resume-commands.json'
+    path = config_dir() / 'resume-commands.json'
     if path.exists():
         try:
             data = json.loads(path.read_text())

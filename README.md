@@ -238,6 +238,17 @@ ctools strategies list
 ctools filters list
 ```
 
+**Where ctools keeps its config.** Config and data live in a per-user
+directory resolved via `platformdirs` (no hand-rolled platform checks):
+
+- Linux: `~/.config/ctools/` (config), `~/.local/share/ctools/` (data)
+- macOS: `~/Library/Application Support/ctools/` (the macOS convention)
+- Windows: `%APPDATA%\ctools\` (config), `%LOCALAPPDATA%\ctools\` (data)
+
+Set `$CTOOLS_CONFIG` (and `$CTOOLS_DATA`) to relocate. This holds
+`resume-commands.json`, `strategies/`, `filters/` — and, going forward, the
+`bases` list for cross-location search (issue #2).
+
 The dashboard shows the full extraction pipeline (conversation → extraction
 → filter → concepts) so you can see exactly what was kept and why.
 

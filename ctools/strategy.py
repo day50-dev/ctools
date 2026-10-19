@@ -20,9 +20,11 @@ from dataclasses import dataclass, asdict
 from typing import Optional, List
 from rich.console import Console
 
+from ctools.paths import config_dir
+
 console = Console()
 
-STRATEGIES_DIR = Path.home() / ".config" / "ctools" / "strategies"
+STRATEGIES_DIR = config_dir() / "strategies"
 
 DEFAULT_PROMPT = """Extract the key concepts from this conversation.
 For each concept, output a JSON object with these fields:

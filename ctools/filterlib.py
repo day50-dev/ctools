@@ -59,7 +59,8 @@ except ImportError:  # graceful degradation: filter defaults to pass-through
     requests = None
 
 from pathlib import Path as _Path
-FILTERS_DIR = _Path.home() / ".config" / "ctools" / "filters"
+from ctools.paths import config_dir
+FILTERS_DIR = config_dir() / "filters"
 
 
 class Filter(ABC):

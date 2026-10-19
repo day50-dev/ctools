@@ -773,10 +773,9 @@ def test_cli_resume_hint_respects_override(tmp_path, monkeypatch):
     table."""
     _make_opencode_db(tmp_path)
     cfg = tmp_path / 'resume-commands.json'
-    (tmp_path / '.config' / 'ctools').mkdir(parents=True)
-    cfg = tmp_path / '.config' / 'ctools' / 'resume-commands.json'
     cfg.write_text('{"opencode": "myoc --continue {id}"}')
-    monkeypatch.setattr('ctools.agents.Path.home', lambda: tmp_path)
+    monkeypatch.setattr('ctools.agents.Path.home', lambda: tmp_path)  # opencode storage
+    monkeypatch.setenv('CTOOLS_CONFIG', str(tmp_path))  # resume-commands config
     result = _run_opencode_cli(tmp_path, ["opencode/"])
     assert result.exit_code == 0
     assert "myoc --continue <id>" in result.stdout
