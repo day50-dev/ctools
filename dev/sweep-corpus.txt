@@ -1,0 +1,43 @@
+# bob sweep corpus — one invocation per line, words after `python -m`.
+#   same: <argv>            baseline (bob:~/ctools) vs current (bob:~/ctools-current):
+#                            stdout, stderr and exit code must all match.
+#   pair: <argv> :: <argv>  both on current: stdout + exit code must match
+#                            (stderr/usage may differ by prog — that's expected).
+# Read-only verbs only; rm/recover/connect would mutate bob's fixture.
+
+# --- verb logic unchanged (baseline vs current) ---
+same: ctools.cdir
+same: ctools.cdir claude-code
+same: ctools.cdir pi
+same: ctools.cdir goose
+same: ctools.cdir opencode
+same: ctools.cdir codex
+same: ctools.cdir -l pi/01a14b0d-1e1a-71c1-a07e-b62b22bdeda5
+same: ctools.cdir --help
+same: ctools.cdir --version
+same: ctools.cgrep -l "let me check" "pi/*"
+same: ctools.cgrep -c plugshare "claude-code/*"
+same: ctools.cgrep --tool Bash "claude-code/*"
+same: ctools.cgrep nosuchstringanywhere "*"
+same: ctools.cgrep --role bogus x
+same: ctools.cgrep --help
+same: ctools.ccat claude-code/718c4267-0ff2-4737-8f46-658d56450d47
+same: ctools.ccat goose/20260205_4
+same: ctools.ccat opencode/ses_4acf8aad48ed40bb92cccb1b
+same: ctools.ccat pi/nonexistent-session
+same: ctools.cdu
+same: ctools.cdu pi
+same: ctools.cextract --version
+same: ctools.ccopy --help
+same: ctools.crm --help
+same: ctools.crecover --help
+same: ctools.cconnect --help
+
+# --- dispatcher routes correctly (c<verb> vs ctools <verb>, data only) ---
+pair: ctools.cdir :: ctools dir
+pair: ctools.cdir pi :: ctools dir pi
+pair: ctools.cdir codex :: ctools dir codex
+pair: ctools.cgrep -l "let me check" "pi/*" :: ctools grep -l "let me check" "pi/*"
+pair: ctools.cgrep nosuchstringanywhere "*" :: ctools grep nosuchstringanywhere "*"
+pair: ctools.ccat goose/20260205_4 :: ctools cat goose/20260205_4
+pair: ctools.cdu pi :: ctools du pi
