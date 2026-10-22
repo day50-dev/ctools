@@ -15,6 +15,7 @@ Usage:
     ccopy opencode/ses_abc claude-code                # opencode -> new claude-code session
     ccopy claude-code/ses_123 codex                   # claude-code -> new codex session
     ccopy opencode/ses_abc ssh://chris@remote/codex   # local -> new session on a remote host
+    ccopy opencode/ses_abc ssh://chris@remote/        # same agent (opencode) on the remote
     ccopy ssh://chris@remote/opencode/ses_abc codex   # pull a remote conversation
     ccopy --export-json opencode/ses_abc | ccopy --import-json codex   # raw wire format
 """
@@ -526,7 +527,15 @@ def main(argv=None) -> int:
         console.print(f"[red]Invalid reference: {e}[/red]")
         raise SystemExit(1)
 
-    # The destination is always an agent (bare name, or ssh://agent).
+    # The destination is always an agent (bare name, or ssh://host/agent). A
+    # bare ssh://host/ means "the same agent, over there": take the source's.
+    if not dst_ref and dst_remote is not None:
+        if src_remote is None and _is_json_source(source):
+            console.print(f"[red]No destination agent in {destination}[/red]")
+            console.print(f"[dim]The source is a conversation file, so there is no agent "
+                          f"to default to. Name one: {dst_remote}/AGENT[/dim]")
+            raise SystemExit(1)
+        dst_ref = parse_ref(src_ref)[0]
     if not dst_ref:
         console.print(f"[red]No destination agent in {destination}[/red]")
         raise SystemExit(1)

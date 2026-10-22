@@ -99,6 +99,10 @@ A bare agent name (e.g.
 or
 .I ssh://[user@]host[:port]/agent
 for a remote host. A new session is created in that agent.
+A remote destination with no agent
+.RI ( ssh://host/ )
+means the source's agent on that host; a conversation-file source has no
+agent, so it must name one.
 .PP
 Only agents that support session creation work as destinations
 (claude-code, opencode, kilo, codex, pi). The others refuse with a clean error.

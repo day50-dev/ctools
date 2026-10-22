@@ -73,9 +73,14 @@ a POSIX `tar`:
 
 ```sh
 ccopy opencode/ses_abc ssh://chris@remote/codex       # push a conversation out
+ccopy opencode/ses_abc ssh://chris@remote/            # ... into the same agent (opencode) there
 ccopy ssh://chris@remote/opencode/ses_abc codex       # pull a conversation in
 ccopy ssh://chris@one/opencode/ses_abc ssh://chris@two/codex
 ```
+
+Leave the agent off a remote destination (`ssh://host/`) and ccopy uses the
+source's agent on the far side. (A conversation-file source has no agent, so
+there you still have to name one.)
 
 The source is read, the destination is written into a brand-new session — so a
 cross-host copy is still a copy: nothing on either host is modified. After a

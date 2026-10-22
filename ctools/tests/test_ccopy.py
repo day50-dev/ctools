@@ -670,6 +670,55 @@ def test_remote_destination_first_pass_when_remote_has_ctools(tmp_path, monkeypa
         AGENTS["opencode"].base_path = original
 
 
+@pytest.mark.parametrize("dest", ["ssh://chris@remote/", "ssh://chris@remote"])
+def test_remote_destination_defaults_to_source_agent(tmp_path, monkeypatch, dest):
+    """ccopy opencode/ses ssh://host/ (no agent named) copies into the same
+    agent, opencode, on the remote."""
+    _make_opencode_conversation_db(tmp_path, "ses_src")
+    remote_home = tmp_path / "remote"
+    (remote_home / ".local" / "share" / "opencode").mkdir(parents=True)
+    _make_opencode_conversation_db(remote_home / ".local" / "share" / "opencode",
+                                   "ses_remote_existing")
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    _mock_transport(monkeypatch, remote_home, has_ctools=True)
+    try:
+        result = runner.invoke(app, ["opencode/ses_src", dest])
+        assert result.exit_code == 0, result.output
+        assert "new opencode session" in result.stdout
+        import sqlite3
+        conn = sqlite3.connect(str(remote_home / ".local" / "share" / "opencode" / "opencode.db"))
+        ids = [r[0] for r in conn.execute("SELECT id FROM session")]
+        conn.close()
+        assert result.stdout.strip().split()[-1] in ids
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
+def test_remote_destination_default_agent_dry_run(tmp_path):
+    """The dry run names the agent it defaulted to."""
+    _make_opencode_conversation_db(tmp_path, "ses_src")
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    try:
+        result = runner.invoke(app, ["opencode/ses_src", "ssh://chris@remote/", "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert "to a new opencode session" in result.stdout
+        assert "chris@remote" in result.stdout
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
+def test_remote_destination_without_agent_from_json_file_is_error(tmp_path):
+    """A conversation file has no agent to default to, so one must be named."""
+    src = tmp_path / "conv.json"
+    src.write_text(json.dumps([{"role": "user", "content": "hi"}]))
+    result = runner.invoke(app, [str(src), "ssh://chris@remote/"])
+    assert result.exit_code == 1
+    assert "No destination agent" in result.output
+    assert "ssh://chris@remote/AGENT" in result.output
+
+
 def test_remote_source_falls_back_to_tar_when_ctools_export_fails(tmp_path, monkeypatch):
     """If the remote claims to have ctools but the wire export fails (e.g.
     unknown session there), the copy falls back to the tar storage pull."""
