@@ -3,6 +3,9 @@
 `cextract` extracts concepts from sessions into files, and injects them back. The `@` prefix marks a
 session (endpoint); plain paths are concept files or directories (the bus).
 
+`cextract` is the short name for `ctools extract`: the same program with the same flags.
+The examples use `cextract`; `ctools extract …` works anywhere they do.
+
 ```sh
 cextract @opencode/ses_abc                        # dump to stdout (JSON)
 cextract @opencode/ses_abc concepts/              # extract concepts to a directory

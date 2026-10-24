@@ -13,6 +13,11 @@ cdu \- context disk usage for LLM conversations
 similar to DOS mdu but for LLM context windows.
 Uses tiktoken for accurate counts, falls back to ~4 chars/token estimation.
 .PP
+.B cdu
+is the short name for
+.BR "ctools du" ;
+the two are the same program with the same options.
+.PP
 With no arguments, shows total usage across all agents.
 With an agent name, shows sessions sorted by token usage.
 With agent/session_id, shows token breakdown for that session.
@@ -133,6 +138,7 @@ Success.
 .B 1
 Unknown agent or session not found.
 .SH SEE ALSO
+.BR ctools (1),
 .BR cdir (1),
 .BR cgrep (1),
 .BR ccopy (1),

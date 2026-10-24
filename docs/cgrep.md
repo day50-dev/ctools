@@ -4,6 +4,9 @@
 matches out. Works across all agents — this is the tool the whole suite is named
 for.
 
+`cgrep` is the short name for `ctools grep`: the same program with the same flags.
+The examples use `cgrep`; `ctools grep …` works anywhere they do.
+
 With no path argument (or `*`, or `-a`) it searches **every installed agent** at
 once. Name a path to narrow to one agent, one session, or a glob:
 

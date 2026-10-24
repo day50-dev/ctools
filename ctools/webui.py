@@ -12,7 +12,7 @@ The server binds to 127.0.0.1 by default so it is only reachable from the
 local machine; pass --host 0.0.0.0 only if you know why you want that.
 
     python -m ctools.webui           # start on 127.0.0.1:8765
-    ctools-webui --port 9000
+    ctools web --port 9000           # or ctools-web --port 9000
 """
 
 import argparse

@@ -4,6 +4,9 @@
 sections from agent sessions. Concept JSON files are NOT deleted — only the
 relevant sections from the context.
 
+`crm` is the short name for `ctools rm`: the same program with the same flags.
+The examples use `crm`; `ctools rm …` works anywhere they do.
+
 ```sh
 crm claude-code/01a14b0d...                     # no concepts: pick messages to remove by hand
 crm --backup claude-code/01a14b0d...            # same, but snapshot to gettmp()/ctools/<agent>/<uuid> first

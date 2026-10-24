@@ -4,6 +4,9 @@
 automatically before every local write (see [ccopy's safety
 section](ccopy.md#safety-automatic-backups)).
 
+`crecover` is the short name for `ctools recover`: the same program with the same flags.
+The examples use `crecover`; `ctools recover …` works anywhere they do.
+
 The big failure it guards against: a write that lands in an agent's **live**
 SQLite database (opencode, goose, kilo, hermes, …) and corrupts or empties it.
 Losing every session in one agent is the worst thing that can happen to your

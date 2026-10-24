@@ -4,6 +4,9 @@
 concepts from one session as a toolcall in another session's context. It polls the
 source and re-injects concepts on each cycle.
 
+`cconnect` is the short name for `ctools connect`: the same program with the same flags.
+The examples use `cconnect`; `ctools connect …` works anywhere they do.
+
 Strategy extracts, filter selects per destination:
 
 ```sh

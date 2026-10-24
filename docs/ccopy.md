@@ -2,10 +2,13 @@
 
 `ccopy` copies a conversation from one agent to a new session in another. The
 source can be `agent/session_id`, a conversation JSON **file** (or `/dev/fd/N`,
-or `-` for stdin), or a remote `ssh://...` reference; the destination is a bare
-agent name. A fresh session is created in the destination holding the copied
-conversation, and ccopy prints how to resume it. The source is never touched, so
-it's a true copy (not a move).
+or `-` for stdin), or a remote `ssh://...` reference; the destination is an
+agent name, or `ssh://host/agent` on another machine. A fresh session is
+created in the destination holding the copied conversation, and ccopy prints
+how to resume it. The source is never touched, so it's a true copy (not a move).
+
+`ccopy` is the short name for `ctools copy`: the same program with the same flags.
+The examples use `ccopy`; `ctools copy …` works anywhere they do.
 
 ```sh
 ccopy opencode/ses_abc claude-code     # opencode session -> new claude-code session

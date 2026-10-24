@@ -51,21 +51,13 @@ As you can see, these are unix-friendly tools using simple paradigms that you ar
 | Capability | What you get |
 |---|---|
 | **Discover** | See every agent installed on your machine and how many sessions each holds. |
-| **Find** | Search across all sessions at once: a pattern or a phrase (fuzzy, across word boundaries). |
-| **Continue** | Get the exact command to resume a session in its original tool, or open it in the web UI. |
-| **Copy** | Extract a session and copy it into another tool's session storage, or into a `.json` file. |
-| **Export** | Download a session as JSON, or pretty-printed text/Markdown for reading or sharing. |
-| **Concepts** | Pull out the *intent* of a session: what it's about, its constraints, what was decided. |
-| **Search in bulk** | A small CLI that greps across all sessions for the first matching message, with context. |
-
-```bash
-$ ctools find "mcp config"
-[1] claude-code  a1b2c3...
-     (claude-code/2026-05-01) "…let me check the mcp config for you…"
-
-$ ctools resume claude-code a1b2c3...
-  claude --resume a1b2c3...
-```
+| **Find** | Search every session at once with grep-style regex, narrowed by agent, session glob, or role. |
+| **Read** | Print a conversation as JSON (pipe it anywhere) or as a readable transcript. |
+| **Continue** | Get the exact command to resume a session in its own tool, or open it in the web UI. |
+| **Copy** | Copy a conversation into a new session in another tool, or the same tool on another machine. |
+| **Measure** | See token usage per agent, per session, and per role. |
+| **Concepts** | Pull out the *intent* of a session: its goal, its constraints, and what was decided. |
+| **Recover** | List and restore the storage backups ctools takes before every local write. |
 
 ---
 
@@ -103,28 +95,29 @@ re-reading everything.
 **Python 3.10+** is required.
 
 ```bash
-pip install ctxttools
+uv tool install ctxttools        # or: pip install ctxttools
 ```
 
-This installs three commands:
+That gives you the `ctools` command, a short command for each of its verbs,
+and the dashboard and MCP server:
 
 | Command | Purpose |
 |---|---|
-| `ctools` | The main CLI: agents, find, copy, resume, and more. |
-| `ctools-web` | The dashboard (browser). |
-| `ctools-mcp` | The MCP server for AI agents. |
+| `ctools` | The front door: `ctools <verb> [args...]`. Run `ctools --help` for the list. |
+| `cdir`, `cgrep`, `ccat`, `cdu`, `ccopy`, `cextract`, `cconnect`, `crm`, `crecover` | Shortcuts for the verbs (`cgrep` is `ctools grep`). |
+| `ctools-web` | The dashboard, same as `ctools web`. |
+| `ctools-mcp` | The MCP server, same as `ctools mcp`. Needs the `mcp` extra. |
 
-To install just the MCP server (or the dashboard) without the full CLI:
+The MCP server's dependency is optional:
 
 ```bash
-pip install "ctxttools[mcp]"
-# or: pip install "ctxttools[web]"
+uv tool install "ctxttools[mcp]"   # or: pip install "ctxttools[mcp]"
 ```
 
-From a local checkout, `uv` keeps it editable and reproducible:
+From a local checkout, `uv` keeps it editable:
 
 ```bash
-uv tool install --editable ".[mcp]"          # or ".[mcp,web]" for the dashboard too
+uv tool install --editable ".[mcp]"
 ```
 
 > **Heads up:** `ctools-mcp` needs `mcp<2` (see
@@ -134,71 +127,109 @@ uv tool install --editable ".[mcp]"          # or ".[mcp,web]" for the dashboard
 
 ## The CLI
 
-### Discover your tools
+`ctools` has one verb per job. Each verb is also installed as its own short
+command, named `c` plus the verb, so `ctools grep` and `cgrep` are the same
+program with the same flags. Use whichever you prefer: the long form is easier
+to discover, and the short form is quicker to type.
 
-```bash
-ctools agents            # table of installed agents
-ctools agents --json     # machine-readable
+```text
+$ ctools --help
+usage: ctools <command> [args...]
+
+query:
+  dir       list agents and sessions           (cdir)
+  grep      search session content             (cgrep)
+  cat       print a session                    (ccat)
+  du        context usage per session          (cdu)
+
+transform:
+  copy      copy a session to another agent    (ccopy)
+  extract   extract concepts from a session    (cextract)
+  connect   pipe concepts between sessions     (cconnect)
+  rm        cut sections out of a session      (crm)
+  recover   restore from a backup              (crecover)
+
+long-running:
+  web       run the web dashboard              (ctools-web)
+  mcp       run the MCP server                 (ctools-mcp)
+
+Run 'ctools <command> --help' for a command's options.
 ```
 
-### Find and continue a session
+Each verb has its own page in [`docs/`](docs/): [dir](docs/cdir.md),
+[grep](docs/cgrep.md), [cat](docs/ccat.md), [du](docs/cdu.md),
+[copy](docs/ccopy.md), [extract](docs/cextract.md),
+[connect](docs/cconnect.md), [rm](docs/crm.md), and
+[recover](docs/crecover.md). Sessions are addressed as `agent/session_id`
+throughout.
 
-`find` looks for a **pattern** (a literal string, case-insensitive) or a
-**phrase** (`--phrase`, matched fuzzily across word boundaries).
-
-```bash
-ctools find "bug report"                    # all agents, pattern match
-ctools find "refactor the parser" --phrase  # fuzzy phrase
-ctools find "deploy" --agent claude-code    # one agent only
-```
-
-Each result shows the agent, a short id, when it ran, and the first matching
-message. To resume it in its own tool:
+### Discover your agents and sessions
 
 ```bash
-ctools resume <agent> <session-id>
+ctools dir                      # every known agent, and whether it's installed
+ctools dir opencode             # that agent's sessions, and the command that resumes one
+ctools dir -l opencode          # with modified time, size, message count, path
+ctools dir .                    # sessions that ran in this directory, across all agents
+ctools dir opencode/ses_abc     # one session's row
 ```
 
-> **Why this matters:** when you're mid-task in one agent and need to
-> continue in another (e.g. you started in Claude Code but now want to use
-> Pi), `find` + `resume` is how you get back into the same thread.
+### Find a session
+
+`grep` works the way `grep` does, over conversation content instead of files.
+
+```bash
+ctools grep "bug report"                    # every installed agent
+ctools grep -i "deploy" claude-code         # one agent
+ctools grep -C 2 "flaky test" opencode      # with context
+ctools grep -l "parser" pi                  # just the session ids
+ctools grep --user "refactor"               # only what you typed
+ctools grep --hosts "mcp config"            # also the hosts in ctools.toml
+```
+
+### Read a session
+
+```bash
+ctools cat opencode/ses_abc           # JSON list of {role, content}
+ctools cat --text opencode/ses_abc    # a readable transcript
+ctools cat ssh://me@box/pi/<id>       # a session on another machine
+```
 
 ### Copy a session to another tool
 
-```bash
-ctools copy <agent> <session-id> \
-  --to claude-code \
-  --mode copy            # or "move" to also erase the source
-```
-
-`copy` writes the session into the destination tool's storage in its native
-format. `move` additionally clears the source (use with care).
-
-### Search across all sessions (bulk)
+`copy` creates a **new** session in the destination. The source is never
+touched, and ctools prints the command that resumes the copy.
 
 ```bash
-ctools search "fix the flaky test" --agent opencode --context 3
+ctools copy opencode/ses_abc claude-code          # into another tool
+ctools copy opencode/ses_abc codex --dry-run      # preview first
+ctools copy opencode/ses_abc ssh://me@box/codex   # into a tool on another machine
+ctools copy opencode/ses_abc ssh://me@box/        # into opencode on that machine
+ctools copy ssh://me@box/pi/<id> claude-code      # pull one in from another machine
 ```
 
-Prints the first matching message per session with N lines of context,
-handy when you're hunting for where a decision was made.
+The remote side doesn't need ctools installed; plain `ssh` and `tar` will do.
+See [docs/ccopy.md](docs/ccopy.md) for how that works and where the new
+session lands.
 
-### What else is there
+### Token usage
 
-Run `ctools --help` to see the full list (including `tokens`, `export`, and
-`version`).
+```bash
+ctools du                     # total across all agents
+ctools du opencode            # sessions by token count
+ctools du opencode/ses_abc    # breakdown by role
+```
 
 ---
 
 ## The web dashboard
 
 ```bash
-ctools-web                    # opens at http://127.0.0.1:8799
-ctools-web --port 9000        # a different port
+ctools web                    # opens at http://127.0.0.1:8765
+ctools web --port 9000        # a different port
 ```
 
-The dashboard is a read-mostly surface over the same data the CLI uses.
-You can:
+`ctools-web` is the same command. The dashboard is a read-mostly surface over
+the same data the CLI uses. You can:
 
 - Browse and search sessions (the "Conversation" view mirrors the CLI).
 - Copy a session to another tool right from the UI.
@@ -218,10 +249,11 @@ things that matter for picking it back up: the goal, the constraints, and
 what was decided.
 
 ```bash
-cextract @<agent>/<session-id>
+ctools extract @<agent>/<session-id>      # or: cextract @<agent>/<session-id>
 ```
 
-Concepts are extracted with one of three paths, chosen automatically:
+Concepts are extracted one of three ways. Regex is the default; `-s` and `-F`
+select the others:
 
 1. **Regex (default)**: built-in patterns for goal, decision, constraint,
    and preference. No setup.
@@ -244,7 +276,7 @@ directory resolved via `platformdirs` (no hand-rolled platform checks):
 Set `$CTOOLS_CONFIG` (and `$CTOOLS_DATA`) to relocate. This holds
 `resume-commands.json`, `strategies/`, `filters/`, and the general
 **`ctools.toml`** config — one file, multiple sections.  The first section,
-`[hosts]`, is the search whitelist for cross-location search (issue #2):
+`[hosts]`, lists the machines `ctools grep --hosts` searches too:
 
 ```toml
 # ~/.config/ctools/ctools.toml
@@ -266,7 +298,11 @@ The dashboard shows the full extraction pipeline (conversation → extraction
 ## MCP server
 
 The MCP server exposes the same capabilities to any MCP-capable coding agent
-(Pi, Claude, OpenCode, etc.).
+(Pi, Claude, OpenCode, etc.). It needs the `mcp` extra (see [Install](#install)).
+
+```bash
+ctools mcp          # run the server on stdio (same as ctools-mcp)
+```
 
 ### Install and register with Pi
 
@@ -274,25 +310,27 @@ The MCP server exposes the same capabilities to any MCP-capable coding agent
 ctools-mcp install
 ```
 
-This installs the server (via `uv tool` if available, else `pipx`) and
-registers it in `~/.pi/agent/mcp.json`. Verify with:
+If no working `ctxttools[mcp]` install is found, this installs one with
+`uv tool`. It then registers the server in `~/.pi/agent/mcp.json`. Verify with:
 
 ```bash
 pi mcp list        # "ctools-mcp … connected"
 ```
 
+`ctools-mcp uninstall` removes the entry again (`--all` also removes it from
+Claude Code's and opencode's configs).
+
 ### Manual registration (any host)
 
-If you'd rather wire it up yourself, `print-config` emits the JSON snippet
-for a given host:
+If you'd rather wire it up yourself, `print-config` emits the `mcpServers` JSON
+snippet:
 
 ```bash
-ctools-mcp print-config pi
+ctools-mcp print-config
 ```
 
-Add that to your host's MCP config (`~/.pi/agent/mcp.json` for Pi). The
-server is started with `python -m ctools.ctools_mcp` from the install
-environment.
+Add that to your host's MCP config. The server is started with
+`python -m ctools.ctools_mcp` from the install environment.
 
 ### Tools exposed
 
@@ -300,11 +338,11 @@ environment.
 |---|---|
 | `list_agents` | Agents available and whether they're installed. |
 | `list_sessions` | Recent sessions for one agent. |
-| `search_sessions` | Find a session by pattern/phrase. |
-| `export_session` | Get the messages (or export) for a session. |
+| `search_sessions` | Find sessions by pattern or phrase. |
+| `export_session` | Get the messages of a session. |
+| `extract_concepts` | Extract concepts from a session. |
+| `get_session_concepts` | Get a session's concepts, optionally of one type. |
 | `copy_concepts` | Copy extracted concepts into a destination session. |
-| `get_concepts` | Extract concepts from a session. |
-| `list_strategies` / `list_filters` | Show available LLM/filter configs. |
 
 ---
 
@@ -321,27 +359,38 @@ install pulls `mcp>=2` and `ctools-mcp` won't start, pin the major version
 
 | Name | Tool | Storage |
 |---|---|---|
-| `pi` | Pi coding agent | JSONL |
 | `claude` | Claude Desktop | JSON |
 | `claude-code` | Claude Code CLI | JSONL |
+| `codex` | OpenAI Codex CLI | JSONL |
+| `pi` | Pi coding agent | JSONL |
+| `omp` | omp (oh-my-pi) | JSONL |
 | `opencode` | OpenCode CLI | SQLite |
-| `goose` | Goose AI agent | JSONL |
-| `kilo` | Kilo CLI | JSONL |
+| `kilo` | Kilo CLI | SQLite |
+| `goose` | Goose AI agent | SQLite |
 | `hermes` | Hermes agent | SQLite |
+| `openclaw` | OpenClaw | SQLite |
+| `cline` | Cline | JSON |
+| `freebuff` | Freebuff | JSON |
 
 An agent is "installed" if ctools can find its session directory (or DB
-file). Uninstalled agents are still listed but skipped by `find`/`copy`.
+file); `ctools dir` shows which are found and where. Only claude-code,
+opencode, kilo, codex, and pi can be a `copy` destination.
 
 ---
 
 ## How the data is handled
 
-- **Read-only by default.** `find`, `search`, `list_sessions`, and the
-  dashboard's read paths never modify your session files.
-- **Writes are explicit.** Only `copy`/`move` and `copy_concepts` write, and
-  only to a session you name as the target.
-- **Local only.** The dashboard binds to `127.0.0.1`; the MCP server reads
-  your local session storage. Nothing leaves your machine.
+- **Read-only by default.** `dir`, `grep`, `cat`, `du`, the MCP read tools,
+  and the dashboard's read paths never modify your session files.
+- **Writes are explicit.** `copy` writes a *new* session and never touches the
+  source. `extract` and `connect` write only when you name a session as the
+  destination, and `rm` only to the session you name.
+- **Backed up first.** Before a local `copy` writes, it snapshots the
+  destination agent's storage and restores it automatically if the write goes
+  wrong. `ctools recover` lists and restores those snapshots.
+- **Local unless you say otherwise.** The dashboard binds to `127.0.0.1`, and
+  the MCP server reads your local storage. Data only crosses the network when you
+  name an `ssh://` host or pass `grep --hosts`, and then only over your own ssh.
 
 ---
 
@@ -351,13 +400,14 @@ file). Uninstalled agents are still listed but skipped by `find`/`copy`.
 git clone https://github.com/day50-dev/ctools
 cd ctools
 python -m venv .venv && . .venv/bin/activate
-pip install -e .
+pip install -e ".[dev]"
 python -m pytest
 ```
 
-The code is deliberately simple: each agent adapter is one file under
-`ctools/`, and the CLI/dashboard/MCP layers are thin over the shared
-`ctools.agents` registry.
+The code is deliberately simple: each agent adapter is a class in
+`ctools/agents.py`, each verb is one module (`ctools/cgrep.py`, …), and
+`ctools/dispatch.py` routes `ctools <verb>` to them. The CLI, dashboard, and
+MCP layers are thin over the shared `ctools.agents` registry.
 
 ---
 

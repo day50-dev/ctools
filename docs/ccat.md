@@ -4,6 +4,9 @@
 sessions and `cgrep` finds them; `ccat` prints the actual conversation, one or
 more at a time.
 
+`ccat` is the short name for `ctools cat`: the same program with the same flags.
+The examples use `ccat`; `ctools cat …` works anywhere they do.
+
 ```sh
 ccat opencode/ses_abc123                 # print one conversation as JSON
 ccat opencode/ses_a opencode/ses_b       # several, each a JSON array

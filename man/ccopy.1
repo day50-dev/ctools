@@ -28,6 +28,11 @@ ccopy \- copy a conversation from one agent to a new session in another
 brand-new session in a destination agent. The source session is never modified,
 so it is a true copy, not a move.
 .PP
+.B ccopy
+is the short name for
+.BR "ctools copy" ;
+the two are the same program with the same options.
+.PP
 The source is an
 .I agent/session_id
 (with no @ prefix), a conversation JSON
@@ -209,6 +214,7 @@ Success.
 .B 1
 Unknown agent, session not found, no conversation, or unsupported destination.
 .SH SEE ALSO
+.BR ctools (1),
 .BR cdir (1),
 .BR ccat (1),
 .BR cextract (1),

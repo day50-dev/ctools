@@ -3,6 +3,9 @@
 `cdir` lists sessions. Think `ls` for your conversation history. Run it with no
 argument to see which agents are installed and where they store data.
 
+`cdir` is the short name for `ctools dir`: the same program with the same flags.
+The examples use `cdir`; `ctools dir …` works anywhere they do.
+
 Subagent sessions (the ones a harness spawns for delegated work) can't be
 resumed, so `cdir` hides them by default — the listing is what you can pick up
 again. The footer says how many are hidden; pass `-a` to include them, nested

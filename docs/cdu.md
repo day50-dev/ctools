@@ -3,6 +3,9 @@
 `cdu` shows token usage. Like `du` but for context windows. Uses tiktoken for
 accurate counts.
 
+`cdu` is the short name for `ctools du`: the same program with the same flags.
+The examples use `cdu`; `ctools du …` works anywhere they do.
+
 ```sh
 cdu                           # total across all agents
 cdu opencode/                 # sessions by token count

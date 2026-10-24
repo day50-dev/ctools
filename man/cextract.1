@@ -18,6 +18,11 @@ cextract \- extract concepts from sessions into files
 Concepts are constraints, goals, preferences, observations, and references
 that can be extracted from agent sessions and stored as individual JSON files.
 .PP
+.B cextract
+is the short name for
+.BR "ctools extract" ;
+the two are the same program with the same options.
+.PP
 The @ prefix denotes a session reference (agent/session_id).
 Plain paths are concept JSON files.
 Directories (ending with /) contain one concept file per concept.
@@ -326,6 +331,7 @@ Success.
 .B 1
 Unknown agent, session not found, or invalid arguments.
 .SH SEE ALSO
+.BR ctools (1),
 .BR cdir (1),
 .BR cgrep (1),
 .BR cdu (1)

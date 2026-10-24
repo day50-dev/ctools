@@ -22,6 +22,11 @@ finds them;
 .B ccat
 shows the actual conversation.
 .PP
+.B ccat
+is the short name for
+.BR "ctools cat" ;
+the two are the same program with the same options.
+.PP
 By default each conversation is printed as a JSON list of
 .BR {"role", "content"}
 objects (one array per session) \(em the same shape
@@ -147,6 +152,7 @@ At least one session was printed.
 .B 1
 No session could be printed (bad id, unknown or uninstalled agent, no args).
 .SH SEE ALSO
+.BR ctools (1),
 .BR cdir (1),
 .BR cgrep (1),
 .BR ccopy (1)
