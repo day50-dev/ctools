@@ -1,0 +1,107 @@
+.TH CTOOLS 1 "2026-10-23" "ctools" "User Commands"
+.SH NAME
+ctools \- navigate, search, and copy the sessions of LLM agents
+.SH SYNOPSIS
+.B ctools
+.I command
+.RI [ args ...]
+.br
+.B ctools
+.RB [ \-h | \-\-help | \-\-version ]
+.SH DESCRIPTION
+.B ctools
+is the front door to the ctools commands. Each
+.I command
+runs the same program as its short name, with the same options:
+.B ctools grep
+is
+.BR cgrep ,
+.B ctools copy
+is
+.BR ccopy ,
+and so on. Everything after the command is passed through unchanged, and
+help and error messages name the command as you typed it.
+.PP
+With no command,
+.BR \-h ,
+.BR \-\-help ,
+or
+.BR help ,
+.B ctools
+prints the list of commands below.
+.SH COMMANDS
+.SS Query
+.TP
+.BR dir " (" cdir )
+List agents and sessions.
+.TP
+.BR grep " (" cgrep )
+Search session content.
+.TP
+.BR cat " (" ccat )
+Print a session.
+.TP
+.BR du " (" cdu )
+Context usage per session.
+.SS Transform
+.TP
+.BR copy " (" ccopy )
+Copy a session to another agent.
+.TP
+.BR extract " (" cextract )
+Extract concepts from a session.
+.TP
+.BR connect " (" cconnect )
+Pipe concepts between sessions.
+.TP
+.BR rm " (" crm )
+Cut sections out of a session.
+.TP
+.BR recover " (" crecover )
+Restore from a backup.
+.SS Long-running
+.TP
+.BR web " (" ctools-web )
+Run the web dashboard.
+.TP
+.BR mcp " (" ctools-mcp )
+Run the MCP server.
+.PP
+Run
+.B ctools
+.I command
+.B \-\-help
+for a command's options.
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Print the list of commands and exit.
+.TP
+.B \-\-version
+Print version information and exit.
+.SH EXAMPLES
+.RS
+.nf
+ctools dir                              # every known agent
+ctools grep -i "deploy" claude-code     # search one agent
+ctools cat --text opencode/ses_abc      # read a session
+ctools copy opencode/ses_abc codex      # copy it into another agent
+ctools copy opencode/ses_abc ssh://me@box/   # into opencode on another host
+.fi
+.RE
+.SH EXIT STATUS
+.TP
+.B 0
+Help or version printed; otherwise the command's own exit status.
+.TP
+.B 2
+Unknown command.
+.SH SEE ALSO
+.BR cdir (1),
+.BR cgrep (1),
+.BR ccat (1),
+.BR cdu (1),
+.BR ccopy (1),
+.BR cextract (1)
+.SH AUTHORS
+ctools project.
