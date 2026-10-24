@@ -59,6 +59,12 @@ def parse_ref(ref: str) -> Tuple[str, Optional[str]]:
     return parts[0], (parts[1] if len(parts) > 1 else None)
 
 
+# A non-interactive ssh session has a minimal PATH that leaves out the user
+# bin dirs where ctools is installed (uv tool / pipx / pip --user ->
+# ~/.local/bin). Remote ctools commands are prefixed with this so they're found.
+REMOTE_PATH = 'export PATH="$HOME/.local/bin:$HOME/bin:$PATH" && '
+
+
 @dataclass
 class Remote:
     """A remote host addressed as ``ssh://[user@]host[:port]/path``."""
@@ -82,6 +88,11 @@ class Remote:
         if self.port is not None:
             args += ["-p", str(self.port)]
         return args + [self.target, command]
+
+    def ctools_command(self, command: str) -> List[str]:
+        """argv for ``ssh`` running a ctools `command` on the host, with the
+        user bin dirs on PATH (see ``REMOTE_PATH``)."""
+        return self.ssh_command(REMOTE_PATH + command)
 
     def __str__(self) -> str:
         auth = f"{self.user}@" if self.user else ""

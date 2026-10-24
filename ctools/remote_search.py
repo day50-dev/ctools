@@ -18,6 +18,7 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from ctools.cli import REMOTE_PATH
 from ctools.config import Base
 
 
@@ -45,10 +46,7 @@ def build_remote_command(program: str, local_argv: List[str],
     strip = set(strip or ())
     args = [a for a in local_argv if a not in strip]
     cmd = f"{program} " + " ".join(shlex.quote(a) for a in args)
-    # A non-interactive ssh session has a minimal PATH that excludes the user
-    # bin dirs where ctools lives (uv tool / pip --user -> ~/.local/bin).
-    # Extend PATH first so the entry point is found.
-    return 'export PATH="$HOME/.local/bin:$HOME/bin:$PATH" && ' + cmd
+    return REMOTE_PATH + cmd
 
 
 def run_remote_search(base: Base, command: str, timeout: float = 300.0) -> RemoteResult:

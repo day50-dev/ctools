@@ -719,13 +719,12 @@ def test_remote_destination_without_agent_from_json_file_is_error(tmp_path):
     assert "ssh://chris@remote/AGENT" in result.output
 
 
-def test_remote_source_falls_back_to_tar_when_ctools_export_fails(tmp_path, monkeypatch):
-    """If the remote claims to have ctools but the wire export fails (e.g.
-    unknown session there), the copy falls back to the tar storage pull."""
+def test_remote_source_wire_failure_is_reported_not_pulled(tmp_path, monkeypatch):
+    """If the remote runs a new enough ctools but the wire export fails (e.g.
+    unknown session there), ccopy reports what the far side said instead of
+    falling back to pulling the agent's storage."""
     remote_home = tmp_path / "remote"
     (remote_home / ".local" / "share" / "opencode").mkdir(parents=True)
-    _make_opencode_conversation_db(remote_home / ".local" / "share" / "opencode",
-                                   "ses_pulled")
     _make_opencode_conversation_db(tmp_path, "ses_dummy")
     original = AGENTS["opencode"].base_path
     AGENTS["opencode"].base_path = tmp_path
@@ -733,20 +732,29 @@ def test_remote_source_falls_back_to_tar_when_ctools_export_fails(tmp_path, monk
     import ctools.ccopy as ccopy
 
     def broken_export(remote, agent, session_id):
-        return None  # remote ctools failed to export
+        raise ccopy.RemoteWireError("ccat --raw opencode/ses_x failed on chris@remote "
+                                    "(exit 1): no such session")
+
+    def no_tar(*a, **kw):
+        raise AssertionError("a new enough remote ctools must not trigger the tar pull")
 
     monkeypatch.setattr(ccopy, "_remote_common_doc", broken_export)
+    monkeypatch.setattr(ccopy, "_pull", no_tar)
     try:
-        result = runner.invoke(app, ["ssh://chris@remote/opencode/ses_pulled", "opencode"])
-        assert result.exit_code == 0, result.output
-        assert "from opencode/ses_pulled on chris@remote" in result.stdout
+        result = runner.invoke(app, ["ssh://chris@remote/opencode/ses_x", "opencode"])
+        assert result.exit_code == 1
+        assert "no such session" in result.output
     finally:
         AGENTS["opencode"].base_path = original
 
 
+def _completed(rc, out="", err=""):
+    return subprocess.CompletedProcess(args=[], returncode=rc, stdout=out, stderr=err)
+
+
 def test_remote_has_ctools_probe(monkeypatch):
-    """_remote_has_ctools: yes/no detection via the `command -v ccopy` probe,
-    and the answer is cached per host."""
+    """_remote_has_ctools asks the remote's ccopy for its version, with the
+    user bin dirs on PATH, and caches the answer per host."""
     import ctools.ccopy as ccopy
     from ctools.cli import Remote
     from unittest.mock import patch
@@ -754,26 +762,46 @@ def test_remote_has_ctools_probe(monkeypatch):
     ccopy._ctools_probes.clear()
     remote = Remote(host="probehost")
 
-    def mk(rc, out):
-        return subprocess.CompletedProcess(args=[], returncode=rc, stdout=out, stderr="")
-
-    with patch.object(ccopy, "_run", return_value=mk(0, "ok\n")), \
+    with patch.object(ccopy, "_run", return_value=_completed(0, "ccopy (ctxttools) 0.4.0\n")) as probe, \
             patch.object(ccopy.shutil, "which", return_value="/usr/bin/ssh"):
         assert ccopy._remote_has_ctools(remote) is True
+        command = probe.call_args.args[0][-1]
+        assert '$HOME/.local/bin' in command and "ccopy --version" in command
         with patch.object(ccopy, "_run") as second:
             assert ccopy._remote_has_ctools(remote) is True  # cached
             second.assert_not_called()
 
     ccopy._ctools_probes.clear()
-    with patch.object(ccopy, "_run", return_value=mk(1, "")), \
+    with patch.object(ccopy, "_run", return_value=_completed(3)), \
             patch.object(ccopy.shutil, "which", return_value="/usr/bin/ssh"):
         assert ccopy._remote_has_ctools(remote) is False
     ccopy._ctools_probes.clear()
 
 
+@pytest.mark.parametrize("version_line", ["ccopy (ctxttools) 0.3.1", ""])
+def test_remote_has_ctools_too_old(monkeypatch, capsys, version_line):
+    """A remote ctools older than WIRE_MIN_VERSION (or one that can't say)
+    means the tar path, with a note saying why and how to upgrade."""
+    import ctools.ccopy as ccopy
+    from ctools.cli import Remote
+    from unittest.mock import patch
+
+    ccopy._ctools_probes.clear()
+    remote = Remote(host="oldhost", user="chris")
+    with patch.object(ccopy, "_run", return_value=_completed(0, version_line + "\n")), \
+            patch.object(ccopy.shutil, "which", return_value="/usr/bin/ssh"):
+        assert ccopy._remote_has_ctools(remote) is False
+        assert ccopy._remote_has_ctools(remote) is False
+    err = " ".join(capsys.readouterr().err.split())  # undo Rich's wrapping
+    assert err.count("needs ctools 0.4.0") == 1  # said once, not per call
+    assert "uv tool upgrade ctxttools" in err and "pipx upgrade ctxttools" in err
+    ccopy._ctools_probes.clear()
+
+
 def test_remote_common_doc_parses_envelope(monkeypatch):
     """_remote_common_doc parses the envelope JSON the far side streams, and
-    returns None on bad output or a non-zero exit."""
+    raises RemoteWireError, carrying the far side's message, on bad output or
+    a non-zero exit."""
     import ctools.ccopy as ccopy
     from ctools.cli import Remote
     from unittest.mock import patch
@@ -781,25 +809,22 @@ def test_remote_common_doc_parses_envelope(monkeypatch):
     agent = AGENTS["opencode"]
     doc = {'context': [{'role': 'user', 'content': 'hi'}]}
 
-    with patch.object(ccopy, "_run",
-                      return_value=subprocess.CompletedProcess(
-                          args=[], returncode=0, stdout=json.dumps(doc), stderr="")):
+    with patch.object(ccopy, "_run", return_value=_completed(0, json.dumps(doc))) as call:
         assert ccopy._remote_common_doc(remote, agent, "ses_x") == doc
+        assert '$HOME/.local/bin' in call.call_args.args[0][-1]
 
-    with patch.object(ccopy, "_run",
-                      return_value=subprocess.CompletedProcess(
-                          args=[], returncode=1, stdout="", stderr="nope")):
-        assert ccopy._remote_common_doc(remote, agent, "ses_x") is None
+    with patch.object(ccopy, "_run", return_value=_completed(1, err="nope")):
+        with pytest.raises(ccopy.RemoteWireError, match="nope"):
+            ccopy._remote_common_doc(remote, agent, "ses_x")
 
-    with patch.object(ccopy, "_run",
-                      return_value=subprocess.CompletedProcess(
-                          args=[], returncode=0, stdout="not json", stderr="")):
-        assert ccopy._remote_common_doc(remote, agent, "ses_x") is None
+    with patch.object(ccopy, "_run", return_value=_completed(0, "not json")):
+        with pytest.raises(ccopy.RemoteWireError):
+            ccopy._remote_common_doc(remote, agent, "ses_x")
 
 
 def test_remote_import_records_reads_id(monkeypatch):
-    """_remote_import_records returns the id the far side prints, or None on
-    failure."""
+    """_remote_import_records returns the id the far side prints, or raises
+    RemoteWireError on failure."""
     import ctools.ccopy as ccopy
     from ctools.cli import Remote
     from unittest.mock import patch
@@ -807,17 +832,14 @@ def test_remote_import_records_reads_id(monkeypatch):
     agent = AGENTS["opencode"]
     records = [{'role': 'user', 'content': 'hi'}]
 
-    with patch.object(ccopy, "_run",
-                      return_value=subprocess.CompletedProcess(
-                          args=[], returncode=0, stdout="ses_new_1\n", stderr="")) as call:
+    with patch.object(ccopy, "_run", return_value=_completed(0, "ses_new_1\n")) as call:
         assert ccopy._remote_import_records(remote, agent, records) == "ses_new_1"
         # the records were piped in as JSON on stdin
         assert call.call_args.kwargs["input_text"] == json.dumps(records)
 
-    with patch.object(ccopy, "_run",
-                      return_value=subprocess.CompletedProcess(
-                          args=[], returncode=1, stdout="", stderr="boom")):
-        assert ccopy._remote_import_records(remote, agent, records) is None
+    with patch.object(ccopy, "_run", return_value=_completed(1, err="boom")):
+        with pytest.raises(ccopy.RemoteWireError, match="boom"):
+            ccopy._remote_import_records(remote, agent, records)
 
 
 def test_storage_relative():

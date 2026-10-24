@@ -92,11 +92,16 @@ cross-host copy, ccopy tells you the new session id and the resume command to ru
 
 ### How it works over the wire
 
-ccopy works in **two tiers**. First it probes the remote: does it run ctools? If
-yes, it takes the **cheap path** — the far side runs ctools itself and only the
+ccopy works in **two tiers**. First it asks the remote which ctools it runs
+(`ccopy --version`, with `~/.local/bin` and `~/bin` put on PATH, since a
+non-interactive ssh leaves them out). If it runs **ctools 0.4.0 or newer**, it
+takes the **cheap path** — the far side runs ctools itself and only the
 conversation JSON crosses the wire, in one ssh round trip per side: the source
 is read with `ccat --raw AGENT/SESSION` (the lossless envelope) and the
-destination is seeded with `ccopy --import-json AGENT`. If no, it takes the
+destination is seeded with `ccopy --import-json AGENT`. If something
+goes wrong on that path (no such session there, say), ccopy reports what the far
+side said; it doesn't fall back to copying storage. If the remote has no ctools,
+or one older than 0.4.0 (ccopy says so and suggests upgrading), it takes the
 **expensive path** — it moves the agent's *storage
 files* instead: it pulls the remote storage (its sessions directory, or its
 database) over ssh with a plain `tar` pipe, unpacks it into a local scratch

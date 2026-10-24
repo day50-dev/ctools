@@ -6,7 +6,7 @@ ccopy \- copy a conversation from one agent to a new session in another
 .RB [ \-\-dry-run ]
 .RB [ \-v ]
 .RB [ \-\-version ]
-.RB [ \-\-cwd DIR ]
+.RB [ \-\-cwd\ \fIDIR\fR ]
 .RB [ \-\-here ]
 .I source
 .I destination
@@ -121,7 +121,13 @@ ccopy runs over your normal ssh setup (keys,
 The remote host does
 .B not
 need ctxttools installed. ccopy works in
-two tiers: it first probes whether the remote runs ctools. If it does, it takes
+two tiers: it first asks the remote which ctools it runs (its
+.BR "ccopy \-\-version" ,
+with
+.I ~/.local/bin
+and
+.I ~/bin
+on PATH). If that is ctools 0.4.0 or newer, it takes
 the cheap path: the far side runs ctools itself and only the conversation JSON
 crosses the wire (the source is read with
 .B ccat
@@ -129,7 +135,8 @@ and
 .BR ccopy ,
 the destination seeded with
 .BR ccopy ).
-If it does not, it takes the expensive
+A failure on that path is reported as an error, not retried by copying storage.
+If the remote has no ctools, or one older than 0.4.0, it takes the expensive
 path: it pulls the remote agent's storage (its sessions directory or its
 database) over ssh with a plain
 tar pipe, unpacks it into a local scratch directory, reads or writes the

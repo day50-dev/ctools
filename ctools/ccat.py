@@ -40,7 +40,8 @@ from ctools.agents import REGISTRY as AGENTS, SessionNotFound, get_agent
 from ctools.lib import install_clean_sigint
 from ctools.cli import (handle_version, parse_ref, parse_remote_ref, reporting,
                         version_option)
-from ctools.ccopy import _local_agent, _pull, _remote_common_doc, _remote_has_ctools
+from ctools.ccopy import (RemoteWireError, _local_agent, _pull, _remote_common_doc,
+                          _remote_has_ctools)
 
 __all__ = ['app']
 
@@ -136,11 +137,16 @@ def _fetch(ref: str) -> Tuple[str, List[dict], List[dict], Optional[dict], Optio
                 return ref, [], [], None, f'no such session: {name}/{session_id}'
         return f'{name}/{session_id}', context, raw, info, None
 
-    # Remote, first pass: if the remote runs ctools, have it export the
-    # envelope over one ssh (only the session's JSON crosses the wire).
+    # Remote, first pass: if the remote runs a new enough ctools, have it
+    # export the envelope over one ssh (only the session's JSON crosses the
+    # wire). A failure there is the answer; the storage pull is only for a
+    # remote without a usable ctools.
     doc = None
     if _remote_has_ctools(remote):
-        doc = _remote_common_doc(remote, agent, session_id)
+        try:
+            doc = _remote_common_doc(remote, agent, session_id)
+        except RemoteWireError as e:
+            return ref, [], [], None, str(e)
     if doc is not None:
         context = doc.get('context') or []
         raw = doc.get('raw') or []

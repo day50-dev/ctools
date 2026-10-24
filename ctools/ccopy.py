@@ -23,6 +23,7 @@ Usage:
 import json
 import io
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -227,84 +228,130 @@ def _do_import(agent_name: str, cwd: Optional[str] = None) -> None:
 
 # --- Remote transport ---
 #
-# Cross-host copies happen in two tiers. First pass: probe whether the
-# remote host runs ctools. If it does, the cheap path: the far side runs
-# the wire modes itself (``ccopy --export-json AGENT/SESSION`` to read,
+# Cross-host copies happen in two tiers. First pass: ask the remote host
+# which ctools it runs. If it is new enough, the cheap path: the far side
+# runs the wire modes itself (``ccat --raw AGENT/SESSION`` to read,
 # ``ccopy --import-json AGENT`` to write) and only the conversation JSON
 # crosses the wire -- one ssh round trip, no storage. Second pass: the
-# remote has no ctools, so the agent's *storage files* are moved instead:
-# the storage directory (or single database) is tarred, streamed over,
-# and unpacked into a local temp directory that mirrors the remote layout;
-# the conversation is read or written locally with the normal agent code
-# and changed files are pushed back. The tar path needs nothing but sshd
-# and tar.
+# remote has no ctools (or one too old for the wire modes), so the agent's
+# *storage files* are moved instead: the storage directory (or single
+# database) is tarred, streamed over, and unpacked into a local temp
+# directory that mirrors the remote layout; the conversation is read or
+# written locally with the normal agent code and changed files are pushed
+# back. The tar path needs nothing but sshd and tar.
+
+# The oldest remote ctools the wire path can drive: ``ccopy --import-json``
+# with ``--cwd`` (0.4.0) and ``ccat --raw`` (0.2.1).
+WIRE_MIN_VERSION = "0.4.0"
+
+
+class RemoteWireError(Exception):
+    """A wire-mode command failed on a remote that runs a new enough ctools."""
+
 
 def _run(argv: List[str], input_text: Optional[str] = None) -> subprocess.CompletedProcess:
     return subprocess.run(argv, input=input_text, capture_output=True, text=True)
 
 
+def _version_tuple(text: str) -> Optional[tuple]:
+    m = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", text)
+    if not m:
+        return None
+    return tuple(int(g or 0) for g in m.groups())
+
+
 _ctools_probes: dict = {}
 
 
-def _remote_has_ctools(remote: Remote) -> bool:
-    """First pass: does the remote host have ctools (ccopy on PATH)?
+def _remote_ctools_version(remote: Remote) -> Optional[str]:
+    """Which ctools does the remote host run? Its ``ccopy --version`` line,
+    "" if ccopy is there but won't say, or None if there is no ccopy.
 
-    A cheap probe -- one small ssh round trip, no storage. If the remote
-    has ctools, the conversation can be exported/seeded there over the
-    wire modes and only the conversation JSON crosses the wire; otherwise
-    the caller falls back to the expensive tar storage pull. The answer is
-    cached per host:port for the life of this process.
+    One small ssh round trip, cached per host:port for the life of this
+    process. The user bin dirs are put on PATH first: a non-interactive ssh
+    doesn't have ``~/.local/bin``, where uv and pipx install ctools.
     """
     key = f"{remote.user or ''}@{remote.host}:{remote.port or ''}"
     if key in _ctools_probes:
         return _ctools_probes[key]
-    if shutil.which("ssh") is None:
-        return False
-    proc = _run(remote.ssh_command("command -v ccopy >/dev/null 2>&1 && echo ok"))
-    found = proc.returncode == 0 and proc.stdout.strip() == "ok"
+    found = None
+    if shutil.which("ssh") is not None:
+        proc = _run(remote.ctools_command(
+            "command -v ccopy >/dev/null 2>&1 || exit 3; ccopy --version 2>/dev/null; true"))
+        if proc.returncode == 0:
+            found = proc.stdout.strip()
     _ctools_probes[key] = found
     return found
 
 
-def _remote_common_doc(remote: Remote, agent: Agent, session_id: str) -> Optional[dict]:
+def _remote_has_ctools(remote: Remote) -> bool:
+    """First pass: does the remote run a ctools new enough for the wire path?
+
+    If so, the conversation is exported/seeded there over the wire modes and
+    only the conversation JSON crosses the wire; otherwise the caller falls
+    back to the expensive tar storage pull. An older ctools gets a one-line
+    note saying so (on stderr, so ``ccat``'s stdout stays clean).
+    """
+    version = _remote_ctools_version(remote)
+    if version is None:
+        return False
+    have = _version_tuple(version)
+    if have is not None and have >= _version_tuple(WIRE_MIN_VERSION):
+        return True
+    key = f"warned:{remote.user or ''}@{remote.host}:{remote.port or ''}"
+    if key not in _ctools_probes:
+        _ctools_probes[key] = True
+        err_console.print(
+            f"[yellow]{remote.target} runs {version or 'an old ctools'}; sending the "
+            f"conversation directly needs ctools {WIRE_MIN_VERSION} or newer there, "
+            f"so ccopy is copying the agent's storage instead.[/yellow]")
+        err_console.print(f"[dim]Upgrade it there with: uv tool upgrade ctxttools "
+                          f"(or pipx upgrade ctxttools)[/dim]")
+    return False
+
+
+def _wire_error(remote: Remote, cmd: str, proc: subprocess.CompletedProcess) -> RemoteWireError:
+    detail = (proc.stderr or proc.stdout or "").strip()
+    msg = f"{cmd} failed on {remote.target} (exit {proc.returncode})"
+    return RemoteWireError(msg + (f": {detail}" if detail else ""))
+
+
+def _remote_common_doc(remote: Remote, agent: Agent, session_id: str) -> dict:
     """Fetch the common envelope from a remote that runs ctools, over one ssh:
 
     the far side runs ``ccat --raw AGENT/SESSION`` and streams the lossless
     envelope (the same shape as a local ``to_common``: context plus the
-    agent's verbatim records and session metadata); we parse it here. Returns
-    None on any failure (ssh error, agent not installed there, no such
-    session) so the caller can fall back to pulling the storage.
+    agent's verbatim records and session metadata); we parse it here. Raises
+    RemoteWireError on any failure (agent not installed there, no such
+    session, bad output) with what the far side said.
     """
     cmd = f"ccat --raw {shlex.quote(agent.name)}/{shlex.quote(session_id)}"
-    proc = _run(remote.ssh_command(cmd))
+    proc = _run(remote.ctools_command(cmd))
     if proc.returncode != 0:
-        return None
+        raise _wire_error(remote, cmd, proc)
     try:
         doc = json.loads(proc.stdout)
     except (json.JSONDecodeError, ValueError):
-        return None
+        doc = None
     if not isinstance(doc, dict) or not isinstance(doc.get('context'), list):
-        return None
+        raise RemoteWireError(f"{cmd} on {remote.target} did not print a session envelope")
     return doc
 
 
 def _remote_import_records(remote: Remote, agent: Agent, records: List[dict],
-                           cwd: Optional[str] = None) -> Optional[str]:
+                           cwd: Optional[str] = None) -> str:
     """Seed a new session in `agent` on `remote` over one ssh: the records
     are piped into the far side's ``ccopy --import-json AGENT``, whose stdout
-    is the new session id. Returns None on any failure so the caller can
-    fall back to the tar pull/create/push.
+    is the new session id. Raises RemoteWireError on any failure.
     """
     cmd = f"ccopy --import-json {shlex.quote(agent.name)}"
     if cwd:
         cmd += f" --cwd {shlex.quote(cwd)}"
-    proc = _run(remote.ssh_command(cmd), input_text=json.dumps(records))
-    if proc.returncode != 0:
-        # Silent: the caller falls back to the tar path, which reports its
-        # own errors.
-        return None
+    proc = _run(remote.ctools_command(cmd), input_text=json.dumps(records))
     new_id = proc.stdout.strip().splitlines()[-1].strip() if proc.stdout.strip() else ""
-    return new_id or None
+    if proc.returncode != 0 or not new_id:
+        raise _wire_error(remote, cmd.split(" --cwd")[0], proc)
+    return new_id
 
 
 def _remote_storage_rel(agent: Agent) -> str:
@@ -412,15 +459,18 @@ def _remote_destination(remote: Remote, dest: Agent, records: List[dict],
                         cwd: Optional[str] = None) -> str:
     """Create a new session in `dest` on `remote` and return its id.
 
-    First pass: if the remote runs ctools, pipe the records into its
-    ``ccopy --import-json`` -- one ssh, only the conversation crosses. Second
-    pass: pull its storage, create the session against the local mirror,
+    First pass: if the remote runs a new enough ctools, pipe the records into
+    its ``ccopy --import-json`` -- one ssh, only the conversation crosses; a
+    failure there is reported, not papered over with a storage pull. Second
+    pass (no usable ctools there): pull its storage, create the session against the local mirror,
     push the storage back. ``cwd`` seeds the new session for that directory.
     """
     if _remote_has_ctools(remote):
-        new_id = _remote_import_records(remote, dest, records, cwd=cwd)
-        if new_id:
-            return new_id
+        try:
+            return _remote_import_records(remote, dest, records, cwd=cwd)
+        except RemoteWireError as e:
+            console.print(f"[red]{e}[/red]")
+            raise SystemExit(1)
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
         _pull(remote, dest, base)
@@ -601,7 +651,11 @@ def main(argv=None) -> int:
         else:
             common_doc = None
             if _remote_has_ctools(src_remote):
-                common_doc = _remote_common_doc(src_remote, src_agent, src_id)
+                try:
+                    common_doc = _remote_common_doc(src_remote, src_agent, src_id)
+                except RemoteWireError as e:
+                    console.print(f"[red]{e}[/red]")
+                    raise SystemExit(1)
             if common_doc is None:
                 with tempfile.TemporaryDirectory() as tmp:
                     _pull(src_remote, src_agent, Path(tmp))
