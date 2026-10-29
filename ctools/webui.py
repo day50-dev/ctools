@@ -1332,6 +1332,7 @@ input.sess-ck, input.ckall { position: absolute; inset: 0; margin: 0;
   font-family: var(--mono); }
 .msg .expand-bottom { text-align: center; }
 .msg .msg-actions { display: flex; align-items: baseline; gap: 12px; margin-left: auto; }
+.msg .copy-msg { text-decoration: none; }
 /* consecutive same-role messages cluster into one container */
 .msggroup { background: var(--panel); border: 1px solid var(--border);
   border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
@@ -2714,8 +2715,8 @@ function msgHtml(m, i, tools) {
     <div style="display:flex;justify-content:space-between;gap:12px">
       <span class="role ${esc(m.role)}">${esc(m.role)}</span>
       <span class="msg-actions">
-        ${long ? `<span class="expand">show more ▾</span>` : ""}
         <button class="linkbtn copy-msg" title="Copy message" aria-label="Copy message">⧉</button>
+        ${long ? `<span class="expand">show more ▾</span>` : ""}
       </span>
     </div>${badge}${inner}
     ${long ? `<div class="expand-bottom"><span class="expand">show more ▾</span></div>` : ""}</div>`;
