@@ -2002,7 +2002,7 @@ async function copyToClipboard(text, el) {
     try { document.execCommand("copy"); } catch (_) {}
     ta.remove();
   }
-  if (el) {
+  if (el && !el.classList.contains("copied-flash")) {
     const orig = el.textContent;
     el.textContent = "copied ✓";
     el.classList.add("copied-flash");
@@ -2521,11 +2521,11 @@ async function openConverse(agent, sid) {
     meta += ` <button class="primary" style="background:var(--green)"
       onclick="showConcepts()">Concepts</button>`;
     meta += ` <button id="c-expand-all" class="primary" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);margin-left:auto"
-      onclick="expandAllMessages()" disabled>Expand all</button>`;
+      onclick="toggleAllMessages()" disabled>Expand all</button>`;
     meta += ` <button class="primary" style="background:var(--panel2);color:var(--text);border:1px solid var(--border)"
       onclick="showExport()">⬇ Export</button>`;
     $("#c-meta").innerHTML = meta;
-    window._lastMessages = d.messages;   // kept for export and message copying
+    window._lastMessages = d.messages;   // kept for showExport()
     const toolMap = toolMapFromCalls(d.tool_calls);
     $("#c-dest").addEventListener("keydown", e => {
       if (e.key === "Enter") doCopy();
@@ -2866,12 +2866,16 @@ function setMessageExpanded(msg, expanded) {
 
 function updateExpandAll() {
   const btn = $("#c-expand-all");
-  if (btn) btn.disabled = !$("#c-body .msg-long.collapsed");
+  if (!btn) return;
+  btn.disabled = !$("#c-body .msg-long");
+  btn.textContent = !btn.disabled && !$("#c-body .msg-long.collapsed")
+    ? "Collapse all" : "Expand all";
 }
 
-function expandAllMessages() {
-  document.querySelectorAll("#c-body .msg-long.collapsed").forEach(wrap =>
-    setMessageExpanded(wrap.closest(".msg"), true));
+function toggleAllMessages() {
+  const expand = !!$("#c-body .msg-long.collapsed");
+  document.querySelectorAll("#c-body .msg-long").forEach(wrap =>
+    setMessageExpanded(wrap.closest(".msg"), expand));
   updateExpandAll();
 }
 
