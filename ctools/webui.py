@@ -1330,6 +1330,8 @@ input.sess-ck, input.ckall { position: absolute; inset: 0; margin: 0;
   font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
 .msg .expand { color: var(--accent); font-size: 11px; cursor: pointer;
   font-family: var(--mono); }
+.msg .expand-bottom { text-align: center; }
+.msg .msg-actions { display: flex; align-items: baseline; gap: 12px; margin-left: auto; }
 /* consecutive same-role messages cluster into one container */
 .msggroup { background: var(--panel); border: 1px solid var(--border);
   border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
@@ -2517,16 +2519,19 @@ async function openConverse(agent, sid) {
     </span>`;
     meta += ` <button class="primary" style="background:var(--green)"
       onclick="showConcepts()">Concepts</button>`;
-    meta += ` <button class="primary" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);margin-left:auto"
+    meta += ` <button id="c-expand-all" class="primary" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);margin-left:auto"
+      onclick="expandAllMessages()" disabled>Expand all</button>`;
+    meta += ` <button class="primary" style="background:var(--panel2);color:var(--text);border:1px solid var(--border)"
       onclick="showExport()">⬇ Export</button>`;
     $("#c-meta").innerHTML = meta;
-    window._lastMessages = d.messages;   // kept for showExport()
+    window._lastMessages = d.messages;   // kept for export and message copying
     const toolMap = toolMapFromCalls(d.tool_calls);
     $("#c-dest").addEventListener("keydown", e => {
       if (e.key === "Enter") doCopy();
     });
     $("#c-body").innerHTML = messagesHtml(d.messages, toolMap)
       + resumePanel(agent, sid, d.resume);
+    updateExpandAll();
     buildToolsAside(d.tool_calls);
     // wire the copy-command buttons in the resume panel
     $("#c-body").querySelectorAll(".resume-panel [data-cp]").forEach(b =>
@@ -2708,8 +2713,12 @@ function msgHtml(m, i, tools) {
   return `<div class="msg${t.length ? " has-tools" : ""}" data-midx="${i}">
     <div style="display:flex;justify-content:space-between;gap:12px">
       <span class="role ${esc(m.role)}">${esc(m.role)}</span>
-      ${long ? `<span class="expand">show more ▾</span>` : ""}
-    </div>${badge}${inner}</div>`;
+      <span class="msg-actions">
+        ${long ? `<span class="expand">show more ▾</span>` : ""}
+        <button class="linkbtn copy-msg" title="Copy message" aria-label="Copy message">⧉</button>
+      </span>
+    </div>${badge}${inner}
+    ${long ? `<div class="expand-bottom"><span class="expand">show more ▾</span></div>` : ""}</div>`;
 }
 
 // Cluster consecutive same-role messages into one shared container: the role
@@ -2846,21 +2855,39 @@ $("#s-agent").addEventListener("change", sessionsChange);
 $("#s-sort").addEventListener("change", sessionsChange);
 $("#s-filter").addEventListener("input", renderSessions);
 
-// expand/collapse long messages
+// message controls
+function setMessageExpanded(msg, expanded) {
+  msg.querySelector(".msg-long").classList.toggle("collapsed", !expanded);
+  msg.querySelectorAll(".expand").forEach(control => {
+    control.textContent = expanded ? "collapse ▴" : "show more ▾";
+  });
+}
+
+function updateExpandAll() {
+  const btn = $("#c-expand-all");
+  if (btn) btn.disabled = !$("#c-body .msg-long.collapsed");
+}
+
+function expandAllMessages() {
+  document.querySelectorAll("#c-body .msg-long.collapsed").forEach(wrap =>
+    setMessageExpanded(wrap.closest(".msg"), true));
+  updateExpandAll();
+}
+
 document.addEventListener("click", e => {
+  const copy = e.target.closest(".copy-msg");
+  if (copy) {
+    const message = window._lastMessages?.[copy.closest(".msg").dataset.midx];
+    if (message) copyToClipboard(message.content, copy);
+    return;
+  }
   const el = e.target.closest(".expand");
   if (!el) return;
   const msg = el.closest(".msg");
   const wrap = msg.querySelector(".msg-long");
   if (!wrap) return;
-  const isCollapsed = wrap.classList.contains("collapsed");
-  if (isCollapsed) {
-    wrap.classList.remove("collapsed");
-    el.textContent = "collapse ▴";
-  } else {
-    wrap.classList.add("collapsed");
-    el.textContent = "show more ▾";
-  }
+  setMessageExpanded(msg, wrap.classList.contains("collapsed"));
+  updateExpandAll();
 });
 
 // --- Strategies & Filters (configs view) --------------------------------
