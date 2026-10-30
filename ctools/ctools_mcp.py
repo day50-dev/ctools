@@ -93,6 +93,9 @@ def list_agents() -> str:
 def list_sessions(agent: str, sort: str = "time") -> str:
     """List conversation sessions for an agent.
 
+    Subagent sessions are listed nested under their parent, not as
+    top-level entries.
+
     Args:
         agent: Agent name (claude, claude-code, opencode, codex, pi, goose)
         sort: Sort by 'time' or 'size'
@@ -113,11 +116,35 @@ def list_sessions(agent: str, sort: str = "time") -> str:
     else:
         sessions.sort(key=lambda s: s.mtime or s.ctime, reverse=True)
 
-    lines = [f"Sessions for {agent} ({len(sessions)} total):"]
-    for s in sessions[:50]:
+    # Subagent sessions (parent_id set) are listed nested under their
+    # parent, not as top-level entries.
+    children = {}
+    top_level = []
+    for s in sessions:
+        if s.parent_id:
+            children.setdefault(s.parent_id, []).append(s)
+        else:
+            top_level.append(s)
+
+    def _line(s, indent=""):
         mtime = s.mtime.strftime("%Y-%m-%d %H:%M") if s.mtime else "N/A"
         msgs = f"{s.message_count} msgs" if s.message_count else ""
-        lines.append(f"  {s.id}  {s.name[:50]}  {mtime}  {msgs}")
+        return f"{indent}{s.id}  {s.name[:50]}  {mtime}  {msgs}"
+
+    lines = [f"Sessions for {agent} ({len(sessions)} total):"]
+    shown = set()
+    for s in top_level[:50]:
+        lines.append(_line(s, "  "))
+        shown.add(s.id)
+        for child in children.get(s.id, []):
+            lines.append(_line(child, "    └ "))
+            shown.add(child.id)
+    # Subagents whose parent is not in the list are shown top-level.
+    for pid, kids in children.items():
+        if pid not in shown:
+            for child in kids:
+                lines.append(_line(child, "  "))
+                shown.add(child.id)
 
     if len(sessions) > 50:
         lines.append(f"  ... and {len(sessions) - 50} more")

@@ -560,3 +560,33 @@ def test_claude_code_lines_with_role_surfaces_tool_and_system(tmp_path):
     # tool_result must NOT also leak in as a plain user conversation line
     assert not any(role == 'user' and 'total 5' in line
                    for _, line, role in lines)
+
+
+def test_claude_code_subagent_sessions_carry_parent_id(tmp_path):
+    """Subagent transcripts (stored under <parent>/subagents/) are classified
+    under their parent session."""
+    project = tmp_path / 'projects' / 'proj'
+    sub = project / 'ses_parent' / 'subagents'
+    sub.mkdir(parents=True)
+    (project / 'ses_parent.jsonl').write_text(
+        json.dumps({"type": "user",
+                    "message": {"role": "user", "content": "main task"}}) + '\n')
+    (sub / 'agent-abc123.jsonl').write_text(
+        json.dumps({"type": "user", "sessionId": "ses_parent",
+                    "message": {"role": "user", "content": "subagent task"}}) + '\n')
+    sessions = {s.id: s for s in ClaudeCodeAgent(tmp_path).sessions()}
+    assert sessions['agent-abc123'].parent_id == 'ses_parent'
+    assert sessions['ses_parent'].parent_id is None
+
+
+def test_claude_code_subagent_parent_falls_back_to_directory(tmp_path):
+    """When the first entry has no sessionId, the directory name is the
+    parent."""
+    project = tmp_path / 'projects' / 'proj'
+    sub = project / 'ses_parent' / 'subagents'
+    sub.mkdir(parents=True)
+    (sub / 'agent-abc123.jsonl').write_text(
+        json.dumps({"type": "user",
+                    "message": {"role": "user", "content": "subagent task"}}) + '\n')
+    sessions = {s.id: s for s in ClaudeCodeAgent(tmp_path).sessions()}
+    assert sessions['agent-abc123'].parent_id == 'ses_parent'

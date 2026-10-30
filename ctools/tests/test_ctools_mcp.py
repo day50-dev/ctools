@@ -388,3 +388,38 @@ def test_copy_concepts_invalid_dest_session_ref(patched_opencode, tmp_path):
     src_file.write_text(json.dumps(concepts))
     result = copy_concepts(str(src_file), "@bad_agent/ses_123")
     assert "bad_agent" in result
+
+
+def test_list_sessions_nests_subagents(tmp_path, monkeypatch):
+    """Subagent sessions (parent_id set) are listed nested under their
+    parent, not as top-level entries."""
+    from ctools.agents import Session
+    from datetime import datetime
+
+    class StubAgent:
+        name = 'stub'
+        base_path = tmp_path
+
+        def exists(self):
+            return True
+
+        def sessions(self):
+            return [
+                Session(id='parent1', name='Parent session',
+                        ctime=datetime(2026, 1, 1), mtime=datetime(2026, 1, 3), size=10),
+                Session(id='child1', name='Subagent task',
+                        ctime=datetime(2026, 1, 1), mtime=datetime(2026, 1, 2), size=5,
+                        parent_id='parent1'),
+                Session(id='orphan', name='Orphan subagent',
+                        ctime=datetime(2026, 1, 1), mtime=datetime(2026, 1, 1), size=5,
+                        parent_id='missing'),
+            ]
+
+    monkeypatch.setitem(AGENTS, 'stub', StubAgent())
+    lines = list_sessions('stub').splitlines()
+    parent_i = next(i for i, l in enumerate(lines) if 'parent1' in l)
+    child_i = next(i for i, l in enumerate(lines) if 'child1' in l)
+    assert child_i == parent_i + 1
+    assert '└' in lines[child_i]
+    # A subagent whose parent is not in the list is not silently dropped.
+    assert 'orphan' in '\n'.join(lines)

@@ -1133,6 +1133,12 @@ class ClaudeCodeAgent(JsonlAgent):
             # No truncation here: the display layer owns column width.
             name = title or (first_user or '').strip().replace('\n', ' ') \
                 or session_id[:8]
+            parent_id = None
+            if 'subagents' in path.parts:
+                # Subagent transcripts live under <parent-session-id>/subagents/;
+                # the first entry's sessionId agrees with the directory name.
+                parent_id = (entries[0].get('sessionId') if entries else None) \
+                    or path.parent.parent.name
             sessions.append(Session(
                 id=session_id,
                 name=name,
@@ -1142,6 +1148,7 @@ class ClaudeCodeAgent(JsonlAgent):
                 path=cwd or str(path),
                 model=model,
                 message_count=message_count,
+                parent_id=parent_id,
             ))
         return sessions
 
