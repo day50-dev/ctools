@@ -8,9 +8,10 @@ conversation, one or more at a time.
 
 By default the output is a JSON list of {role, content} objects (one array per
 session) — the llcat/OpenAI spine — so it is importable and pipeable: feed it to
-jq, to another tool, or back into a session. Use --text for a human-readable
-transcript, or --raw for the lossless envelope (the context plus the source
-agent's verbatim records and session metadata).
+jq, to another tool, or back into a session. Tool calls are interleaved as
+{role: "tool"} entries after the turn that made them. Use --text for a
+human-readable transcript, or --raw for the lossless envelope (the context plus
+the source agent's verbatim records, its tool calls, and session metadata).
 
 Usage:
     ccat opencode/ses_abc123                 # print one conversation as JSON
@@ -79,20 +80,46 @@ def _render_transcript(messages: List[dict], color: bool) -> None:
             print(f'    {label:<{width}}  {m.get("content", "")}')
 
 
+def _merge_tool_calls(messages: List[dict],
+                      tool_calls: List[dict]) -> List[dict]:
+    """Interleave tool-call entries after the messages they attach to.
+
+    ``tool_calls`` items are ``{"name", "summary", "msg"}`` where ``msg`` is
+    the index into ``messages`` of the closest conversation message. The
+    returned list is a fresh list; the inputs are not modified.
+    """
+    out = list(messages)
+    if not tool_calls:
+        return out
+    by_msg: dict = {}
+    for tc in tool_calls:
+        by_msg.setdefault(int(tc.get('msg', 0)), []).append(tc)
+    for msg_idx in sorted(by_msg):
+        entries = [{'role': 'tool',
+                   'content': ' '.join(filter(None,
+                                            (tc.get('name'), tc.get('summary'))))}
+                  for tc in by_msg[msg_idx]]
+        out[min(msg_idx + 1, len(out)):min(msg_idx + 1, len(out))] = entries
+    return out
+
+
 def _render_json(messages: List[dict]) -> None:
     import json
     print(json.dumps(messages, indent=2))
 
 
 def _render_raw(label: str, context: List[dict],
-                raw: List[dict], info: Optional[dict]) -> None:
+                raw: List[dict], info: Optional[dict],
+                tool_calls: Optional[List[dict]] = None) -> None:
     """Print the lossless envelope: the portable context plus the agent's
-    verbatim records and session metadata.
+    verbatim records, its tool calls, and session metadata.
 
-    ``context`` is the llcat/OpenAI-compatible {role, content} array; ``raw`` is
-    the source agent's verbatim per-message records (parallel, may be empty)
-    so a copy back into the *same* agent loses nothing; the session facts
-    (source, model, timestamps) sit at the top, not bolted onto each record.
+    ``context`` is the llcat/OpenAI-compatible {role, content} array (the bare
+    spine, without tool-call entries); ``raw`` is the source agent's verbatim
+    per-message records (parallel, may be empty) so a copy back into the *same*
+    agent loses nothing; ``tool_calls`` is the structured tool-call list (may
+    be empty); the session facts (source, model, timestamps) sit at the top,
+    not bolted onto each record.
     """
     import json
     doc = {
@@ -103,39 +130,44 @@ def _render_raw(label: str, context: List[dict],
         for key in ('model', 'created', 'modified'):
             if info.get(key):
                 doc[key] = info[key]
+    if tool_calls:
+        doc['tool_calls'] = tool_calls
     if raw:
         doc['raw'] = raw
     print(json.dumps(doc, indent=2))
 
 
-def _fetch(ref: str) -> Tuple[str, List[dict], List[dict], Optional[dict], Optional[str]]:
+def _fetch(ref: str) -> Tuple[str, List[dict], List[dict], Optional[dict], List[dict], Optional[str]]:
     """Resolve a (possibly remote) session ref.
 
-    Returns (label, context, raw, info, error). `context` is the portable
-    {role, content} list; `raw` is the agent's verbatim records (may be empty);
-    `info` is session metadata (may be None). Exactly one of context / error is
-    meaningful: on success error is None; on failure error is set.
+    Returns (label, context, raw, info, tool_calls, error). `context` is the
+    portable {role, content} list (the bare spine); `raw` is the agent's
+    verbatim records (may be empty); `tool_calls` is the structured tool-call
+    list (may be empty); `info` is session metadata (may be None). Exactly one
+    of context / error is meaningful: on success error is None; on failure
+    error is set.
     """
     remote, local_ref = parse_remote_ref(ref)
     name, session_id = parse_ref(local_ref)
     if not session_id:
-        return ref, [], [], None, f'no session ID in {ref} (expected agent/session_id)'
+        return ref, [], [], None, [], f'no session ID in {ref} (expected agent/session_id)'
     agent = get_agent(name)
     if agent is None:
-        return ref, [], [], None, f'unknown agent: {name} (available: {", ".join(AGENTS)})'
+        return ref, [], [], None, [], f'unknown agent: {name} (available: {", ".join(AGENTS)})'
 
     if remote is None:
         if not agent.exists():
-            return ref, [], [], None, f'{agent.name} is not installed'
+            return ref, [], [], None, [], f'{agent.name} is not installed'
         with reporting():
             try:
                 context = [{"role": m.role, "content": m.content}
                            for m in agent.messages(session_id)]
                 raw = agent.raw_records(session_id)
                 info = agent.session_info(session_id)
+                tools = agent.tool_calls(session_id)
             except SessionNotFound:
-                return ref, [], [], None, f'no such session: {name}/{session_id}'
-        return f'{name}/{session_id}', context, raw, info, None
+                return ref, [], [], None, [], f'no such session: {name}/{session_id}'
+        return f'{name}/{session_id}', context, raw, info, tools, None
 
     # Remote, first pass: if the remote runs a new enough ctools, have it
     # export the envelope over one ssh (only the session's JSON crosses the
@@ -146,15 +178,16 @@ def _fetch(ref: str) -> Tuple[str, List[dict], List[dict], Optional[dict], Optio
         try:
             doc = _remote_common_doc(remote, agent, session_id)
         except RemoteWireError as e:
-            return ref, [], [], None, str(e)
+            return ref, [], [], None, [], str(e)
     if doc is not None:
         context = doc.get('context') or []
         raw = doc.get('raw') or []
+        tools = doc.get('tool_calls') or []
         info = {k: doc[k] for k in ('model', 'created', 'modified') if doc.get(k)} or None
         label = f'{name}/{session_id} on {remote.target}'
         if not context:
-            return label, [], [], None, f'no conversation in {label}'
-        return label, context, raw, info, None
+            return label, [], [], None, [], f'no conversation in {label}'
+        return label, context, raw, info, tools, None
 
     # Remote, second pass: pull the agent's storage over ssh and read it
     # locally.
@@ -163,19 +196,20 @@ def _fetch(ref: str) -> Tuple[str, List[dict], List[dict], Optional[dict], Optio
         try:
             _pull(remote, agent, base)
         except SystemExit:
-            return ref, [], [], None, f'could not pull {name} storage from {remote}'
+            return ref, [], [], None, [], f'could not pull {name} storage from {remote}'
         probe = _local_agent(agent, base)
         try:
             context = [{"role": m.role, "content": m.content}
                        for m in probe.messages(session_id)]
             raw = probe.raw_records(session_id)
             info = probe.session_info(session_id)
+            tools = probe.tool_calls(session_id)
         except SessionNotFound:
-            return ref, [], [], None, f'no such session on {remote.target}: {name}/{session_id}'
+            return ref, [], [], None, [], f'no such session on {remote.target}: {name}/{session_id}'
     label = f'{name}/{session_id} on {remote.target}'
     if not context:
-        return label, [], [], None, f'no conversation in {label}'
-    return label, context, raw, info, None
+        return label, [], [], None, [], f'no conversation in {label}'
+    return label, context, raw, info, tools, None
 
 
 def _use_color(mode: str) -> bool:
@@ -193,13 +227,14 @@ def build_parser() -> argparse.ArgumentParser:
                      "`ccat AGENT/SESSION` prints the session's messages. The "
                      "default output is a JSON list of {role, content} objects "
                      "(one array per session) — the llcat/OpenAI spine — so it "
-                     "can be imported or piped to another tool. Pass --text for "
-                     "a readable transcript instead, or --raw for the lossless "
-                     "envelope (the context plus the source agent's verbatim "
-                     "records and session metadata). Several sessions print in "
-                     "order, separated by a blank line. A remote source "
-                     "(ssh://...) is fetched over ssh first. The source is never "
-                     "modified."),
+                     "can be imported or piped to another tool. Tool calls are "
+                     "interleaved as {role: 'tool'} entries after the turn that "
+                     "made them. Pass --text for a readable transcript instead, "
+                     "or --raw for the lossless envelope (the context plus the "
+                     "source agent's verbatim records, its tool calls, and "
+                     "session metadata). Several sessions print in order, "
+                     "separated by a blank line. A remote source (ssh://...) is "
+                     "fetched over ssh first. The source is never modified."),
     )
     parser.add_argument("refs", nargs="*",
                         help="One or more sessions to print (agent/session_id, "
@@ -240,18 +275,18 @@ def main(argv=None) -> int:
 
     printed_any = False
     for i, ref in enumerate(refs):
-        label, records, raw, info, error = _fetch(ref)
+        label, records, raw, info, tools, error = _fetch(ref)
         if error:
             console.print(f"[yellow]{error}[/yellow]")
             continue
         if i:
             print()  # blank line between consecutive sessions
         if text_out:
-            _render_transcript(records, color=use_color)
+            _render_transcript(_merge_tool_calls(records, tools), color=use_color)
         elif raw_out:
-            _render_raw(label, records, raw, info)
+            _render_raw(label, records, raw, info, tools)
         else:
-            _render_json(records)
+            _render_json(_merge_tool_calls(records, tools))
         printed_any = True
 
     # cat exits non-zero only when nothing could be read; a single bad ref

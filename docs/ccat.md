@@ -26,20 +26,28 @@ session with `ccopy --import-json`. Use `--text` for a readable transcript inste
 ```sh
 $ ccat opencode/ses_abc123
 [
-  {"role": "user", "content": "do a git diff to v0.16.10 ... i broke toolcalling"}
+  {"role": "user", "content": "do a git diff to v0.16.10 ... i broke toolcalling"},
+  {"role": "assistant", "content": "Let me look at the broader context ..."},
+  {"role": "tool", "content": "bash git diff v0.16.10"}
 ]
 
 $ ccat --text opencode/ses_abc123
     you        do a git diff to v0.16.10 ... i broke toolcalling somehow
     assistant  Let me look at the broader context around tool calling...
+    tool       bash git diff v0.16.10
 ```
+
+Tool calls are interleaved as `{"role": "tool"}` entries right after the turn
+that made them (agents that don't expose their tool calls simply print none).
+`--raw` carries them as a structured `tool_calls` list instead, so the
+`context` array stays the bare spine.
 
 ## --raw: the lossless envelope
 
 The default JSON is the *portable* conversation — as much as every agent can
 carry. `--raw` prints the *lossless* form instead: the same `context` array,
-plus the source agent's verbatim records and the session metadata, so a copy
-back into the *same* agent loses nothing.
+plus the source agent's verbatim records, its tool calls, and the session
+metadata, so a copy back into the *same* agent loses nothing.
 
 ```sh
 $ ccat --raw opencode/ses_abc123

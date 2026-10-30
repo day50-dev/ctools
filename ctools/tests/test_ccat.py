@@ -427,3 +427,65 @@ def test_ccat_remote_falls_back_to_tar_when_no_ctools(tmp_path, monkeypatch):
         assert doc[0]["content"] == "Write a fibonacci function"
     finally:
         AGENTS["opencode"].base_path = original
+
+
+# --- tool calls ---
+
+def _run_ccat_with_tools(tmp_path, args, tools):
+    """Run ccat against the opencode fixture with tool_calls monkeypatched."""
+    original_tc = AGENTS["opencode"].tool_calls
+    AGENTS["opencode"].tool_calls = lambda session_id, _tools=tools: list(_tools)
+    try:
+        return _run_ccat(tmp_path, args)
+    finally:
+        AGENTS["opencode"].tool_calls = original_tc
+
+
+def test_ccat_json_default_includes_tool_calls(tmp_path):
+    """The default JSON interleaves {role: 'tool'} entries after the turn
+    that made them."""
+    _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
+    tools = [
+        {"name": "read", "summary": "fib.py", "msg": 1},
+        {"name": "bash", "summary": "pytest", "msg": 1},
+    ]
+    result = _run_ccat_with_tools(tmp_path, ["opencode/ses_a"], tools)
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data[0]["role"] == "user"
+    assert data[1]["role"] == "assistant"
+    assert data[2] == {"role": "tool", "content": "read fib.py"}
+    assert data[3] == {"role": "tool", "content": "bash pytest"}
+
+
+def test_ccat_text_includes_tool_calls(tmp_path):
+    """--text renders tool calls under the turn that made them."""
+    _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
+    tools = [{"name": "read", "summary": "fib.py", "msg": 0}]
+    result = _run_ccat_with_tools(tmp_path, ["--text", "opencode/ses_a"], tools)
+    assert result.exit_code == 0, result.output
+    lines = result.stdout.splitlines()
+    user_idx = next(i for i, l in enumerate(lines) if "you" in l)
+    tool_idx = next(i for i, l in enumerate(lines) if "tool" in l and "read fib.py" in l)
+    assert tool_idx == user_idx + 1
+
+
+def test_ccat_raw_envelope_carries_tool_calls(tmp_path):
+    """--raw keeps the context a bare spine and carries the structured
+    tool_calls list."""
+    _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
+    tools = [{"name": "read", "summary": "fib.py", "msg": 1}]
+    result = _run_ccat_with_tools(tmp_path, ["--raw", "opencode/ses_a"], tools)
+    assert result.exit_code == 0, result.output
+    doc = json.loads(result.stdout)
+    assert all(m["role"] in ("user", "assistant") for m in doc["context"])
+    assert doc["tool_calls"] == tools
+
+
+def test_ccat_without_tool_calls_unchanged(tmp_path):
+    """Sessions with no tool calls print exactly as before."""
+    _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
+    result = _run_ccat(tmp_path, ["opencode/ses_a"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert [m["role"] for m in data] == ["user", "assistant"]

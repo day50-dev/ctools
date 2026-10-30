@@ -307,14 +307,18 @@ ctools mcp          # run the server on stdio (same as ctools-mcp)
 ### Install and register with Pi
 
 ```bash
-ctools-mcp install
+ctools-mcp install            # global: ~/.pi/agent/mcp.json
+ctools-mcp install --project  # project: .pi/mcp.json in the current directory
 ```
 
 If no working `ctxttools[mcp]` install is found, this installs one with
-`uv tool`. It then registers the server in `~/.pi/agent/mcp.json`. Verify with:
+`uv tool`. It then registers the server in `~/.pi/agent/mcp.json` (or
+`.pi/mcp.json` with `--project`), always with a `python -m ctools.ctools_mcp`
+entry that does not depend on the MCP host's `PATH`. Verify with:
 
 ```bash
 pi mcp list        # "ctools-mcp … connected"
+ctools-mcp check   # also: verifies the command exists and starts, prints the fix
 ```
 
 `ctools-mcp uninstall` removes the entry again (`--all` also removes it from
@@ -334,13 +338,17 @@ Add that to your host's MCP config. The server is started with
 
 ### Tools exposed
 
+Session tools take a single `session` reference: `agent/session_id` (the
+`@` prefix also works), or a bare `session_id` plus the `agent` argument.
+
 | Tool | What it does |
 |---|---|
 | `list_agents` | Agents available and whether they're installed. |
 | `list_sessions` | Recent sessions for one agent. |
 | `search_sessions` | Find sessions by pattern or phrase. |
+| `summarize_session` | Quick orientation: title, date, size, first user and last assistant message. |
 | `export_session` | Get the messages of a session. |
-| `extract_concepts` | Extract concepts from a session. |
+| `extract_concepts` | Extract 'Use the following …' concept blocks from a session. |
 | `get_session_concepts` | Get a session's concepts, optionally of one type. |
 | `copy_concepts` | Copy extracted concepts into a destination session. |
 

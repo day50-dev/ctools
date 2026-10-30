@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ctools": {
+      "command": "~/.local/share/uv/tools/ctxttools/bin/python",
+      "args": [
+        "-m",
+        "ctools.ctools_mcp"
+      ],
+      "description": "Search, list, and copy LLM agent sessions (pi, claude, opencode, codex, goose, etc.)"
+    }
+  }
+}

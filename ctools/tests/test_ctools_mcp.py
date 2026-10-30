@@ -4,8 +4,8 @@ import pytest
 from pathlib import Path
 from ctools.ctools_mcp import (
     list_agents, list_sessions, search_sessions,
-    export_session, extract_concepts, copy_concepts,
-    get_session_concepts,
+    export_session, summarize_session, extract_concepts, copy_concepts,
+    get_session_concepts, _resolve_session, _is_session_ref,
 )
 from ctools.lib import AGENTS
 
@@ -227,60 +227,90 @@ def test_search_sessions_max_results(patched_opencode):
 # --- export_session ---
 
 def test_export_session(patched_opencode):
-    result = export_session("opencode", "ses_test123")
+    result = export_session("opencode/ses_test123")
     assert "ses_test123" in result
     assert "Hello world" in result
 
 
+def test_export_session_bare_id_with_agent(patched_opencode):
+    result = export_session("ses_test123", agent="opencode")
+    assert "Hello world" in result
+
+
+def test_export_session_bare_id_without_agent(patched_opencode):
+    result = export_session("ses_test123")
+    assert "Cannot determine the agent" in result
+
+
+def test_export_session_at_prefix(patched_opencode):
+    result = export_session("@opencode/ses_test123")
+    assert "Hello world" in result
+
+
 def test_export_session_unknown_agent():
-    result = export_session("nonexistent", "ses_123")
+    result = export_session("nonexistent/ses_123")
     assert "Unknown agent" in result
 
 
 def test_export_session_not_found(patched_opencode):
-    result = export_session("opencode", "ses_nonexistent")
+    result = export_session("opencode/ses_nonexistent")
     assert "Session not found" in result
 
 
 def test_export_session_max_messages(patched_opencode):
-    result = export_session("opencode", "ses_test123", max_messages=1)
+    result = export_session("opencode/ses_test123", max_messages=1)
     assert "3 more messages" in result
+
+
+# --- summarize_session ---
+
+def test_summarize_session(patched_opencode):
+    result = summarize_session("opencode/ses_test123")
+    assert "Test Session" in result
+    assert "First user message: Hello world" in result
+    assert "Last assistant message: Here is some python code" in result
+
+
+def test_summarize_session_not_found(patched_opencode):
+    result = summarize_session("opencode/ses_nonexistent")
+    assert "Session not found" in result
 
 
 # --- extract_concepts ---
 
 def test_extract_concepts(patched_concepts):
-    result = extract_concepts("opencode", "ses_concepts")
+    result = extract_concepts("opencode/ses_concepts")
     assert "constraint" in result
     assert "preference" in result
 
 
 def test_extract_concepts_none(patched_opencode):
-    result = extract_concepts("opencode", "ses_test123")
-    assert "No concepts found" in result
+    result = extract_concepts("opencode/ses_test123")
+    assert "No explicit concept markers" in result
+    assert "summarize_session" in result
 
 
 def test_extract_concepts_unknown_agent():
-    result = extract_concepts("nonexistent", "ses_123")
+    result = extract_concepts("nonexistent/ses_123")
     assert "Unknown agent" in result
 
 
 # --- get_session_concepts ---
 
 def test_get_session_concepts(patched_concepts):
-    result = get_session_concepts("opencode", "ses_concepts")
+    result = get_session_concepts("opencode/ses_concepts")
     assert "constraint" in result
     assert "preference" in result
 
 
 def test_get_session_concepts_filter_type(patched_concepts):
-    result = get_session_concepts("opencode", "ses_concepts", concept_type="constraint")
+    result = get_session_concepts("opencode/ses_concepts", concept_type="constraint")
     assert "constraint" in result
     assert "preference" not in result
 
 
 def test_get_session_concepts_no_match(patched_opencode):
-    result = get_session_concepts("opencode", "ses_test123")
+    result = get_session_concepts("opencode/ses_test123")
     assert "No concepts found" in result
 
 
@@ -295,6 +325,27 @@ def test_copy_concepts_session_to_file(patched_concepts, tmp_path):
         data = json.load(f)
     assert len(data) == 2
     assert data[0]["type"] == "constraint"
+
+
+def test_copy_concepts_session_to_file_no_at(patched_concepts, tmp_path):
+    """A plain 'agent/id' reference works without the @ prefix."""
+    dest = str(tmp_path / "out.json")
+    result = copy_concepts("opencode/ses_concepts", dest)
+    assert "2 concept" in result
+
+
+def test_is_session_ref():
+    assert _is_session_ref("opencode/ses_1")
+    assert _is_session_ref("@opencode/ses_1")
+    assert not _is_session_ref("out.json")
+    assert not _is_session_ref("no_slash")
+    assert not _is_session_ref("unknown_agent/ses_1")
+
+
+def test_resolve_session_unknown_agent(patched_opencode):
+    agent, sid, error = _resolve_session("nonexistent/ses_1")
+    assert agent is None
+    assert "Unknown agent" in error
 
 
 def test_copy_concepts_file_to_session(patched_opencode, tmp_path):

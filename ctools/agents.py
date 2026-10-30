@@ -450,6 +450,7 @@ class Agent:
     #   { "context": [{role, content}, ...],   # portable spine (llcat/OpenAI)
     #     "source": "agent/session_id",
     #     "model": ..., "created": ..., "modified": ...,   # session facts
+    #     "tool_calls": [{name, summary, msg}, ...],      # optional
     #     "raw": [agent's verbatim records] }              # lossless, optional
     # Every agent that can be seeded gets to_common (export) and from_common
     # (import); agents that can't do either refuse with UnsupportedOperation.
@@ -476,6 +477,9 @@ class Agent:
         raw = self.raw_records(session_id)
         if raw:
             doc['raw'] = raw
+        tool_calls = self.tool_calls(session_id)
+        if tool_calls:
+            doc['tool_calls'] = tool_calls
         return doc
 
     def _session_cwd(self, session_id: str) -> Optional[str]:
