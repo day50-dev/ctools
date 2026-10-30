@@ -88,18 +88,17 @@ def _merge_tool_calls(messages: List[dict],
     the index into ``messages`` of the closest conversation message. The
     returned list is a fresh list; the inputs are not modified.
     """
-    out = list(messages)
     if not tool_calls:
-        return out
+        return list(messages)
     by_msg: dict = {}
     for tc in tool_calls:
         by_msg.setdefault(int(tc.get('msg', 0)), []).append(tc)
-    for msg_idx in sorted(by_msg):
-        entries = [{'role': 'tool',
-                   'content': ' '.join(filter(None,
-                                            (tc.get('name'), tc.get('summary'))))}
-                  for tc in by_msg[msg_idx]]
-        out[min(msg_idx + 1, len(out)):min(msg_idx + 1, len(out))] = entries
+    out = []
+    for i, message in enumerate(messages):
+        out.append(message)
+        for tc in by_msg.get(i, []):
+            content = ' '.join(filter(None, (tc.get('name'), tc.get('summary'))))
+            out.append({'role': 'tool', 'content': content})
     return out
 
 

@@ -482,6 +482,30 @@ def test_ccat_raw_envelope_carries_tool_calls(tmp_path):
     assert doc["tool_calls"] == tools
 
 
+def test_ccat_tool_calls_scattered_across_many_anchors(tmp_path):
+    """Tool calls attached to several different turns must land after their
+    own turn, not clump at the front (regression: insertion shifted the
+    anchors of later insertions)."""
+    _make_opencode_conv_db(tmp_path, "ses_a", [
+        ("user", "hello"),
+        ("assistant", "hi"),
+        ("user", "second prompt"),
+        ("assistant", "second reply"),
+    ])
+    tools = [
+        {"name": "read", "summary": "a", "msg": 0},
+        {"name": "bash", "summary": "b1", "msg": 1},
+        {"name": "bash", "summary": "b2", "msg": 1},
+        {"name": "edit", "summary": "c", "msg": 3},
+    ]
+    result = _run_ccat_with_tools(tmp_path, ["opencode/ses_a"], tools)
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    roles = [m["role"] for m in data]
+    assert roles == ["user", "tool", "assistant", "tool", "tool",
+                     "user", "assistant", "tool"]
+
+
 def test_ccat_without_tool_calls_unchanged(tmp_path):
     """Sessions with no tool calls print exactly as before."""
     _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
