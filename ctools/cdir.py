@@ -37,6 +37,9 @@ from ctools.agents import (Session, RESUME_COMMANDS, _resume_override,
 from ctools.cli import (Remote, handle_version, parse_ref, parse_remote_ref,
                         reporting, require_installed, version_option)
 from ctools.lib import format_datetime, format_size, get_formatter, install_clean_sigint
+from ctools.pathfilter import (canonical_dir as _canonical_dir,
+                               looks_like_path as _looks_like_path,
+                               session_matches_dir as _session_path_matches)
 from ctools.resume import _resolve as _resume_resolve
 
 __all__ = ['app']
@@ -131,62 +134,9 @@ def _matches_pattern(session: Session, pattern: str) -> bool:
             or fnmatch.fnmatch((session.path or "").lower(), p))
 
 
-def _looks_like_path(part: str) -> bool:
-    """Is a session-part token a filesystem path rather than a session id?
-
-    A path is absolute, ~-anchored, rooted at `.` or `..` (including the bare
-    `.`), or carries an inner slash. No agent's session ids look like that,
-    so the two shapes never collide.
-    """
-    return (part.startswith('/') or part.startswith('~')
-            or part.startswith('.') or '/' in part)
-
-
-def _canonical_dir(p: str) -> str:
-    """Canonical form of a directory for comparison: expand ~, make absolute,
-    resolve symlinks. realpath does not require the path to exist, so stale
-    session cwds canonicalize as far as their prefix allows."""
-    try:
-        expanded = os.path.expanduser(p)
-    except RuntimeError:
-        expanded = p
-    try:
-        return os.path.realpath(expanded)
-    except (OSError, ValueError):
-        return os.path.abspath(expanded)
-
-
-def _session_path_matches(session: Session, path_arg: str) -> bool:
-    """Is the session's working directory *relevant* to `path_arg`?
-
-    Relevant means the session ran in the given directory itself or *inside*
-    it: `cdir opencode .` lists the sessions of this tree, not of its
-    ancestors (a session started at `~` is not relevant to `~/day50`).
-    Comparisons are case-insensitive on canonical (symlink-resolved) paths.
-    Glob characters turn the argument into a case-insensitive pattern over
-    the session path.
-    """
-    if not session.path:
-        return False
-    if any(c in path_arg for c in '*?['):
-        pattern = os.path.expanduser(path_arg)
-        if not os.path.isabs(pattern):
-            pattern = os.path.abspath(pattern)
-        haystack = _canonical_dir(session.path)
-        return (fnmatch.fnmatch(haystack.lower(), pattern.lower())
-                or fnmatch.fnmatch(session.path.lower(), pattern.lower()))
-    # Compare on lowered canonical keys: matching is case-insensitive (the
-    # keys are never used to touch the filesystem).
-    target = _canonical_dir(path_arg).lower()
-    session_dir = _canonical_dir(session.path).lower()
-    if session_dir == target:
-        return True
-    # The query at the filesystem root: every session dir is under it.
-    if target == os.sep:
-        return True
-    # Session dir inside the query dir. A session started *above* the query
-    # dir is not relevant to it — `cdir pi ..` finds those instead.
-    return (session_dir + os.sep).startswith(target + os.sep)
+# The directory half of `cdir agent/<path>` lives in ctools.pathfilter, shared
+# with cgrep so the same path argument selects the same sessions in both.
+# Imported above under the private names this module has always used.
 
 
 def _resolve_fields(output: Optional[str]) -> Optional[List[str]]:

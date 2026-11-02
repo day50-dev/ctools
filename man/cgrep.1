@@ -243,6 +243,20 @@ Search all sessions for agent.
 .TP
 .BI agent/session_id
 Search a specific session.
+.TP
+.BI path
+A filesystem directory (\fI.\fR, \fI..\fR, \fI~\fR, \fI~/proj\fR, an absolute
+path, or a glob over one). It filters by the session's recorded working
+directory: only sessions that ran in that directory, or anywhere inside it,
+are searched. This is the same rule \fBcdir\fR uses, so \fBcdir .\fR and
+\fBcgrep PATTERN .\fR agree about which sessions belong where you are.
+A directory narrows whatever agents are selected (\fIcgrep PATTERN opencode .\fR,
+or the one\-word form \fIcgrep PATTERN opencode/.\fR); with no agent named it
+covers every installed agent. Several directories must all match. Agents that
+record no working directory, and sessions started above the directory, are not
+searched. With
+.B \-\-hosts
+a relative directory is resolved locally and sent as an absolute path.
 .RE
 .PP
 Multiple paths can be specified separated by spaces. When
@@ -251,7 +265,11 @@ is omitted (or is
 .BR * ,
 or
 .B \-a
-is given), every installed agent is searched at once.
+is given), every installed agent is searched at once. A token is read as a
+directory only when it could not be an agent: a path whose first component
+names an agent stays an agent path (\fIpi/notes\fR), and a glob whose parent
+directory does not exist stays the unknown-agent error it is
+.RI ( nonexistent-agent/* ).
 .SH EXAMPLES
 Search for "ssl" across every installed agent:
 .PP
@@ -260,6 +278,16 @@ Search for "ssl" across every installed agent:
 $ cgrep -i "ssl"
 claude-code/a351eedf:142:assistant: ... the TLS handshake fails ...
 opencode/ses_000d460f:16:user: ok graflex has an erorr in the check. ...
+.fi
+.RE
+.PP
+Search only the sessions recorded in the current directory:
+.PP
+.RS
+.nf
+$ cgrep "import" .
+claude-code/4a942d7a:5:user: from pathlib import Path
+opencode/ses_01c4fec1:30:assistant: I'll import the module first
 .fi
 .RE
 .PP

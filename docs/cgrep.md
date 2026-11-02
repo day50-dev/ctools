@@ -8,7 +8,8 @@ for.
 The examples use `cgrep`; `ctools grep …` works anywhere they do.
 
 With no path argument (or `*`, or `-a`) it searches **every installed agent** at
-once. Name a path to narrow to one agent, one session, or a glob:
+once. Name a path to narrow to one agent, one session, or a glob, or name a
+directory to search only the sessions recorded there:
 
 ```sh
 cgrep "pattern"                           # every installed agent
@@ -27,6 +28,38 @@ cgrep --include "ses_abc*" "err" "opencode/"  # only matching session IDs
 
 Matches stream to the terminal one line at a time, as each session is searched —
 like `grep` over a slow directory, not a buffered dump.
+
+## Search one directory
+
+A path argument can be a **directory** instead of an agent. Then `cgrep` searches
+only the sessions that were *recorded* there — the ones whose working directory
+is the given directory or somewhere inside it. This is the same rule `cdir
+<path>` uses, so `cdir .` and `cgrep "pattern" .` agree about which sessions
+belong to where you are:
+
+```sh
+cgrep "pattern" .                  # every agent, sessions recorded here
+cgrep "pattern" ~/day50            # an absolute or ~ directory
+cgrep "pattern" ..                 # up one level, and everything under it
+cgrep "pattern" opencode .         # one agent, this directory
+cgrep "pattern" opencode/.         # the same, as one word
+cgrep "pattern" /home/user/*       # a glob over the working directory
+```
+
+A directory is a **filter**, not a replacement for the agent selection: it
+narrows whatever agents you named (`opencode .`), and with no agent named it
+covers every installed agent. Several directories must all match, like
+`--include`/`--exclude`. Agents that record no working directory contribute
+nothing to a directory search, and a session started *above* the directory is
+not part of it — that's what `cgrep "pattern" ..` is for.
+
+Because `.` is a directory and not an agent name, the token shapes never
+collide: `pi/notes` is still agent `pi`, session glob `notes`, and
+`nonexistent-agent/*` is still the typo it looks like.
+
+With `--hosts`, a relative directory (`.`) is resolved here and sent as an
+absolute path, so every host is asked about *this* directory rather than its own
+login directory.
 
 ## Flags
 

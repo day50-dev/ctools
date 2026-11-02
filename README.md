@@ -183,6 +183,7 @@ ctools grep "bug report"                    # every installed agent
 ctools grep -i "deploy" claude-code         # one agent
 ctools grep -C 2 "flaky test" opencode      # with context
 ctools grep -l "parser" pi                  # just the session ids
+ctools grep "parser" .                      # only sessions recorded in this directory
 ctools grep --user "refactor"               # only what you typed
 ctools grep --hosts "mcp config"            # also the hosts in ctools.toml
 ```

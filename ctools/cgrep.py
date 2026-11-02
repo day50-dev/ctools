@@ -18,12 +18,20 @@ Usage:
     cgrep -f patterns.txt "opencode/*"         # patterns from a file (one per line)
     cgrep -e "foo" -e "bar" "opencode/*"       # multiple patterns
     cgrep -t json "pattern" "opencode/*"       # output as json (type: json/xml/md)
+    cgrep "pattern" .                          # sessions recorded in this directory
+    cgrep "pattern" opencode ~/day50           # one agent, one directory
+
+A path argument that is a filesystem path (`.`, `..`, `~`, `/abs`, or anything
+with a slash that is not an agent name) filters by the session's recorded
+working directory, exactly as `cdir <path>` does: the sessions that ran in
+that directory or anywhere inside it.
 """
 
 import fnmatch
+import os
 import re
 import sys
-from typing import IO, List, Optional, Tuple
+from typing import IO, List, Optional, Sequence, Tuple
 
 import argparse
 from rich.console import Console
@@ -32,9 +40,11 @@ from ctools.agents import REGISTRY, Agent, AgentError, Match, get_agent
 from ctools.cli import version_option
 from ctools.lib import install_clean_sigint
 from ctools.lib import get_formatter
+from ctools.pathfilter import (canonical_dir, is_glob, looks_like_path,
+                               session_matches_dir)
 
 __all__ = ['app', 'parse_path_pattern', 'sessions_for_pattern', 'grep_session',
-           'EXIT_MATCH', 'EXIT_NO_MATCH', 'EXIT_ERROR']
+           'split_path_args', 'EXIT_MATCH', 'EXIT_NO_MATCH', 'EXIT_ERROR']
 
 console = Console()
 
@@ -52,12 +62,14 @@ def _all_agents() -> List[Tuple[Agent, str]]:
     return [(agent, '*') for agent in REGISTRY.values() if agent.exists()]
 
 
-def _resolve_path_patterns(pattern: str) -> Tuple[List[Tuple[Agent, str]], List[str]]:
-    """Resolve path patterns into (agent, session_glob) pairs plus unknown names.
+def _resolve_path_tokens(tokens: Sequence[str]) -> Tuple[List[Tuple[Agent, str]], List[str]]:
+    """Resolve path tokens into (agent, session_glob) pairs plus unknown names.
 
-    A bare ``*`` (or empty) means every installed agent, every session.
+    A bare ``*`` (or no tokens at all) means every installed agent, every
+    session. Directory tokens are already gone by this point: they were
+    peeled off by :func:`split_path_args`.
     """
-    tokens = pattern.split()
+    tokens = [t for t in tokens if t]
     if not tokens or tokens == ['*']:
         return _all_agents(), []
     results, unknown = [], []
@@ -77,20 +89,105 @@ def parse_path_pattern(pattern: str) -> List[Tuple[Agent, str]]:
     Returns (agent, session_glob) pairs. Unknown agents are reported and
     skipped rather than aborting the whole search.
     """
-    results, unknown = _resolve_path_patterns(pattern)
+    results, unknown = _resolve_path_tokens(pattern.split())
     for agent_name in unknown:
         console.print(f"[red]Unknown agent: {agent_name}[/red]")
     return results
 
 
-def sessions_for_pattern(agent: Agent, session_pat: str) -> List[str]:
-    """Session IDs of `agent` matching a glob."""
+def _is_dir_arg(token: str) -> bool:
+    """Is this path token a directory filter rather than an agent/session ref?
+
+    ``.``, ``..``, ``~``, ``~/proj`` and absolute paths are directories. A
+    token carrying glob characters is a directory *pattern* only when it sits
+    inside a directory that exists (``/home/u/proj*``); the same shape with a
+    missing parent (``nonexistent-agent/*``) is the agent-glob typo it has
+    always been, and still reports "Unknown agent".
+    """
+    if not looks_like_path(token):
+        return False
+    if is_glob(token.partition('/')[0]):
+        return False
+    if not is_glob(token):
+        return True
+    parent = os.path.dirname(os.path.expanduser(token))
+    return bool(parent) and os.path.isdir(parent)
+
+
+def split_path_args(paths: Sequence[str]) -> Tuple[List[str], List[str]]:
+    """Split path arguments into agent/session refs and directory filters.
+
+    A token is a **directory** when it looks like a filesystem path and its
+    first component is not an agent name: ``.``, ``..``, ``~``, ``~/day50``,
+    ``/home/u/proj``. A bare ``*`` is the all-agents ref, never a path. The
+    two shapes are unambiguous because no agent name or session id starts
+    with ``.``, ``~`` or ``/``, and a token whose first component names an
+    agent is always an agent ref (``pi/notes`` stays a session glob).
+
+    ``cgrep PATTERN opencode .`` folds the two words together the way
+    ``cdir opencode .`` does: the agent selects sessions, the directory
+    filters them. ``agent/<path>`` (one word) does the same. Directory
+    filters stack: several of them must *all* match, like --include/--exclude.
+    """
+    refs: List[str] = []
+    dirs: List[str] = []
+    i = 0
+    while i < len(paths):
+        token = str(paths[i]).strip().lstrip('@')
+        if not token:
+            i += 1
+            continue
+        head, sep, rest = token.partition('/')
+        if sep and get_agent(head) is not None:
+            # agent/<something>: a session glob, unless the something is a
+            # directory (`opencode/~/day50`, `opencode//home/u/proj`).
+            if _is_dir_arg(rest):
+                refs.append(head)
+                dirs.append(rest)
+            else:
+                refs.append(token)
+            i += 1
+            continue
+        if _is_dir_arg(token):
+            # A bare directory: every installed agent, sessions from there.
+            dirs.append(token)
+            i += 1
+            continue
+        if not sep:
+            # A bare agent (or '*'), optionally followed by a directory word:
+            # `cgrep PATTERN opencode .` narrows like `cdir opencode .` does.
+            refs.append(token)
+            nxt = str(paths[i + 1]).strip().lstrip('@') if i + 1 < len(paths) else ''
+            if nxt and _is_dir_arg(nxt):
+                dirs.append(nxt)
+                i += 2
+                continue
+            i += 1
+            continue
+        # Neither an agent nor a directory: an unknown agent, reported later.
+        refs.append(token)
+        i += 1
+    return refs, dirs
+
+
+def sessions_for_pattern(agent: Agent, session_pat: str,
+                         within: Optional[Sequence[str]] = None) -> List[str]:
+    """Session IDs of `agent` matching a glob.
+
+    ``within`` is a list of directory filters: a session is kept only when its
+    recorded working directory is in (or under) every one of them. Agents
+    that record no working directory contribute nothing to a directory
+    filter, exactly as in `cdir <path>`.
+    """
     if not agent.exists():
         return []
     try:
         sessions = agent.sessions()
     except AgentError:
         return []
+    if within:
+        sessions = [s for s in sessions
+                    if all(session_matches_dir(s, d) for d in within)]
     return [s.id for s in sessions if fnmatch.fnmatch(s.id, session_pat)]
 
 
@@ -221,6 +318,18 @@ def stream_session_matches(state: _StreamState, matches: List[Match]) -> None:
         state.emit(m)
 
 
+def _scope_note(dir_filters: List[str]) -> str:
+    """Suffix for the 'no matches' line naming the directories searched.
+
+    A directory filter is the one scope that surprises people (an agent that
+    records no working directory can never match), so the message says what
+    was scoped to.
+    """
+    if not dir_filters:
+        return ""
+    return " under " + ", ".join(dir_filters)
+
+
 def _show_filename(no_filename: bool, with_filename: bool) -> bool:
     """Resolve -h/-H the way grep does: -H wins when both are given."""
     return with_filename or not no_filename
@@ -246,10 +355,14 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Search for PATTERNS in agent session content.\n"
-            "Example: cgrep -i 'hello world' opencode/* claude-code/*\n\n"
+            "Example: cgrep -i 'hello world' opencode/* claude-code/*\n"
+            "Example: cgrep 'TODO' .        # this directory's sessions only\n\n"
             "PATTERNS is a regular expression.\n"
             "Paths are AGENT/SESSION-GLOB pairs (e.g. opencode/ses_abc123);\n"
-            "a bare '*' (or no paths) searches every installed agent."
+            "a bare '*' (or no paths) searches every installed agent.\n"
+            "A path that is a directory (`.`, `..`, `~`, `/abs`, `~/proj`)\n"
+            "instead filters by working directory: the sessions recorded in\n"
+            "that directory or anywhere inside it (`cgrep PATTERN opencode .`)."
         ),
         epilog=(
             "Match lines are prefixed with the session path, grep-style;\n"
@@ -263,7 +376,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("pattern", nargs="?", default=None,
                         help="regex search pattern (omit if -f/-e supplies it)")
     parser.add_argument("paths", nargs="*",
-                        help="AGENT/SESSION paths (e.g. opencode/*); omit or pass '*' for all agents")
+                        help="AGENT/SESSION paths (e.g. opencode/*), or a directory "
+                             "to search only the sessions recorded there (e.g. '.')")
     parser.add_argument("--help", action="help", help="display this help text and exit")
 
     g = parser.add_argument_group("Pattern selection and interpretation")
@@ -349,7 +463,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _search_hosts(argv: List[str]) -> None:
+def _absolutize_dir_args(argv: List[str], dir_filters: List[str]) -> List[str]:
+    """Rewrite directory arguments to absolute paths for a remote run.
+
+    A relative filter (``.``) would otherwise resolve against the *remote*
+    shell's working directory — the ssh login dir, not this one — and quietly
+    search the wrong tree. Sending the canonical absolute path asks both ends
+    the same question: sessions recorded under this directory.
+    """
+    if not dir_filters:
+        return list(argv)
+    want = set(dir_filters)
+    return [canonical_dir(a) if a in want else a for a in argv]
+
+
+def _search_hosts(argv: List[str], dir_filters: Optional[List[str]] = None) -> None:
     """Run the same cgrep search on each configured host and print the results.
 
     The remote ctools searches that host's own agents (its home); only the
@@ -364,7 +492,8 @@ def _search_hosts(argv: List[str]) -> None:
         console.print("[dim]No hosts configured (add a [hosts] table to "
                      "ctools.toml)[/dim]")
         return
-    cmd = build_remote_command("cgrep", argv, strip=["--hosts"])
+    cmd = build_remote_command("cgrep", _absolutize_dir_args(argv, dir_filters or []),
+                               strip=["--hosts"])
     for base in hosts:
         res = run_remote_search(base, cmd)
         if res.version is not None:
@@ -482,9 +611,6 @@ def main(argv=None) -> int:
         console.print("[red]Invalid max count: must be >= 1[/red]")
         raise SystemExit(EXIT_ERROR)
 
-    if all_agents:
-        paths = ["*"]
-
     flags = re.IGNORECASE if ignore_case else 0
     # Combine every pattern into one alternation so the single compiled
     # pattern works with grep_session / -o unchanged. With -F each line is a
@@ -514,7 +640,13 @@ def main(argv=None) -> int:
             raise SystemExit(EXIT_ERROR)
 
     errors = False
-    agent_specs, unknown_agents = _resolve_path_patterns(' '.join(paths or []))
+    # Path arguments split into agent/session refs and directory filters:
+    # `cgrep PATTERN .`, `cgrep PATTERN opencode ~/day50`, `cgrep PATTERN pi/`
+    # all narrow the search the way `cdir` narrows its listing.
+    refs, dir_filters = split_path_args(paths)
+    if all_agents:
+        refs = ["*"]
+    agent_specs, unknown_agents = _resolve_path_tokens(refs)
     for agent_name in unknown_agents:
         console.print(f"[red]Unknown agent: {agent_name}[/red]")
         errors = True
@@ -536,7 +668,7 @@ def main(argv=None) -> int:
             console.print(f"[yellow]{agent.name}: agent data not found[/yellow]")
             errors = True
             continue
-        for session_id in sessions_for_pattern(agent, session_pat):
+        for session_id in sessions_for_pattern(agent, session_pat, within=dir_filters):
             path = f"{agent.name}/{session_id}"
             if not _session_selected(path, include, exclude):
                 continue
@@ -558,7 +690,7 @@ def main(argv=None) -> int:
                 without_matches.add(path)
 
     if ns.hosts:
-        _search_hosts(argv)
+        _search_hosts(argv, dir_filters)
 
     if list_files:
         has_result = bool(with_matches)
@@ -578,7 +710,8 @@ def main(argv=None) -> int:
 
     if streaming:
         if not has_result:
-            print("No matches found", file=stream.stream, flush=True)
+            print(f"No matches found{_scope_note(dir_filters)}",
+                  file=stream.stream, flush=True)
         raise SystemExit(_exit_status(errors, has_result))
 
     if list_files or list_files_neg:
@@ -611,7 +744,7 @@ def main(argv=None) -> int:
     elif all_matches:
         _print_matches(all_matches, show_filename)
     else:
-        console.print("[dim]No matches found[/dim]")
+        console.print(f"[dim]No matches found{_scope_note(dir_filters)}[/dim]")
 
     raise SystemExit(_exit_status(errors, has_result))
 

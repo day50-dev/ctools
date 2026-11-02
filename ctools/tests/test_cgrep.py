@@ -1,10 +1,13 @@
 import io
 import json
+import os
 import sqlite3
 import pytest
 from ctools.testing import Runner
 from ctools import cgrep
-from ctools.cgrep import app, grep_session, parse_path_pattern
+from ctools.cgrep import (app, grep_session, parse_path_pattern,
+                          split_path_args, sessions_for_pattern,
+                          _is_dir_arg, _absolutize_dir_args)
 from ctools.agents import (REGISTRY as AGENTS, SessionNotFound,
                             GooseAgent, OpencodeAgent, PiAgent)
 
@@ -35,8 +38,13 @@ def _out(result) -> str:
 
 # --- Helper to create test opencode DB ---
 
-def create_test_opencode_db(tmp_path, session_id="ses_test123", messages=None):
-    """Create a test opencode SQLite database with messages."""
+def create_test_opencode_db(tmp_path, session_id="ses_test123", messages=None,
+                            directory='/tmp'):
+    """Create a test opencode SQLite database with messages.
+
+    ``directory`` is the session's recorded working directory (opencode's
+    ``directory`` column), which is what a cgrep directory filter matches on.
+    """
     db_path = tmp_path / 'opencode.db'
     conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
@@ -70,8 +78,8 @@ def create_test_opencode_db(tmp_path, session_id="ses_test123", messages=None):
     # Insert session
     cursor.execute('''
         INSERT INTO session (id, title, time_created, time_updated, tokens_input, tokens_output, directory)
-        VALUES (?, 'Test Session', 1700000000000, 1700000060000, 100, 200, '/tmp')
-    ''', (session_id,))
+        VALUES (?, 'Test Session', 1700000000000, 1700000060000, 100, 200, ?)
+    ''', (session_id, directory))
     
     if messages is None:
         messages = [
@@ -98,6 +106,51 @@ def create_test_opencode_db(tmp_path, session_id="ses_test123", messages=None):
     conn.commit()
     conn.close()
     return db_path
+
+
+def _add_opencode_session(db_path, session_id, directory, messages):
+    """Insert one more opencode session (id, recorded working dir, messages)
+    into a DB created by create_test_opencode_db, reusing its schema."""
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO session (id, title, time_created, time_updated,
+                             tokens_input, tokens_output, directory)
+        VALUES (?, 'S', 1700000000000, 1700000060000, 100, 200, ?)
+    ''', (session_id, directory))
+    for i, (role, content) in enumerate(messages):
+        msg_id = f"m_{session_id}_{i}"
+        cursor.execute('''
+            INSERT INTO message (id, session_id, time_created, time_updated, data)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (msg_id, session_id, 1700000000000 + i * 1000,
+              1700000000000 + i * 1000, json.dumps({"role": role})))
+        cursor.execute('''
+            INSERT INTO part (id, message_id, session_id, time_created,
+                              time_updated, data)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (f"p_{msg_id}", msg_id, session_id, 1700000000000,
+              1700000000000, json.dumps({"type": "text", "text": content})))
+    conn.commit()
+    conn.close()
+
+
+def _dir_fixture(tmp_path):
+    """An opencode DB with three sessions in distinct recorded directories.
+
+    Returns the db path plus the three ids. ``proj``/``sub`` live under
+    /home/x/proj, ``other`` does not, so a `/home/x/proj` filter keeps the
+    first two and drops the last.
+    """
+    db = create_test_opencode_db(
+        tmp_path, "ses_a",
+        messages=[("user", "the shared needle here")],
+        directory="/home/x/proj")
+    _add_opencode_session(db, "ses_b", "/home/x/proj/sub",
+                          [("user", "the shared needle here")])
+    _add_opencode_session(db, "ses_c", "/home/y/other",
+                          [("user", "the shared needle here")])
+    return db
 
 
 # --- Parse path pattern tests ---
@@ -1066,3 +1119,192 @@ def test_grep_session_roles_api(role_agent):
     sys_only = grep_session(role_agent, 'rs1', re.compile('secret-token'),
                             roles=['system'])
     assert [m.line for m in sys_only] == ['system: system secret-token line']
+
+
+# --- Directory (working-directory) filter tests ---
+#
+# `cgrep PATTERN .` searches the sessions recorded in the current directory,
+# the same way `cdir .` lists them. The parsing that decides "is this token a
+# directory or an agent/session ref?" lives in split_path_args.
+
+def test_is_dir_arg_plain_paths():
+    for arg in ('.', '..', '~', '~/day50', '/home/u/proj', './sub/dir',
+                '/home/u/proj/'):
+        assert _is_dir_arg(arg), arg
+
+
+def test_is_dir_arg_rejects_ids_and_agent_globs():
+    for arg in ('ses_abc123', 'opencode', '*', 'pi*', 'nonexistent-agent/*',
+                '/no/such/parent/x*'):
+        assert not _is_dir_arg(arg), arg
+
+
+def test_is_dir_arg_glob_needs_a_real_parent(tmp_path):
+    """A glob is a directory pattern only inside a directory that exists, so a
+    typo'd agent glob still reports "Unknown agent"."""
+    assert _is_dir_arg(str(tmp_path / 'proj*'))
+    assert not _is_dir_arg(str(tmp_path / 'nope' / 'proj*'))
+
+
+def test_split_path_args_bare_dir_is_a_filter_not_a_ref():
+    refs, dirs = split_path_args(['.'])
+    assert refs == [] and dirs == ['.']
+    refs, dirs = split_path_args(['/home/u/proj'])
+    assert refs == [] and dirs == ['/home/u/proj']
+    refs, dirs = split_path_args(['~/day50'])
+    assert refs == [] and dirs == ['~/day50']
+
+
+def test_split_path_args_agent_refs_unchanged():
+    for arg in ('opencode/*', 'opencode/ses_abc123', 'pi/notes', 'claude-code/'):
+        refs, dirs = split_path_args([arg])
+        assert refs == [arg] and dirs == [], arg
+
+
+def test_split_path_args_star_is_all_agents_not_a_dir():
+    refs, dirs = split_path_args(['*'])
+    assert refs == ['*'] and dirs == []
+
+
+def test_split_path_args_unknown_agent_stays_a_ref():
+    """A typo keeps the error it always gave instead of becoming a directory."""
+    refs, dirs = split_path_args(['nonexistent-agent/*'])
+    assert refs == ['nonexistent-agent/*'] and dirs == []
+
+
+def test_split_path_args_agent_then_dir():
+    """`cgrep PATTERN opencode .` narrows like `cdir opencode .` does."""
+    refs, dirs = split_path_args(['opencode', '.'])
+    assert refs == ['opencode'] and dirs == ['.']
+    refs, dirs = split_path_args(['pi', '/home/u/proj'])
+    assert refs == ['pi'] and dirs == ['/home/u/proj']
+
+
+def test_split_path_args_agent_slash_dir():
+    refs, dirs = split_path_args(['opencode/~/day50'])
+    assert refs == ['opencode'] and dirs == ['~/day50']
+    refs, dirs = split_path_args(['opencode//home/u/proj'])
+    assert refs == ['opencode'] and dirs == ['/home/u/proj']
+
+
+def test_split_path_args_dirs_stack():
+    refs, dirs = split_path_args(['.', '~/day50'])
+    assert refs == [] and dirs == ['.', '~/day50']
+
+
+def test_sessions_for_pattern_within(tmp_path, monkeypatch):
+    """A directory filter keeps sessions recorded in it or anywhere under it."""
+    _dir_fixture(tmp_path)
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    agent = AGENTS['opencode']
+    assert set(sessions_for_pattern(agent, '*')) == {'ses_a', 'ses_b', 'ses_c'}
+    assert set(sessions_for_pattern(agent, '*', within=['/home/x/proj'])) \
+        == {'ses_a', 'ses_b'}
+    # Several filters must all match (intersection), like --include/--exclude.
+    assert sessions_for_pattern(agent, '*',
+                                within=['/home/x/proj', '/home/y/other']) == []
+    # The session glob and the directory filter compose.
+    assert sessions_for_pattern(agent, 'ses_c', within=['/home/x/proj']) == []
+    assert sessions_for_pattern(agent, 'ses_c', within=['/home/y/other']) \
+        == ['ses_c']
+
+
+def test_cli_dir_filter_bare_path(tmp_path, monkeypatch):
+    """`cgrep -l needle /home/x/proj` lists only that tree's sessions."""
+    _dir_fixture(tmp_path)
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    result = runner.invoke(app, ["-l", "needle", "/home/x/proj"])
+    assert result.exit_code == 0
+    assert _out(result).split() == ['opencode/ses_a', 'opencode/ses_b']
+
+
+def test_cli_dir_filter_dot_uses_the_cwd(tmp_path, monkeypatch):
+    """`cgrep needle .` searches the sessions done in the current directory."""
+    db = create_test_opencode_db(tmp_path, "ses_here",
+                                 messages=[("user", "the shared needle here")],
+                                 directory=str(tmp_path))
+    _add_opencode_session(db, "ses_sub", str(tmp_path / "sub"),
+                          [("user", "the shared needle here")])
+    _add_opencode_session(db, "ses_elsewhere", str(tmp_path.parent / "elsewhere"),
+                          [("user", "the shared needle here")])
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["-l", "needle", "."])
+    assert result.exit_code == 0
+    assert _out(result).split() == ['opencode/ses_here', 'opencode/ses_sub']
+
+
+def test_cli_dir_filter_default_stream(tmp_path, monkeypatch):
+    """Default (streaming) output honours the directory filter too."""
+    _dir_fixture(tmp_path)
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    result = runner.invoke(app, ["needle", "/home/x/proj"])
+    out = _out(result)
+    assert result.exit_code == 0
+    assert "opencode/ses_a" in out and "opencode/ses_b" in out
+    assert "ses_c" not in out
+
+
+def test_cli_dir_filter_with_agent(tmp_path, monkeypatch):
+    """The agent selects sessions, the directory filters them."""
+    _dir_fixture(tmp_path)
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    for args in (["-l", "needle", "opencode", "/home/x/proj"],
+                 ["-l", "needle", "opencode//home/x/proj"]):
+        result = runner.invoke(app, args)
+        assert result.exit_code == 0, args
+        assert _out(result).split() == ['opencode/ses_a', 'opencode/ses_b'], args
+
+
+def test_cli_dir_filter_count(tmp_path, monkeypatch):
+    _dir_fixture(tmp_path)
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    result = runner.invoke(app, ["-c", "needle", "/home/x/proj"])
+    assert result.exit_code == 0
+    assert _out(result).split() == ['opencode/ses_a:1', 'opencode/ses_b:1']
+
+
+def test_cli_dir_filter_all_flag_keeps_the_filter(tmp_path, monkeypatch):
+    """-a means every agent; it does not drop the directory filter."""
+    _dir_fixture(tmp_path)
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    result = runner.invoke(app, ["-a", "-l", "needle", "/home/x/proj"])
+    assert result.exit_code == 0
+    assert _out(result).split() == ['opencode/ses_a', 'opencode/ses_b']
+
+
+def test_cli_dir_filter_L_scope_is_the_filtered_tree(tmp_path, monkeypatch):
+    """-L only considers sessions inside the filtered directory."""
+    _dir_fixture(tmp_path)
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    result = runner.invoke(app, ["-L", "needle", "/home/x/proj"])
+    # ses_a and ses_b both matched, so nothing is left in scope: exit 1.
+    assert result.exit_code == 1
+    assert "ses_c" not in _out(result)
+
+
+def test_cli_dir_filter_no_match_names_the_scope(tmp_path, monkeypatch):
+    _dir_fixture(tmp_path)
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    result = runner.invoke(app, ["needle", "/home/z/nothing"])
+    assert result.exit_code == 1
+    assert "No matches found under /home/z/nothing" in _out(result)
+
+
+def test_cli_dir_filter_quiet_exit_status(tmp_path, monkeypatch):
+    _dir_fixture(tmp_path)
+    _with_registry(tmp_path, monkeypatch, only=("opencode",))
+    assert runner.invoke(app, ["-q", "needle", "/home/x/proj"]).exit_code == 0
+    assert runner.invoke(app, ["-q", "needle", "/home/z/nothing"]).exit_code == 1
+
+
+def test_absolutize_dir_args_for_remote_runs():
+    """A relative directory is sent to the remote host as an absolute path."""
+    out = _absolutize_dir_args(["needle", ".", "-l"], ["."])
+    assert out[0] == "needle" and out[2] == "-l"
+    assert out[1] == os.path.realpath(".")
+
+
+def test_absolutize_dir_args_noop_without_dirs():
+    argv = ["needle", "opencode/*"]
+    assert _absolutize_dir_args(argv, []) == argv
