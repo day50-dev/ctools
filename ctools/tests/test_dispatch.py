@@ -17,7 +17,7 @@ def _run(monkeypatch, *argv):
 def test_no_args_prints_grouped_help(monkeypatch, capsys):
     assert _run(monkeypatch) == 0
     out = capsys.readouterr().out
-    for title in ("query:", "transform:", "long-running:"):
+    for title in ("query:", "transform:", "long-running / hand-off:"):
         assert title in out
     for verb in dispatch.VERBS:
         assert f"  {verb} " in out
@@ -34,6 +34,9 @@ def test_entries_match_the_standalone_console_scripts():
     toml = (Path(dispatch.__file__).parent.parent / "pyproject.toml").read_text()
     scripts = dict(re.findall(r'^([\w-]+) = "([\w.:]+)"$', toml, re.M))
     for verb, (entry, legacy, _) in dispatch.VERBS.items():
+        # `resume` is a hand-off verb with no standalone console script (PRD 6.1).
+        if verb == "resume":
+            continue
         assert scripts[legacy] == entry, verb
     assert scripts["ctools"] == "ctools.dispatch:main"
 

@@ -24,6 +24,7 @@ VERBS = {
     "connect": ("ctools.cconnect:app",    "cconnect",   "pipe concepts between sessions"),
     "rm":      ("ctools.crm:app",         "crm",        "cut sections out of a session"),
     "recover": ("ctools.crecover:app",    "crecover",   "restore from a backup"),
+    "resume":  ("ctools.resume:app",      "resume",     "hand a session back to its tool"),
     "web":     ("ctools.webui:main",      "ctools-web", "run the web dashboard"),
     "mcp":     ("ctools.ctools_mcp:main", "ctools-mcp", "run the MCP server"),
 }
@@ -31,7 +32,7 @@ VERBS = {
 GROUPS = (
     ("query", ("dir", "grep", "cat", "du")),
     ("transform", ("copy", "extract", "connect", "rm", "recover")),
-    ("long-running", ("web", "mcp")),
+    ("long-running / hand-off", ("web", "mcp", "resume")),
 )
 
 

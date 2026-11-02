@@ -37,6 +37,7 @@ from ctools.agents import (Session, RESUME_COMMANDS, _resume_override,
 from ctools.cli import (Remote, handle_version, parse_ref, parse_remote_ref,
                         reporting, require_installed, version_option)
 from ctools.lib import format_datetime, format_size, get_formatter, install_clean_sigint
+from ctools.resume import _resolve as _resume_resolve
 
 __all__ = ['app']
 
@@ -957,6 +958,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-o", "--output",
                         help=("Select output fields (comma-separated). "
                               "Use 'help' to list available fields."))
+    parser.add_argument("--resume-command", nargs=2,
+                        metavar=("AGENT", "SESSION"),
+                        help=("Print the resume command for AGENT/SESSION "
+                              "(with the cd into the session's recorded cwd) "
+                              "and exit, without exec-ing it"))
     version_option(parser, "cdir")
     return parser
 
@@ -967,6 +973,15 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if (v := handle_version(args)) is not None:
         return v
+
+    if args.resume_command:
+        agent_name, session_id = args.resume_command
+        cmd, cwd, err = _resume_resolve(agent_name, session_id)
+        if err:
+            console.print(f"[red]{err}[/red]")
+            return 1
+        print(f"cd {cwd} && {cmd}" if cwd else cmd)
+        return 0
 
     paths = args.paths or None
     color = args.color

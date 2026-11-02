@@ -2280,3 +2280,29 @@ def test_cli_version():
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert result.stdout == f"cdir (ctxttools) {__version__}\n"
+
+
+def test_dir_resume_command_prints_without_exec(monkeypatch, capsys):
+    """`cdir --resume-command AGENT SESSION` prints the command (with the cd
+    into the recorded cwd) and exits 0, without exec-ing it."""
+    monkeypatch.setattr(cdir, "_resume_resolve",
+                        lambda a, s: ("pi --session abc", "/tmp/x", None))
+    result = runner.invoke(app, ["--resume-command", "pi", "abc"])
+    assert result.exit_code == 0
+    assert "cd /tmp/x && pi --session abc" in result.stdout
+
+
+def test_dir_resume_command_no_cwd(monkeypatch):
+    monkeypatch.setattr(cdir, "_resume_resolve",
+                        lambda a, s: ("pi --session abc", None, None))
+    result = runner.invoke(app, ["--resume-command", "pi", "abc"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "pi --session abc"
+
+
+def test_dir_resume_command_error(monkeypatch):
+    monkeypatch.setattr(cdir, "_resume_resolve",
+                        lambda a, s: (None, None, "unknown agent: bogus"))
+    result = runner.invoke(app, ["--resume-command", "bogus", "abc"])
+    assert result.exit_code == 1
+    assert "unknown agent: bogus" in result.stdout
