@@ -211,6 +211,26 @@ The hint follows your per-machine `resume-commands.json` overrides, so if you've
 taught ctools a custom resume command it shows up here. Machine output (`-1`,
 `-f json`, …) and the cross-agent listings (`-R`, `*/…`) carry no hint.
 
+## Resume command (`--resume-command`)
+
+`--resume-command AGENT SESSION` prints the exact command that resumes that
+session — including the `cd` into the directory it was recorded in — and exits,
+without actually running it. It's the print-only half of [`ctools resume`](resume.md):
+
+```sh
+$ cdir --resume-command opencode ses_abc
+cd /path/to/project && opencode -s ses_abc
+
+$ cdir --resume-command pi <id>
+cd /home/u/proj && pi --session <id>
+```
+
+It resolves the agent, checks the session exists, and reuses the same lookup as
+the resume hint and as `ctools resume` (the per-machine `resume-commands.json`
+override wins). It exits non-zero with a reason when the agent is unknown, not
+installed, the session doesn't exist, or no resume command is known for the
+agent. Pipe it into `bash -c` to actually run it, or hand it to another tool.
+
 ## Color
 
 `--color` controls whether the listing is colored: `auto` (default, color only

@@ -149,9 +149,10 @@ transform:
   rm        cut sections out of a session      (crm)
   recover   restore from a backup              (crecover)
 
-long-running:
+long-running / hand-off:
   web       run the web dashboard              (ctools-web)
   mcp       run the MCP server                 (ctools-mcp)
+  resume    hand a session back to its tool    (resume)
 
 Run 'ctools <command> --help' for a command's options.
 ```
@@ -159,7 +160,7 @@ Run 'ctools <command> --help' for a command's options.
 Each verb has its own page in [`docs/`](docs/): [dir](docs/cdir.md),
 [grep](docs/cgrep.md), [cat](docs/ccat.md), [du](docs/cdu.md),
 [copy](docs/ccopy.md), [extract](docs/cextract.md),
-[connect](docs/cconnect.md), [rm](docs/crm.md), and
+[connect](docs/cconnect.md), [rm](docs/crm.md), [resume](docs/resume.md), and
 [recover](docs/crecover.md). Sessions are addressed as `agent/session_id`
 throughout.
 
@@ -210,6 +211,24 @@ ctools copy ssh://me@box/pi/<id> claude-code      # pull one in from another mac
 The remote side doesn't need ctools installed; plain `ssh` and `tar` will do.
 See [docs/ccopy.md](docs/ccopy.md) for how that works and where the new
 session lands.
+
+### Continue a session in its own tool
+
+`resume` hands a session back to the tool that owns it: it computes the
+agent's resume command, `cd`s into the directory the session was recorded
+in, and `exec`s the command (replacing ctools). It's the one verb that
+"leaves ctools".
+
+```bash
+ctools resume claude-code a293cac2   # cd + exec `claude --resume a293cac2`
+ctools resume pi <id>                # `pi --session <id>`
+ctools dir --resume-command pi <id>  # just print the command, don't exec it
+```
+
+The resume command comes from the agent backend and is overridable per
+machine in `~/.config/ctools/resume-commands.json`. The `cd` into the
+recorded directory matters: `claude --resume` only finds a session from the
+directory it was recorded in. See [docs/resume.md](docs/resume.md).
 
 ### Token usage
 

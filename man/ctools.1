@@ -59,13 +59,21 @@ Cut sections out of a session.
 .TP
 .BR recover " (" crecover )
 Restore from a backup.
-.SS Long-running
+.SS Long-running / hand-off
 .TP
 .BR web " (" ctools-web )
 Run the web dashboard.
 .TP
 .BR mcp " (" ctools-mcp )
 Run the MCP server.
+.TP
+.BR resume " (" resume )
+Hand a session back to its tool: compute the agent's resume command, cd into
+the session's recorded working directory, and exec the command (replacing the
+ctools process). The one verb that leaves ctools. See
+.BR cdir (1)
+.B \-\-resume-command
+for the print-only variant.
 .PP
 Run
 .B ctools
