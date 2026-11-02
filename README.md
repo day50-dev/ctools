@@ -221,10 +221,15 @@ in, and `exec`s the command (replacing ctools). It's the one verb that
 "leaves ctools".
 
 ```bash
+ctools resume claude-code/55b9c8b7-788b-4f9e-a8b7-cfa0461b357b  # a cdir row, pasted
 ctools resume claude-code a293cac2   # cd + exec `claude --resume a293cac2`
 ctools resume pi <id>                # `pi --session <id>`
-ctools dir --resume-command pi <id>  # just print the command, don't exec it
+ctools dir --resume-command pi/<id>  # just print the command, don't exec it
 ```
+
+The session is named the way `cdir` prints it — `agent/session`, the
+two-word `agent session`, or a bare id resolved across the installed
+agents.
 
 The resume command comes from the agent backend and is overridable per
 machine in `~/.config/ctools/resume-commands.json`. The `cd` into the

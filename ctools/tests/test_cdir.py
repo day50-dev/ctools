@@ -2306,3 +2306,25 @@ def test_dir_resume_command_error(monkeypatch):
     result = runner.invoke(app, ["--resume-command", "bogus", "abc"])
     assert result.exit_code == 1
     assert "unknown agent: bogus" in result.stdout
+
+
+def test_dir_resume_command_accepts_slash_ref(monkeypatch):
+    """`--resume-command pi/abc` — the row shape cdir prints — resolves the same."""
+    seen = {}
+
+    def fake(a, s):
+        seen["ref"] = (a, s)
+        return "pi --session abc", "/tmp/x", None
+
+    monkeypatch.setattr(cdir, "_resume_resolve", fake)
+    result = runner.invoke(app, ["--resume-command", "pi/abc"])
+    assert result.exit_code == 0
+    assert seen["ref"] == ("pi", "abc")
+    assert "cd /tmp/x && pi --session abc" in result.stdout
+
+
+def test_dir_resume_command_slash_unknown_agent(monkeypatch):
+    """The shape error comes from parsing, before any agent lookup."""
+    result = runner.invoke(app, ["--resume-command", "bogus/abc"])
+    assert result.exit_code == 1
+    assert "unknown agent: bogus" in result.stdout

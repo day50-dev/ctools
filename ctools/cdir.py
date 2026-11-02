@@ -40,7 +40,7 @@ from ctools.lib import format_datetime, format_size, get_formatter, install_clea
 from ctools.pathfilter import (canonical_dir as _canonical_dir,
                                looks_like_path as _looks_like_path,
                                session_matches_dir as _session_path_matches)
-from ctools.resume import _resolve as _resume_resolve
+from ctools.resume import _resolve as _resume_resolve, parse_ref_args
 
 __all__ = ['app']
 
@@ -908,11 +908,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-o", "--output",
                         help=("Select output fields (comma-separated). "
                               "Use 'help' to list available fields."))
-    parser.add_argument("--resume-command", nargs=2,
-                        metavar=("AGENT", "SESSION"),
-                        help=("Print the resume command for AGENT/SESSION "
-                              "(with the cd into the session's recorded cwd) "
-                              "and exit, without exec-ing it"))
+    parser.add_argument("--resume-command", nargs="+", metavar="AGENT/SESSION",
+                        help=("Print the resume command for a session "
+                              "(AGENT/SESSION, as listed; or AGENT SESSION) "
+                              "with the cd into its recorded cwd, and exit "
+                              "without exec-ing it"))
     version_option(parser, "cdir")
     return parser
 
@@ -925,8 +925,10 @@ def main(argv=None) -> int:
         return v
 
     if args.resume_command:
-        agent_name, session_id = args.resume_command
-        cmd, cwd, err = _resume_resolve(agent_name, session_id)
+        # Same accepted shapes as `ctools resume`, so a listed row pastes here too.
+        agent_name, session_id, err = parse_ref_args(args.resume_command)
+        if not err:
+            cmd, cwd, err = _resume_resolve(agent_name, session_id)
         if err:
             console.print(f"[red]{err}[/red]")
             return 1

@@ -2,13 +2,15 @@
 """
 resume - hand a session back to the tool that owns it
 
-`ctools resume <agent> <session>` computes the agent's resume command,
+`ctools resume agent/session` computes the agent's resume command,
 `cd`s into the session's recorded working directory, and `exec`s the
 command — replacing the ctools process (the `xdg-open` analogy). It is
 the one verb that "leaves ctools".
 
 Usage:
-    ctools resume claude-code a293cac2      # cd + exec `claude --resume a293cac2`
+    ctools resume claude-code/55b9c8b7      # what cdir prints, pasted back
+    ctools resume claude-code 55b9c8b7      # cd + exec `claude --resume 55b9c8b7`
+    ctools resume 55b9c8b7                  # bare id: found in the installed agents
     ctools resume pi <id>                   # `pi --session <id>`
     ctools resume opencode <id>             # `opencode -s <id>`
 
@@ -21,17 +23,75 @@ cause was a cwd/location mismatch.
 import argparse
 import os
 import sys
-from typing import Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from rich.console import Console
 
-from ctools.agents import REGISTRY as AGENTS, get_agent, get_resume_command
+from ctools.agents import (REGISTRY as AGENTS, AgentError, get_agent,
+                          get_resume_command)
 from ctools.lib import install_clean_sigint
 from ctools.cli import handle_version, version_option
 
-__all__ = ['app']
+__all__ = ['app', 'parse_ref_args']
 
 console = Console()
+
+
+def _agent_of(session_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """The single installed agent holding `session_id`, or an error.
+
+    A bare id is the laziest thing to paste out of `cdir -1`, so it is looked
+    up across the installed agents. It resolves only when exactly one has it;
+    an id two agents share is reported rather than guessed at.
+    """
+    hits: List[str] = []
+    for name, agent in AGENTS.items():
+        if not agent.exists():
+            continue
+        try:
+            if agent.session(session_id) is not None:
+                hits.append(name)
+        except AgentError:
+            continue
+    if len(hits) == 1:
+        return hits[0], None
+    if not hits:
+        return None, (f"no such session: {session_id} "
+                      f"(name its agent: agent/{session_id})")
+    return None, (f"session {session_id} exists in several agents "
+                  f"({', '.join(hits)}); name one, e.g. {hits[0]}/{session_id}")
+
+
+def parse_ref_args(args: Sequence[str]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Return ``(agent_name, session_id, error)`` for resume's arguments.
+
+    Accepts every shape `cdir` can print, so a listing row pastes straight
+    back: ``agent/session`` (or ``@agent/session``), the two-word
+    ``agent session`` form, or a bare session id (resolved across the
+    installed agents). Errors come back as the third value, never raised.
+    """
+    args = [str(a) for a in args]
+    if len(args) == 1:
+        ref = args[0].lstrip("@").strip()
+        name, sep, session_id = ref.partition("/")
+        if not sep:
+            if not ref:
+                return None, None, "no session given"
+            name, err = _agent_of(ref)
+            return (None, None, err) if err else (name, ref, None)
+        if get_agent(name) is None:
+            if not name:
+                return None, None, (f"no agent named in {ref!r} "
+                                    f"(available: {', '.join(AGENTS)})")
+            return None, None, (f"unknown agent: {name} "
+                                f"(available: {', '.join(AGENTS)})")
+        if not session_id:
+            return None, None, f"no session id given: {ref}"
+        return name, session_id, None
+    if len(args) == 2:
+        return args[0], args[1].lstrip("@"), None
+    return None, None, ("expected AGENT/SESSION (or AGENT SESSION), got: "
+                        + " ".join(args))
 
 
 def _resolve(agent_name: str, session_id: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
@@ -62,9 +122,14 @@ def build_parser() -> argparse.ArgumentParser:
                      "agent's resume command, cd into the session's recorded "
                      "working directory, and exec the command (replacing the "
                      "ctools process)."),
+        epilog=("The session is written the way cdir prints it: 'agent/session' "
+                "(e.g. claude-code/55b9c8b7-788b-4f9e-a8b7-cfa0461b357b), the "
+                "two-word 'agent session', or a bare id resolved across the "
+                "installed agents."),
     )
-    parser.add_argument("agent", help="The agent that owns the session")
-    parser.add_argument("session", help="The session id to resume")
+    parser.add_argument("refs", nargs="+", metavar="agent/session",
+                        help=("The session to hand back: 'agent/session' (what cdir "
+                              "prints), 'agent session', or a bare session id"))
     version_option(parser, "resume")
     return parser
 
@@ -82,7 +147,13 @@ def app() -> int:
     if (v := handle_version(args)) is not None:
         return v
 
-    cmd, cwd, err = _resolve(args.agent, args.session)
+    # Accept what cdir prints, so a listing row pastes straight back.
+    agent_name, session_id, err = parse_ref_args(args.refs)
+    if err:
+        console.print(f"[red]{err}[/red]")
+        return 1
+
+    cmd, cwd, err = _resolve(agent_name, session_id)
     if err:
         console.print(f"[red]{err}[/red]")
         return 1

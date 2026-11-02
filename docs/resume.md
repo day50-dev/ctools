@@ -8,10 +8,27 @@ that "leaves ctools" (the `xdg-open` analogy).
 There is no standalone `cresume` shortcut; `resume` is a `ctools` verb only:
 
 ```sh
+ctools resume claude-code/55b9c8b7-788b-4f9e-a8b7-cfa0461b357b  # a cdir row, pasted
 ctools resume claude-code a293cac2   # cd + exec `claude --resume a293cac2`
 ctools resume pi <id>                # `pi --session <id>`
 ctools resume opencode <id>          # `opencode -s <id>`
 ```
+
+## Naming the session
+
+Whatever `cdir` printed, paste straight back:
+
+| You type | Meaning |
+|---|---|
+| `claude-code/55b9c8b7` | the `agent/session` shape a cross-agent listing prints |
+| `@claude-code/55b9c8b7` | the same, with the `@` marker `cextract` uses |
+| `claude-code 55b9c8b7` | the two-word form |
+| `55b9c8b7` | a bare id (what `cdir -1` prints), looked up in the installed agents |
+
+A bare id resolves only when exactly one installed agent has that session.
+If two do, `resume` names them and asks you to pick (`pi/55b9c8b7`); if none
+does, it says so rather than guessing. An unknown agent prefix is an error —
+it is never treated as a directory or a glob.
 
 ## How it works
 
@@ -33,12 +50,13 @@ directory instead.
 
 ## Print it without exec-ing
 
-`cdir --resume-command AGENT SESSION` prints the same command (with the `cd`
-prefix) and exits, without running it. Same code path as `resume`, minus the
-`exec` — use it to copy the command, hand it to another tool, or pipe it:
+`cdir --resume-command AGENT/SESSION` prints the same command (with the `cd`
+prefix) and exits, without running it. It takes exactly the shapes `resume`
+takes. Same code path as `resume`, minus the `exec` — use it to copy the
+command, hand it to another tool, or pipe it:
 
 ```sh
-$ ctools dir --resume-command pi <id>
+$ ctools dir --resume-command pi/<id>
 cd /home/u/proj && pi --session <id>
 ```
 
