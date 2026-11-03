@@ -8,6 +8,7 @@ ccopy \- copy a conversation from one agent to a new session in another
 .RB [ \-\-version ]
 .RB [ \-\-cwd\ \fIDIR\fR ]
 .RB [ \-\-here ]
+.RB [ \-\-no-import-notice ]
 .I source
 .I destination
 .br
@@ -51,6 +52,20 @@ Claude Code) land the copy where resume will find it. Use
 or
 .B \-\-here
 to override.
+.PP
+A copy carries the conversation's
+.BR "text spine" \-
+the
+.BR {"role", "content"}
+records \- and not the tool calls or their results. So a cross-agent copy (or
+any copy whose envelope records dropped tool history) is seeded with a closing
+.B <ctools-import-notice>
+message: it names the source, says how many tool calls and results were left
+behind, and tells the resumed model to re-read files with its own tools instead
+of trusting the copied narration. It is the last message, so it survives the
+context truncation that eats a long transcript from the front. A bare pipe
+.B ccopy \- \fIAGENT\fR
+names no source session and is not annotated.
 .SH OPTIONS
 .TP
 .B \-\-dry-run
@@ -64,6 +79,10 @@ instead of the source session's working directory.
 .B \-\-here
 Seed the new session for the current directory instead of the source
 session's working directory.
+.TP
+.B \-\-no-import-notice
+Do not append the closing notice that tells a copied session its tool calls
+and their results were not carried over.
 .TP
 .BR \-v ", " \-\-verbose
 Structured logging to stderr.

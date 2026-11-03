@@ -510,12 +510,15 @@ class Agent:
         """
         return self._session_cwd(session_id)
 
-    def from_common(self, doc: Dict[str, object], cwd: Optional[str] = None) -> str:
+    def from_common(self, doc: Dict[str, object], cwd: Optional[str] = None,
+                    notice: bool = True) -> str:
         """Import a common-format envelope into a NEW session; return its id.
 
         ``cwd`` (or ``doc['cwd']``) seeds the session for that working
         directory when the agent records one, so the copy lands in the
         destination's matching project dir and resumes from there.
+        ``notice`` appends the import notice that tells a resumed model its
+        own tool history was left behind (see :meth:`import_notice`).
         """
         context = doc.get('context') or []
         if not isinstance(context, list):
@@ -527,7 +530,73 @@ class Agent:
         # If the envelope carries verbatim records *for this agent* (a same-
         # agent round trip), replay them; otherwise project the portable spine.
         messages = self._from_common_messages(doc, context)
+        if notice:
+            note = self.import_notice(doc)
+            if note is not None:
+                messages = messages + [note]
         return self.create_session(messages, cwd=cwd)
+
+    # Marker opening the import notice, so a copy of a copy is not annotated
+    # twice and the notice is recognisable to a reader and to tests.
+    IMPORT_NOTICE_TAG = 'ctools-import-notice'
+
+    def import_notice(self, doc: Dict[str, object]) -> Optional[Message]:
+        """A closing message telling a resumed model what its transcript hides.
+
+        The common format carries the conversation's *text*. Tool calls and
+        their results do not survive the projection, so a copied session reads
+        as an assistant that edits files by describing the edit ("let me
+        validate" / "valid, now reload and test") with nothing to show it ever
+        did. Resumed, the model matches that style and keeps narrating work it
+        never performs — the "it thought it made the edits but they all failed"
+        failure, which is really the tools never being called at all.
+
+        The notice is appended rather than prepended: on a long imported
+        transcript the first message is the first thing context truncation
+        drops, and the last message is the one a resuming model is reading from.
+        Returns None when there is nothing the transcript could mislead about,
+        or nothing to mislead (an empty copy stays empty).
+        """
+        context = doc.get('context')
+        if not isinstance(context, list) or not context:
+            return None
+        source = str(doc.get('source') or '')
+        src_agent = source.split('/', 1)[0]
+        tools = doc.get('tool_calls')
+        n_tools = len(tools) if isinstance(tools, list) else 0
+        # Evidence decides. Either the envelope recorded tool activity that the
+        # spine cannot carry, or it names a session in a *different known*
+        # agent, which is a cross-agent copy by definition. A bare '-' or a
+        # file path names no session, so nothing was demonstrably dropped.
+        cross = (src_agent in REGISTRY and src_agent != self.name)
+        if not (n_tools or cross):
+            return None
+        last = context[-1] if isinstance(context[-1], dict) else {}
+        if self.IMPORT_NOTICE_TAG in str(last.get('content') or ''):
+            return None  # already an imported copy; don't stack notices
+
+        named = source if src_agent in REGISTRY else 'another agent'
+        lost = (f"{n_tools} tool call(s) it recorded, and every result they "
+                f"produced, were left behind" if n_tools else
+                "any tool calls it made, and every result they produced, were "
+                "left behind")
+        if src_agent == self.name:
+            provenance = (f"This session was re-seeded from its own transcript in "
+                          f"{source} by `ctools ccopy`.")
+        else:
+            provenance = (f"This session was copied into {self.name} from "
+                          f"{named} by `ctools ccopy`.")
+        text = (
+            f"<{self.IMPORT_NOTICE_TAG}>\n"
+            f"{provenance} It carries the conversation's text only: {lost}.\n\n"
+            f"So nothing above as edited, written, created, deleted, run, printed, or "
+            f"tested has happened in this session. Treat those as unverified history, "
+            f"not as the current state of the files: an assistant turn that says it "
+            f"made a change is evidence that a change was *wanted*, nothing more. "
+            f"Re-read the files you need with your own tools before acting, and make "
+            f"every change with a real tool call.\n"
+            f"</{self.IMPORT_NOTICE_TAG}>")
+        return Message(role='user', content=text)
 
     def _from_common_messages(self, doc: Dict[str, object],
                               context: List[dict]) -> List[Message]:
@@ -1810,6 +1879,58 @@ class OpencodeAgent(SqliteAgent):
     def raw_messages(self, session_id: str) -> List[Message]:
         return [Message(role=role, content=text)
                 for _, role, text in self._rows(session_id) if text]
+
+    def tool_calls(self, session_id: str) -> List[dict]:
+        """opencode's ``tool`` parts, in conversation order.
+
+        The text projection drops these, so they are exactly what a copy loses;
+        exporting name and count is what lets an imported session state how much
+        of its own history is missing. ``msg`` indexes the conversation the way
+        :meth:`messages` numbers it, matching Claude Code's tool_calls.
+        """
+        conn = self.connect()
+        if conn is None:
+            raise SessionNotFound(self.name, session_id)
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id FROM message WHERE session_id = ? ORDER BY time_created
+            ''', (session_id,))
+            msg_ids = [row[0] for row in cursor.fetchall()]
+            out: List[dict] = []
+            conv = -1
+            for msg_id in msg_ids:
+                cursor.execute('''
+                    SELECT data FROM part WHERE message_id = ? ORDER BY time_created
+                ''', (msg_id,))
+                has_text = False
+                tools: List[dict] = []
+                for (part_data,) in cursor.fetchall():
+                    try:
+                        part = json.loads(part_data)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get('type') == 'text' and part.get('text'):
+                        has_text = True
+                    elif part.get('type') == 'tool':
+                        tools.append(part)
+                if has_text:
+                    conv += 1
+                for part in tools:
+                    state = part.get('state')
+                    state = state if isinstance(state, dict) else {}
+                    out.append({
+                        'name': str(part.get('tool') or 'tool'),
+                        'summary': _summarize_args(state.get('input') or {}),
+                        'msg': max(conv, 0),
+                    })
+            return out
+        except sqlite3.Error:
+            return []
+        finally:
+            conn.close()
 
     def raw_records(self, session_id: str) -> List[dict]:
         """Each message's verbatim `message.data` plus its `part` rows, in order."""

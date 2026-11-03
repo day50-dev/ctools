@@ -21,6 +21,32 @@ ccopy opencode/ses_abc ssh://chris@remote/codex     # local -> new session on a 
 ccopy ssh://chris@remote/opencode/ses_abc codex     # pull a remote conversation
 ```
 
+## The conversation text is what gets copied
+
+A copy carries the session's **text spine** — the `{role, content}` records. Tool
+calls and their results do **not** cross the copy, so a resumed session does not
+see the commands that were run or the files that were changed. Left unlabeled,
+that transcript reads as an assistant that edits by describing the edit, and a
+resumed model copies the style: it keeps narrating work it never performs.
+
+So a cross-agent copy (or any copy the envelope can show lost tool history)
+opens with a closing `<ctools-import-notice>` message that names the source, says
+how many tool calls and their results were left behind, and tells the model to
+re-read files with its own tools and make real tool calls instead of trusting the
+copied narration. The notice is the **last** message, so it survives the context
+truncation that eats a long imported transcript from the front.
+
+```
+$ ccopy opencode/ses_abc claude-code
+…
+copied text only — the source's tool calls and their results are not in the
+new session, so it opens with a notice telling the model to re-read files rather
+than trust that narration (--no-import-notice to suppress).
+```
+
+`--no-import-notice` suppresses it when you want the bare spine. A bare pipe
+(`ccopy - …`) names no source session and is not annotated.
+
 ```sh
 $ ccopy opencode/ses_abc claude-code
 Copied 42 message(s) from opencode/ses_abc to a new claude-code session: 1a2b3c

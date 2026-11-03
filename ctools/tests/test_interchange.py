@@ -21,6 +21,22 @@ import pytest
 from ctools.agents import REGISTRY as AGENTS, get_agent
 
 
+def _spine(records):
+    """The {role, content} spine of a copied session, notice stripped.
+
+    A cross-agent copy ends with an import notice (Agent._import_notice) that
+    tells the resumed model its tool history was not copied. Assertions about
+    the conversation itself compare the spine; the notice has its own tests.
+    """
+    out = []
+    for rec in records:
+        role, content = rec["role"], rec["content"]
+        if "ctools-import-notice" in content:
+            continue
+        out.append((role, content))
+    return out
+
+
 # --- Fixtures: a minimal opencode DB and a minimal pi session ---
 
 def _opencode_db(tmp_path, session_id="ses_snake",
@@ -574,7 +590,7 @@ def test_hermes_to_common_shape(tmp_path):
         {"role": "assistant", "content": "hello"}]})
     doc = agent.to_common(sid)
     assert doc["source"] == f"hermes/{sid}"
-    assert [m["role"] for m in doc["context"]] == ["user", "assistant"]
+    assert _spine(doc["context"]) == [("user", "hi"), ("assistant", "hello")]
 
 
 def test_hermes_from_common_roundtrip(tmp_path):
@@ -588,7 +604,7 @@ def test_hermes_from_common_roundtrip(tmp_path):
     new_id = agent.from_common(doc)
     assert any(s.id == new_id for s in agent.sessions())
     msgs = agent.messages(new_id)
-    assert [(m.role, m.content) for m in msgs] == \
+    assert _spine([{"role": m.role, "content": m.content} for m in msgs]) == \
            [(m["role"], m["content"]) for m in doc["context"]]
 
 
@@ -607,7 +623,7 @@ def test_hermes_from_common_real_shape(tmp_path):
     doc = {"source": "goose/20261008_1", "context": [
         {"role": "user", "content": "make a simple snake game in python"},
         {"role": "assistant", "content": "Created snake.py"}]}
-    new_id = agent.from_common(doc)
+    new_id = agent.from_common(doc, notice=False)
     assert re.fullmatch(r"\d{8}_\d{6}_[0-9a-f]{12}", new_id)
     conn = _sqlite.connect(str(agent.db_path))
     cur = conn.cursor()
@@ -633,7 +649,7 @@ def test_cross_agent_goose_to_hermes(tmp_path):
     hermes = HermesAgent(_hermes_db(tmp_path))
     new_id = hermes.from_common(goose.to_common("20261008_1"))
     msgs = hermes.messages(new_id)
-    assert [(m.role, m.content) for m in msgs] == [
+    assert _spine([{"role": m.role, "content": m.content} for m in msgs]) == [
         ("user", "make a simple snake game in python"),
         ("assistant", "Created `snake.py`. Run it with: python3 snake.py"),
     ]
@@ -647,7 +663,161 @@ def test_cross_agent_hermes_to_goose(tmp_path):
     hermes_id = hermes.from_common(goose.to_common("20261008_1"))
     new_id = goose.from_common(hermes.to_common(hermes_id))
     assert new_id != "20261008_1"
-    assert [(m.role, m.content) for m in goose.messages(new_id)] == [
+    assert _spine([{"role": m.role, "content": m.content}
+                   for m in goose.messages(new_id)]) == [
         ("user", "make a simple snake game in python"),
         ("assistant", "Created `snake.py`. Run it with: python3 snake.py"),
     ]
+
+
+# =====================================================================
+# The import notice. A copy carries the conversation's text; its tool
+# calls and their results do not survive the common format. Left
+# unlabelled, that transcript reads as an assistant that edits files by
+# describing the edit, and a resumed model copies the style: it narrates
+# work it never does. So the copy says what is missing.
+# =====================================================================
+
+def _notice_of(agent, session_id):
+    """The import notice a seeded session ends with, or None."""
+    msgs = agent.messages(session_id)
+    if msgs and "ctools-import-notice" in msgs[-1].content:
+        return msgs[-1]
+    return None
+
+
+def test_cross_agent_copy_ends_with_import_notice(tmp_path):
+    from ctools.agents import GooseAgent, HermesAgent
+    goose = GooseAgent(_goose_db(tmp_path))
+    hermes = HermesAgent(_hermes_db(tmp_path))
+    new_id = hermes.from_common(goose.to_common("20261008_1"))
+
+    note = _notice_of(hermes, new_id)
+    assert note is not None
+    assert "goose/20261008_1" in note.content
+    assert "tool call" in note.content
+    # Placement is the point: a long imported transcript truncates from the
+    # front, so the warning has to be where the resuming model is reading.
+    msgs = hermes.messages(new_id)
+    assert all("ctools-import-notice" not in m.content for m in msgs[:-1])
+
+
+def test_notice_counts_the_tool_calls_left_behind(tmp_path):
+    """When the envelope knows what it dropped, the notice says how many."""
+    from ctools.agents import HermesAgent
+    agent = HermesAgent(_hermes_db(tmp_path))
+    doc = {"source": "claude-code/abc123",
+           "context": [{"role": "assistant", "content": "I edited config.py"}],
+           "tool_calls": [{"name": "Edit"}, {"name": "Bash"}]}
+    note = _notice_of(agent, agent.from_common(doc))
+    assert "2 tool call(s)" in note.content
+
+
+def test_same_agent_copy_annotated_only_when_tools_were_dropped(tmp_path):
+    from ctools.agents import HermesAgent
+    agent = HermesAgent(_hermes_db(tmp_path))
+    spine = [{"role": "user", "content": "hi"},
+             {"role": "assistant", "content": "hello"}]
+
+    plain = agent.from_common({"source": f"hermes/s1", "context": spine})
+    assert _notice_of(agent, plain) is None
+
+    lost_tools = agent.from_common({"source": "hermes/s2", "context": spine,
+                                    "tool_calls": [{"name": "edit"}]})
+    note = _notice_of(agent, lost_tools)
+    assert note is not None and "re-seeded" in note.content
+
+
+def test_notice_not_stacked_when_a_copy_is_copied(tmp_path):
+    """Copying an already-imported session keeps exactly one notice."""
+    from ctools.agents import GooseAgent, HermesAgent
+    goose = GooseAgent(_goose_db(tmp_path))
+    hermes = HermesAgent(_hermes_db(tmp_path))
+    once = hermes.from_common(goose.to_common("20261008_1"))
+    twice = hermes.from_common(hermes.to_common(once))
+    tagged = [m for m in hermes.messages(twice)
+              if "ctools-import-notice" in m.content]
+    assert len(tagged) == 1
+
+
+def test_notice_can_be_suppressed(tmp_path):
+    from ctools.agents import GooseAgent, HermesAgent
+    goose = GooseAgent(_goose_db(tmp_path))
+    hermes = HermesAgent(_hermes_db(tmp_path))
+    sid = hermes.from_common(goose.to_common("20261008_1"), notice=False)
+    assert _notice_of(hermes, sid) is None
+
+
+def test_piped_records_are_not_annotated(tmp_path):
+    """A bare {role, content} list names no source session, so nothing was
+    demonstrably dropped: no notice."""
+    from ctools.agents import HermesAgent
+    agent = HermesAgent(_hermes_db(tmp_path))
+    sid = agent.from_common({"source": "-", "context": [
+        {"role": "user", "content": "piped in"}]})
+    assert _notice_of(agent, sid) is None
+
+
+def _add_opencode_tools(db_path, session_id, mid, tools):
+    """Attach opencode ``tool`` parts to a message.
+
+    These are the parts the text projection drops, i.e. exactly the history a
+    copy loses; opencode stores them alongside the text parts.
+    """
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    for i, (name, inp) in enumerate(tools):
+        cur.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, "
+            "time_updated, data) VALUES (?, ?, ?, ?, ?, ?)",
+            (f"tool_{mid}_{i}", mid, session_id, 1700000000500 + i,
+             1700000000500 + i,
+             json.dumps({"type": "tool", "callID": f"call_{i}", "tool": name,
+                         "state": {"status": "completed", "input": inp,
+                                   "output": "ok"}})))
+    conn.commit()
+    conn.close()
+
+
+def test_opencode_tool_calls_are_exported(tmp_path):
+    """opencode keeps tool activity in `tool` parts; exporting name and count
+    is what lets a copy state how much of its own history is missing."""
+    db = _opencode_db(tmp_path, "ses_snake")
+    _add_opencode_tools(db, "ses_snake", "msg_1", [
+        ("write", {"file_path": "/tmp/snake.py"}),
+        ("bash", {"command": "python3 /tmp/snake.py"}),
+    ])
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    try:
+        calls = AGENTS["opencode"].tool_calls("ses_snake")
+        assert [c["name"] for c in calls] == ["write", "bash"]
+        assert [c["summary"] for c in calls] == ["/tmp/snake.py",
+                                                 "python3 /tmp/snake.py"]
+        # Attached to the assistant turn that made them, the way Claude Code's
+        # tool_calls indexes, so the web UI can place them in the transcript.
+        assert [c["msg"] for c in calls] == [1, 1]
+        assert AGENTS["opencode"].to_common("ses_snake")["tool_calls"] == calls
+    finally:
+        AGENTS["opencode"].base_path = original
+
+
+def test_opencode_tool_count_reaches_the_import_notice(tmp_path):
+    """The reported failure, end to end: an opencode session copied into
+    claude-code has to say how many tool calls it arrived without."""
+    from ctools.agents import ClaudeCodeAgent
+    db = _opencode_db(tmp_path, "ses_snake")
+    _add_opencode_tools(db, "ses_snake", "msg_1", [
+        ("edit", {"file_path": "/tmp/snake.py"}),
+        ("bash", {"command": "python3 /tmp/snake.py"}),
+    ])
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    try:
+        doc = AGENTS["opencode"].to_common("ses_snake")
+    finally:
+        AGENTS["opencode"].base_path = original
+    cc = ClaudeCodeAgent(tmp_path / "cc")
+    note = _notice_of(cc, cc.from_common(doc))
+    assert "opencode/ses_snake" in note.content
+    assert "2 tool call(s)" in note.content

@@ -86,9 +86,13 @@ def export_common(agent: Agent, session_id: str) -> dict:
     return agent.to_common(session_id)
 
 
-def import_common(agent: Agent, doc: dict) -> str:
-    """Import a common-format envelope into a NEW session in `agent`; return id."""
-    return agent.from_common(doc)
+def import_common(agent: Agent, doc: dict, notice: bool = True) -> str:
+    """Import a common-format envelope into a NEW session in `agent`; return id.
+
+    ``notice`` keeps the import notice that tells a resumed model its tool
+    history was not copied (see Agent.import_notice).
+    """
+    return agent.from_common(doc, notice=notice)
 
 
 def common_copy(source: Agent, source_id: str, destination: Agent) -> Tuple[str, int]:
@@ -536,6 +540,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Seed the new session for the current directory "
                              "instead of the source session's working "
                              "directory")
+    parser.add_argument("--no-import-notice", action="store_true",
+                        dest="no_import_notice",
+                        help=("Do not append the notice that tells a copied "
+                              "session its tool calls were not carried over"))
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Verbose output")
     version_option(parser, "ccopy")
@@ -708,7 +716,8 @@ def main(argv=None) -> int:
     if dst_remote is None:
         guard = guard_write(dst_agent, note="ccopy")
         try:
-            new_id = import_common(dst_agent, common_doc)
+            new_id = import_common(dst_agent, common_doc,
+                                   notice=not args.no_import_notice)
         except BaseException:
             guard.rollback()
             raise
@@ -733,11 +742,22 @@ def main(argv=None) -> int:
                       f"write: {backup_path}[/dim]")
         console.print(f"[dim]Restore it with: crecover restore {dst_ref} "
                       f"{backup_path}[/dim]")
+    # Ask the destination whether it actually annotated the copy, so the note
+    # below can never drift from what was written.
+    noted = (dst_remote is None and not args.no_import_notice
+             and dst_agent.import_notice(common_doc) is not None)
     resume = get_resume_command(dst_ref, new_id)
     if resume:
         suffix = f" on {dst_remote.target}" if dst_remote else ""
         console.print(f"[green]Resume it{suffix} with:[/green]")
         console.print(f"  {resume}")
+    if noted:
+        # Advisory, on stderr: stdout keeps the id/resume lines parseable.
+        err_console.print("[dim]Copied text only — the source's tool calls and "
+                          "their results are not in the new session, so it opens "
+                          "with a notice telling the model to re-read files "
+                          "rather than trust that narration (--no-import-notice "
+                          "to suppress).[/dim]")
     return 0
 
 
