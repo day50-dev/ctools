@@ -1,5 +1,7 @@
 """ctools resume: the exec hand-off, and cdir --resume-command."""
 import sys
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -170,3 +172,91 @@ def test_resume_app_reports_bad_shape(monkeypatch):
 def test_resume_is_a_handoff_verb():
     grouped = {v: t for t, verbs in dispatch.GROUPS for v in verbs}
     assert grouped["resume"].startswith("long-running")
+
+
+# --- `resume <path>`: the most recent session recorded in a directory ---
+
+class _DirAgent:
+    """An installed agent whose sessions() carry a recorded path + mtime."""
+    name = "pi"
+
+    def __init__(self, sessions):
+        self._sessions = sessions
+
+    def exists(self):
+        return True
+
+    def sessions(self):
+        return self._sessions
+
+
+PROJ = "/tmp/ctools-resume-proj"
+
+
+def _sess(id, path=PROJ, when="2025"):
+    y, m, d = (2025, 1, 1) if when == "2025" else (2024, 1, 1)
+    return SimpleNamespace(id=id, path=path, mtime=datetime(y, m, d, tzinfo=timezone.utc))
+
+
+def _dir_agents(monkeypatch, agents):
+    monkeypatch.setattr(resume_mod, "AGENTS", agents)
+    monkeypatch.setattr(resume_mod, "get_agent", lambda n: agents.get(n))
+
+
+def test_resolve_dir_picks_most_recent(monkeypatch):
+    """Across all installed agents, the newest session in the dir wins."""
+    agents = {"pi": _DirAgent([_sess("old", when="2024"), _sess("new", when="2025")])}
+    _dir_agents(monkeypatch, agents)
+    assert resume_mod._resolve_dir(PROJ) == ("pi", "new", None)
+
+
+def test_resolve_dir_scopes_to_agent(monkeypatch):
+    """`agent <path>` ignores newer sessions held by other agents."""
+    oc_newer = _sess("oc", when="2025")
+    agents = {"pi": _DirAgent([_sess("pi", when="2024")]),
+              "opencode": _DirAgent([oc_newer])}
+    _dir_agents(monkeypatch, agents)
+    assert resume_mod._resolve_dir(PROJ, "opencode") == ("opencode", "oc", None)
+    # ... and scoping to pi keeps the older pi session over the newer opencode one.
+    assert resume_mod._resolve_dir(PROJ, "pi") == ("pi", "pi", None)
+
+
+def test_resolve_dir_no_match(monkeypatch):
+    _dir_agents(monkeypatch, {"pi": _DirAgent([])})
+    name, sid, err = resume_mod._resolve_dir("/tmp/ctools-resume-empty")
+    assert sid is None and "no session recorded" in err
+
+
+def test_resolve_dir_unknown_agent(monkeypatch):
+    _dir_agents(monkeypatch, {})
+    name, sid, err = resume_mod._resolve_dir(PROJ, "bogus")
+    assert (name, sid) == (None, None) and "unknown agent" in err
+
+
+def test_parse_ref_path_single(monkeypatch):
+    """A single anchored path token resolves to the newest session in it."""
+    _dir_agents(monkeypatch, {"pi": _DirAgent([_sess("new")])})
+    assert resume_mod.parse_ref_args([PROJ]) == ("pi", "new", None)
+
+
+def test_parse_ref_path_two_words(monkeypatch):
+    """`agent <dir>`: the newest session of that agent inside the dir."""
+    import os
+    cwd = os.getcwd()
+    _dir_agents(monkeypatch, {"pi": _DirAgent([_sess("pi", path=cwd)])})
+    assert resume_mod.parse_ref_args(["pi", "."]) == ("pi", "pi", None)
+
+
+def test_looks_like_dir():
+    f = resume_mod._looks_like_dir
+    assert f(".") and f("..") and f("./x") and f("/abs") and f("~/x")
+    assert not f("abc")          # a bare session id
+    assert not f("bogus/abc")    # an unknown-agent/id pair, not an existing dir
+
+
+def test_dir_arg_detection():
+    assert resume_mod._dir_arg(["."]) == "."
+    assert resume_mod._dir_arg(["/x"]) == "/x"
+    assert resume_mod._dir_arg(["pi", "."]) == "."
+    assert resume_mod._dir_arg(["pi", "abc"]) is None
+    assert resume_mod._dir_arg(["abc"]) is None

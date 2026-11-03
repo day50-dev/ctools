@@ -11,6 +11,8 @@ There is no standalone `cresume` shortcut; `resume` is a `ctools` verb only:
 ctools resume claude-code/55b9c8b7-788b-4f9e-a8b7-cfa0461b357b  # a cdir row, pasted
 ctools resume claude-code a293cac2   # cd + exec `claude --resume a293cac2`
 ctools resume pi <id>                # `pi --session <id>`
+ctools resume .                      # the most recent session in this directory
+ctools resume pi .                   # ... of one agent, in this directory
 ctools resume opencode <id>          # `opencode -s <id>`
 ```
 
@@ -24,16 +26,45 @@ Whatever `cdir` printed, paste straight back:
 | `@claude-code/55b9c8b7` | the same, with the `@` marker `cextract` uses |
 | `claude-code 55b9c8b7` | the two-word form |
 | `55b9c8b7` | a bare id (what `cdir -1` prints), looked up in the installed agents |
+| `.` / `..` / `/path` / `~/proj` | a directory: the most recent session recorded in it |
+| `pi .` | the most recent session *of that agent* in the directory |
 
 A bare id resolves only when exactly one installed agent has that session.
 If two do, `resume` names them and asks you to pick (`pi/55b9c8b7`); if none
 does, it says so rather than guessing. An unknown agent prefix is an error —
 it is never treated as a directory or a glob.
 
+### Resuming by directory
+
+A directory in place of a session id selects the most recently modified session
+recorded in that directory. It uses the same rule `cdir` and `cgrep` use for a
+path argument (a session belongs to a directory when it ran in it or inside it),
+so `resume .` picks up exactly the sessions `cdir .` lists — and it scopes to
+one agent with the `agent .` two-word form. `resume` then does the normal
+hand-off: `cd` into that session's own recorded directory and `exec` its resume
+command.
+
+Because a directory names no single session, `resume` prints which one
+"most recent" resolved to on stderr before it leaves, so the hand-off is never
+a silent guess:
+
+```sh
+$ ctools resume .
+resuming pi/01a19fc4-… (most recent in .)
+```
+
+A directory argument must read unambiguously as a path: it is anchored (`.`,
+`..`, `/…`, `~/…`, `./…`) or a slash path whose first component is not an agent
+name and that exists on disk. That is why a bare relative name like `mydir` is
+still treated as a session id — for that, type `./mydir` or give the absolute
+path. If no session was recorded in the directory, `resume` says so and points
+you at `cdir <path>`.
+
 ## How it works
 
-1. Resolve the agent (unknown / not-installed / missing session are all
-   reported and exit non-zero).
+1. Resolve the agent and session — or, for a directory argument, pick the
+   most recent session recorded in it (unknown / not-installed / missing
+   session are all reported and exit non-zero).
 2. Compute the resume command from the agent backend — the same table the
    `cdir` resume hint uses, overridable per machine in
    `~/.config/ctools/resume-commands.json` (see below).
@@ -81,5 +112,5 @@ built-in table or your override, `resume` reports `no resume command known for
 ## Errors
 
 `resume` (and `cdir --resume-command`) exit non-zero with a reason when the
-agent is unknown, the agent isn't installed, the session doesn't exist, or no
-resume command is known for the agent.
+agent is unknown, the agent isn't installed, the session doesn't exist, a
+directory has no recorded session, or no resume command is known for the agent.

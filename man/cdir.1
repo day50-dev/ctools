@@ -185,14 +185,17 @@ XML document with session elements.
 Markdown table.
 .RE
 .TP
-.BR \-\-resume-command " AGENT SESSION"
+.BR \-\-resume-command " AGENT SESSION | DIRECTORY"
 Print the command that resumes AGENT/SESSION \- including the
 cd into the directory it was recorded in \- and exit, without running it.
+Takes the same shapes
+.B resume
+takes, including a directory (the most recent session recorded in it).
 Print-only half of the
 .BR resume
 hand-off (same lookup, no exec). Exits non-zero with a reason when the
-agent is unknown, not installed, the session does not exist, or no resume
-command is known for the agent.
+agent is unknown, not installed, the session does not exist, the directory
+has no recorded session, or no resume command is known for the agent.
 .TP
 .B \-\-version
 Print version information and exit.

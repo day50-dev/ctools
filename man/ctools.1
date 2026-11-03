@@ -73,7 +73,9 @@ the session's recorded working directory, and exec the command (replacing the
 ctools process). Name the session the way
 .B cdir
 prints it: \fIagent\fP/\fIsession\fP, the two-word \fIagent\fP
-\fIsession\fP, or a bare id looked up in the installed agents.
+\fIsession\fP, or a bare id looked up in the installed agents. A directory
+(\fI.\fP, \fI..\fP, \fI/path\fP, \fI~/proj\fP) instead resumes the most recent
+session recorded in it; \fIagent\fP \fI.\fP scopes that to one agent.
 The one verb that leaves ctools. See
 .BR cdir (1)
 .B \-\-resume-command

@@ -224,12 +224,16 @@ in, and `exec`s the command (replacing ctools). It's the one verb that
 ctools resume claude-code/55b9c8b7-788b-4f9e-a8b7-cfa0461b357b  # a cdir row, pasted
 ctools resume claude-code a293cac2   # cd + exec `claude --resume a293cac2`
 ctools resume pi <id>                # `pi --session <id>`
+ctools resume .                      # the most recent session in this directory
 ctools dir --resume-command pi/<id>  # just print the command, don't exec it
 ```
 
 The session is named the way `cdir` prints it — `agent/session`, the
 two-word `agent session`, or a bare id resolved across the installed
-agents.
+agents. A directory (`.`, `..`, `/path`, `~/proj`) instead names the most
+recently recorded session in it; `resume <agent> .` scopes that to one
+agent. `resume` says which session a directory resolved to before it
+leaves.
 
 The resume command comes from the agent backend and is overridable per
 machine in `~/.config/ctools/resume-commands.json`. The `cd` into the
