@@ -230,18 +230,18 @@ def test_ccat_color_never_has_no_ansi(tmp_path):
     assert "\x1b[" not in result.stdout
 
 
-def test_ccat_transcript_role_alignment(tmp_path):
-    """Role labels sit in a fixed column; content follows two spaces."""
+def test_ccat_transcript_markdown_format(tmp_path):
+    """--text emits each message as '**role**:' then its content on the next line."""
     _make_opencode_conv_db(tmp_path, "ses_a", DEFAULT_CONV)
     result = _run_ccat(tmp_path, ["--text", "--color", "never", "opencode/ses_a"])
+    assert result.exit_code == 0, result.output
     lines = result.stdout.splitlines()
-    # Every transcript line starts with 4 spaces + a role label + 2 spaces.
-    for line in lines:
-        if line.strip():
-            assert line.startswith("    ")
-            # after the 4-space margin, the role label (<=9 chars) then "  "
-            rest = line[4:]
-            assert "  " in rest
+    # The first message is the bold-markdown role label, content on the next line.
+    assert lines[0] == "**you**:"
+    assert lines[1] == "Write a fibonacci function"
+    # The assistant turn follows the same shape.
+    a = next(i for i, l in enumerate(lines) if l == "**assistant**:")
+    assert lines[a + 1].startswith("Here is a fibonacci function")
 
 
 # --- --raw lossless envelope ---
@@ -465,9 +465,12 @@ def test_ccat_text_includes_tool_calls(tmp_path):
     result = _run_ccat_with_tools(tmp_path, ["--text", "opencode/ses_a"], tools)
     assert result.exit_code == 0, result.output
     lines = result.stdout.splitlines()
-    user_idx = next(i for i, l in enumerate(lines) if "you" in l)
-    tool_idx = next(i for i, l in enumerate(lines) if "tool" in l and "read fib.py" in l)
-    assert tool_idx == user_idx + 1
+    # The tool call is its own '**tool**:' line, the call text on the next line,
+    # appearing after the user turn that made it.
+    user_idx = next(i for i, l in enumerate(lines) if l == "**you**:")
+    tool_idx = next(i for i, l in enumerate(lines) if l == "**tool**:")
+    assert tool_idx > user_idx
+    assert "read fib.py" in lines[tool_idx + 1]
 
 
 def test_ccat_raw_envelope_carries_tool_calls(tmp_path):

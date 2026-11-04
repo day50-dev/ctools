@@ -10,7 +10,7 @@ The examples use `ccat`; `ctools cat …` works anywhere they do.
 ```sh
 ccat opencode/ses_abc123                 # print one conversation as JSON
 ccat opencode/ses_a opencode/ses_b       # several, each a JSON array
-ccat --text opencode/ses_abc            # a human-readable transcript
+ccat --text opencode/ses_abc            # a markdown transcript (**role**:/content)
 ccat --raw opencode/ses_abc > session.json   # the lossless envelope
 ccat opencode/ses_abc | jq .            # it is JSON, so pipe it anywhere
 ccat ssh://chris@remote/opencode/ses_a  # a conversation on another host
@@ -20,7 +20,7 @@ By default `ccat` prints the conversation as a JSON list of `{"role", "content"}
 objects (one array per session) — the same shape `ccopy` uses on the wire. JSON is
 the first transportable format for a conversation, so it is what `ccat` hands you
 and what you pipe onward: to `jq`, to another tool, or straight back into a
-session with `ccopy --import-json`. Use `--text` for a readable transcript instead
+session with `ccopy --import-json`. Use `--text` for a markdown transcript instead
 (a dimmed role label in a fixed column, then the content):
 
 ```sh
@@ -32,9 +32,14 @@ $ ccat opencode/ses_abc123
 ]
 
 $ ccat --text opencode/ses_abc123
-    you        do a git diff to v0.16.10 ... i broke toolcalling somehow
-    assistant  Let me look at the broader context around tool calling...
-    tool       bash git diff v0.16.10
+**you**:
+do a git diff to v0.16.10 ... i broke toolcalling somehow
+
+**assistant**:
+Let me look at the broader context around tool calling...
+
+**tool**:
+bash git diff v0.16.10
 ```
 
 Tool calls are interleaved as `{"role": "tool"}` entries right after the turn
@@ -87,7 +92,7 @@ a `cgrep -l` pipeline:
 
 ```sh
 $ cgrep -l llcat opencode | xargs ccat            # every match, as JSON
-$ cgrep -l llcat opencode | xargs ccat --text     # or as a readable transcript
+$ cgrep -l llcat opencode | xargs ccat --text     # or as a markdown transcript
 ```
 
 A reference that can't be read (a bad id, an uninstalled agent) is reported and

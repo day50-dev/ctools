@@ -10,13 +10,13 @@ By default the output is a JSON list of {role, content} objects (one array per
 session) — the llcat/OpenAI spine — so it is importable and pipeable: feed it to
 jq, to another tool, or back into a session. Tool calls are interleaved as
 {role: "tool"} entries after the turn that made them. Use --text for a
-human-readable transcript, or --raw for the lossless envelope (the context plus
+model-readable markdown transcript (each message as '**role**:' then content), or --raw for the lossless envelope (the context plus
 the source agent's verbatim records, its tool calls, and session metadata).
 
 Usage:
     ccat opencode/ses_abc123                 # print one conversation as JSON
     ccat opencode/ses_a opencode/ses_b       # several, each a JSON array
-    ccat --text opencode/ses_abc            # human-readable transcript
+    ccat --text opencode/ses_abc            # markdown transcript (**role**: / content)
     ccat --raw opencode/ses_abc > session.json   # lossless envelope
     ccat ssh://chris@remote/opencode/ses_a  # a conversation on another host
     ccat opencode/ses_abc | jq .            # it is JSON, so pipe it anywhere
@@ -60,24 +60,30 @@ _DEFAULT_ROLE = ('msg', 'bold')
 
 
 def _render_transcript(messages: List[dict], color: bool) -> None:
-    """Print one conversation as a readable transcript on stdout.
+    """Print one conversation as a model-readable markdown transcript.
 
-    Each message becomes `    <role>  <content>`; the role is a short dimmed
-    label in a fixed column so the content lines up.
+    Each message becomes ``**<role>**:\n<content>`` — the role in bold
+    markdown (so it is parseable for a model, not just a human) followed by a
+    blank line. When ``color`` is set the role line is styled via a rich
+    console (``force_terminal`` so ``--color always`` works even when piped).
+    Content is printed as-is: markup and syntax highlighting are off so a
+    transcript that itself contains ``**`` or ``[red]`` is not mangled.
     """
-    width = 9  # len("assistant")
+    if not color:
+        for m in messages:
+            role = m.get('role', '')
+            label, _style = _ROLE.get(role, _DEFAULT_ROLE)
+            print(f'**{label}**:')
+            print(m.get('content', ''))
+            print()
+        return
+    console = Console(force_terminal=True, highlight=False, markup=False)
     for m in messages:
         role = m.get('role', '')
         label, style = _ROLE.get(role, _DEFAULT_ROLE)
-        if color:
-            line = Text()
-            line.append('    ')
-            line.append(f'{label:<{width}}', style=style)
-            line.append('  ')
-            line.append(m.get('content', ''))
-            print(line)
-        else:
-            print(f'    {label:<{width}}  {m.get("content", "")}')
+        console.print(Text(f'**{label}**:', style=style))
+        console.print(m.get('content', ''))
+        console.print()
 
 
 def _merge_tool_calls(messages: List[dict],
@@ -228,7 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
                      "(one array per session) — the llcat/OpenAI spine — so it "
                      "can be imported or piped to another tool. Tool calls are "
                      "interleaved as {role: 'tool'} entries after the turn that "
-                     "made them. Pass --text for a readable transcript instead, "
+                     "made them. Pass --text for a markdown transcript instead, "
                      "or --raw for the lossless envelope (the context plus the "
                      "source agent's verbatim records, its tool calls, and "
                      "session metadata). Several sessions print in order, "
@@ -239,7 +245,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="One or more sessions to print (agent/session_id, "
                              "or ssh://[user@]host[:port]/agent/session_id)")
     parser.add_argument("-t", "--text", action="store_true", dest="text_out",
-                        help="Print a human-readable transcript instead of JSON")
+                        help=("Print a markdown transcript (each message as "
+                              "'**role**:' then the content) instead of JSON"))
     parser.add_argument("-r", "--raw", action="store_true", dest="raw_out",
                         help=("Print the lossless envelope: context plus the "
                               "agent's verbatim records and session metadata "

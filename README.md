@@ -192,7 +192,7 @@ ctools grep --hosts "mcp config"            # also the hosts in ctools.toml
 
 ```bash
 ctools cat opencode/ses_abc           # JSON list of {role, content}
-ctools cat --text opencode/ses_abc    # a readable transcript
+ctools cat --text opencode/ses_abc    # a markdown transcript (**role**:/content)
 ctools cat ssh://me@box/pi/<id>       # a session on another machine
 ```
 
