@@ -333,36 +333,61 @@ The MCP server exposes the same capabilities to any MCP-capable coding agent
 ctools mcp          # run the server on stdio (same as ctools-mcp)
 ```
 
-### Install and register with Pi
+### Install and register
 
 ```bash
-ctools-mcp install            # global: ~/.pi/agent/mcp.json
-ctools-mcp install --project  # project: .pi/mcp.json in the current directory
+ctools mcp install                 # pi + every agent whose config already exists
+ctools mcp install pi              # pi only (global: ~/.pi/agent/mcp.json)
+ctools mcp install --project       # pi, project-level .pi/mcp.json in cwd
+ctools mcp install all             # every agent ctools knows how to reach
+ctools mcp install pi goose codex  # any subset, in any order
 ```
 
 If no working `ctxttools[mcp]` install is found, this installs one with
-`uv tool`. It then registers the server in `~/.pi/agent/mcp.json` (or
-`.pi/mcp.json` with `--project`), always with a `python -m ctools.ctools_mcp`
-entry that does not depend on the MCP host's `PATH`. Verify with:
+`uv tool`. It then registers the server in each selected agent's config,
+always with a `python -m ctools.ctools_mcp` entry that does not depend on
+the MCP host's `PATH`. Verify with:
 
 ```bash
 pi mcp list        # "ctools-mcp … connected"
-ctools-mcp check   # also: verifies the command exists and starts, prints the fix
+ctools mcp check   # also: verifies the command exists and starts, prints the fix
+ctools mcp check all
 ```
 
-`ctools-mcp uninstall` removes the entry again (`--all` also removes it from
-Claude Code's and opencode's configs).
+`ctools mcp uninstall [agents …]` removes the entries again.
+
+### Supported agents
+
+Each agent in the registry declares its own MCP host (path, config format,
+entry shape). No per-agent list to maintain — `ctools mcp check all` shows
+the full list:
+
+| Agent | Config file | Format | Entry shape |
+|---|---|---|---|
+| pi | `~/.pi/agent/mcp.json` | JSON | `{command, args}` |
+| claude (Desktop) | `~/.config/Claude/claude_desktop_config.json` | JSON | `{command, args}` |
+| claude-code | `~/.claude.json` | JSON | `{command, args}` |
+| opencode | `~/.config/opencode/opencode.json` | JSON | `{type, command:[…]}` |
+| kilo | `~/.config/kilo/kilo.jsonc` | JSONC | `{type, command:[…]}` |
+| codex | `~/.codex/config.toml` | TOML | `{command, args}` |
+| goose | `~/.config/goose/config.yaml` | YAML | `{cmd, args, type}` (under `extensions`) |
+| hermes | `~/.hermes/config.yaml` | YAML | `{command, args}` |
+| openclaw | `~/.openclaw/openclaw.json` | JSON | `{command, args}` (under `mcp.servers`) |
+| cline | `~/.cline/data/settings/cline_mcp_settings.json` | JSON | `{command, args}` |
+| freebuff | `~/.config/freebuff/mcp.json` | JSON | `{command, args}` |
+
+(omp has no MCP client; `ctools mcp install omp` reports that.)
 
 ### Manual registration (any host)
 
-If you'd rather wire it up yourself, `print-config` emits the `mcpServers` JSON
-snippet:
+If you'd rather wire it up yourself, `print-config` emits the snippet in the
+agent's native format:
 
 ```bash
-ctools-mcp print-config
+ctools mcp print-config goose codex
 ```
 
-Add that to your host's MCP config. The server is started with
+Add that to the host's config file. The server is started with
 `python -m ctools.ctools_mcp` from the install environment.
 
 ### Tools exposed

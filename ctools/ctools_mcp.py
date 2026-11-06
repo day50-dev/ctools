@@ -459,219 +459,65 @@ def _portable(path: str) -> str:
 SERVER_DESC = "Search, list, and copy LLM agent sessions (pi, claude, opencode, codex, goose, etc.)"
 
 
-def _entry_split(py: str) -> dict:
-    """The ctools server entry in the {command, args} shape (pi, claude)."""
-    return {
-        "command": _portable(py),
-        "args": ["-m", "ctools.ctools_mcp"],
-        "description": SERVER_DESC,
-    }
+# ---------------------------------------------------------------------------
+# CLI: install / check / uninstall / print-config
+#
+# Every target is derived from the agent registry: each agent declares an
+# McpHost (or None). There is no per-agent list to keep in sync here.
+# ---------------------------------------------------------------------------
+
+from ctools.mcp_host import (
+    McpHost, McpError,
+    install as mcp_install, remove as mcp_remove,
+    get_entry as mcp_get_entry, strip_ctools,
+)
 
 
-def _entry_opencode(py: str) -> dict:
-    """The ctools server entry in opencode's {command: [cmd, ...]} shape."""
-    return {"type": "local",
-            "command": [_portable(py), "-m", "ctools.ctools_mcp"],
-            "description": SERVER_DESC}
+def _agents_with_mcp() -> dict:
+    """agent name -> McpHost, registry order, for agents that declare one."""
+    return {n: a.mcp for n, a in AGENTS.items() if a.mcp is not None}
 
 
-def _entry_goose(py: str) -> dict:
-    """The ctools extension entry for goose's YAML config (type: stdio)."""
-    return {
-        "enabled": True, "type": "stdio", "name": "ctools",
-        "description": SERVER_DESC, "cmd": _portable(py),
-        "args": ["-m", "ctools.ctools_mcp"],
-        "envs": {}, "env_keys": [], "timeout": 300,
-        "bundled": None, "available_tools": [],
-    }
+def _pick(args) -> list:
+    """Resolve the agent selector into a list of (label, McpHost).
 
-
-def _write_json(path: str, data) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-
-
-class _Target:
-    """One client config file: knows its own path and entry shape, and can
-    register / unregister / read the ctools entry in that native form."""
-
-    def __init__(self, client, path, entry_builder, container_key="mcpServers"):
-        self.client = client
-        self.path = path
-        self._build = entry_builder
-        self.container_key = container_key
-
-    def label(self):
-        return self.client
-
-    def register(self, py: str) -> None:
-        data = {}
-        if os.path.exists(self.path):
-            with open(self.path) as f:
-                data = json.load(f)
-        data.setdefault(self.container_key, {})["ctools"] = self._build(py)
-        _write_json(self.path, data)
-
-    def unregister(self) -> bool:
-        if not os.path.exists(self.path):
-            return False
-        with open(self.path) as f:
-            data = json.load(f)
-        if "ctools" in data.get(self.container_key, {}):
-            del data[self.container_key]["ctools"]
-            _write_json(self.path, data)
-            return True
-        return False
-
-    def get_entry(self):
-        """Return (command, args) if a ctools entry exists, else None."""
-        if not os.path.exists(self.path):
-            return None
-        with open(self.path) as f:
-            data = json.load(f)
-        entry = data.get(self.container_key, {}).get("ctools")
-        if not isinstance(entry, dict):
-            return None
-        cmd = entry.get("command")
-        if isinstance(cmd, list) and cmd:      # opencode style
-            return (cmd[0], list(cmd[1:]))
-        if isinstance(cmd, str) and cmd:       # {command, args} style
-            return (cmd, list(entry.get("args", [])))
-        return None
-
-
-_PI_GLOBAL = os.path.expanduser("~/.pi/agent/mcp.json")
-_PI_PROJECT = os.path.join(os.getcwd(), ".pi", "mcp.json")
-
-
-class _GooseTarget:
-    """Goose's config is YAML (~/.config/goose/config.yaml, extensions: <name>:).
-
-    PyYAML is required; it is found in this interpreter or a ctxttools env
-    (uv tool / pipx) and loaded via sys.path so the module works either way.
+    Positional agents are nouns: ``ctools mcp install pi goose``.
+    ``all`` selects every agent with an MCP host.  ``--project`` targets the
+    current project's pi config.  No agents given: default to pi plus any
+    other agent whose config already exists on this machine.
     """
+    mcp_agents = _agents_with_mcp()
+    agents = list(getattr(args, "agents", []) or [])
 
-    path = os.path.expanduser("~/.config/goose/config.yaml")
+    if "all" in agents:
+        agents = list(mcp_agents)
+    else:
+        for a in agents:
+            if a not in AGENTS:
+                print(f"Unknown agent: {a!r}. Available: {', '.join(AGENTS)}",
+                      file=sys.stderr)
+                sys.exit(2)
+            if a not in mcp_agents:
+                print(f"{a} has no MCP client in ctools' registry.", file=sys.stderr)
+                sys.exit(2)
 
-    def __init__(self):
-        self.client = "goose"
-        self._py = _yaml_interpreter()
+    project = bool(getattr(args, "project", False))
+    if not agents:
+        agents = ["pi"] + [n for n in mcp_agents
+                           if n != "pi" and os.path.exists(mcp_agents[n].path)]
 
-    def _yaml(self):
-        import yaml
-        return yaml
-
-    def _load(self) -> dict:
-        yaml = self._yaml()
-        if os.path.exists(self.path):
-            with open(self.path) as f:
-                return yaml.safe_load(f) or {}
-        return {}
-
-    def _dump(self, data) -> None:
-        yaml = self._yaml()
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        with open(self.path, "w") as f:
-            yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
-
-    def label(self):
-        return self.client
-
-    def register(self, py: str) -> None:
-        data = self._load()
-        data.setdefault("extensions", {})["ctools"] = _entry_goose(py)
-        self._dump(data)
-
-    def unregister(self) -> bool:
-        if not os.path.exists(self.path):
-            return False
-        data = self._load()
-        if "ctools" in data.get("extensions", {}):
-            del data["extensions"]["ctools"]
-            self._dump(data)
-            return True
-        return False
-
-    def get_entry(self):
-        if not os.path.exists(self.path):
-            return None
-        entry = self._load().get("extensions", {}).get("ctools")
-        if not isinstance(entry, dict) or not entry.get("cmd"):
-            return None
-        return (entry["cmd"], list(entry.get("args", [])))
-
-
-def _yaml_interpreter() -> Optional[str]:
-    """An interpreter that has PyYAML: this one, or a ctxttools env.
-
-    Adds its site-packages to sys.path so `import yaml` works in-process.
-    """
-    import subprocess
-    for py in [sys.executable,
-               _find_uv_tool_python(), _find_pipx_python()]:
-        if not py:
-            continue
-        try:
-            sp = subprocess.run(
-                [py, "-c",
-                 "import yaml,os; print(os.path.dirname(os.path.dirname(yaml.__file__)))"],
-                capture_output=True, text=True, timeout=10).stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            continue
-        if not sp:            # this interpreter cannot import yaml
-            continue
-        if sp not in sys.path:
-            sys.path.insert(0, sp)
-        return py
-    return None
-
-
-def _all_targets():
-    """Every known client target, in display order (goose only if PyYAML is present)."""
-    targets = [
-        _Target("pi", _PI_GLOBAL, _entry_split),
-        _Target("claude", os.path.expanduser("~/.claude.json"), _entry_split),
-        _Target("opencode", os.path.expanduser("~/.config/opencode/opencode.json"),
-                _entry_opencode, container_key="mcp"),
-    ]
-    if _yaml_interpreter():
-        targets.append(_GooseTarget())
-    return targets
-
-
-def _select_targets(args) -> list:
-    """Which targets a command applies to, from the --client flags."""
-    by_name = {t.client: t for t in _all_targets()}
-    flags = ("pi", "claude", "opencode", "goose")
-    if getattr(args, "goose", False) and "goose" not in by_name:
-        raise SystemExit(
-            "goose support needs PyYAML (its config is YAML). "
-            "Easiest: uv tool install \".[mcp]\" (the mcp extra now includes pyyaml), "
-            "or: uv pip install --python ~/.local/share/uv/tools/ctxttools/bin/python pyyaml")
-    requested = [name for name in flags if getattr(args, name, False)]
-    if getattr(args, "project", False):
-        requested.append("pi-project")
-    if not requested:
-        # Default: pi (project-level when asked), plus every other client
-        # that already has a config file on this machine.
-        requested = ["pi-project" if getattr(args, "project", False) else "pi"]
-        for name in ("claude", "opencode", "goose"):
-            if name in by_name and os.path.exists(by_name[name].path):
-                requested.append(name)
     out = []
-    for name in requested:
-        if name == "pi-project":
-            out.append(_Target("pi (project)", _PI_PROJECT, _entry_split))
+    for name in agents:
+        if name == "pi" and project:
+            out.append(("pi (project)", AGENTS["pi"].mcp_project_host()))
         else:
-            out.append(by_name[name])
+            out.append((name, mcp_agents[name]))
     return out
 
 
 def cmd_install(args) -> None:
-    """Ensure ctxtools[mcp] is installed and register the server with each selected client."""
-    import subprocess, sys
+    """Ensure ctxtools[mcp] is installed and register the server with each selected agent."""
+    import subprocess
 
     py = _best_python()
     if not _verify_python(py):
@@ -682,12 +528,14 @@ def cmd_install(args) -> None:
             print(f"ERROR: cannot import ctools.ctools_mcp with {py}", file=sys.stderr)
             sys.exit(1)
 
-    for target in _select_targets(args):
-        target.register(py)
-        print(f"Registered ctools MCP server with {target.label()}.")
-        print(f"  config:  {target.path}")
-        print(f"  command: {_portable(py)} -m ctools.ctools_mcp")
-    print("")
+    for label, host in _pick(args):
+        key = mcp_install(host, "ctools", _portable(py), ("-m", "ctools.ctools_mcp"))
+        print(f"Registered ctools MCP server with {label}.")
+        print(f"  config:    {host.path}")
+        print(f"  entry key: {key}")
+        print(f"  command:   {_portable(py)} -m ctools.ctools_mcp")
+
+    print()
     print("Verify:  ctools mcp check")
     print("Use in pi:  /mcp, or just ask the agent - tools are also reachable via codemode.")
 
@@ -707,30 +555,45 @@ def _verify_command(command: str, args: list) -> bool:
     return result.returncode == 0
 
 
-def cmd_check(args) -> None:
-    """Verify the ctools entries in the selected clients' MCP configs."""
-    import sys
+def _entry_to_cmd(entry) -> Optional[Tuple[str, list]]:
+    """Normalise an agent-specific entry to (command, args) or None."""
+    if not isinstance(entry, dict):
+        return None
+    if "command" in entry and isinstance(entry["command"], str):
+        return (entry["command"], list(entry.get("args", [])))
+    if "command" in entry and isinstance(entry["command"], list) and entry["command"]:
+        return (entry["command"][0], list(entry["command"][1:]))
+    if "cmd" in entry:
+        return (entry["cmd"], list(entry.get("args", [])))
+    return None
 
+
+def cmd_check(args) -> None:
+    """Verify the ctools entries in the selected agents' MCP configs."""
     ok = True
-    for target in _select_targets(args):
-        flag = target.label().split()[0]
-        fix = f"ctools mcp install --{flag}"
-        entry = target.get_entry()
+    for label, host in _pick(args):
+        fix = f"ctools mcp install {label.split(' ')[0]}"
+        entry = mcp_get_entry(host, "ctools")
         if entry is None:
-            print(f"{target.label()}: no ctools entry")
+            print(f"{label}: no ctools entry")
             print(f"  fix: {fix}")
             ok = False
             continue
-        command, args_l = entry
+        pair = _entry_to_cmd(entry)
+        if pair is None:
+            print(f"{label}: unrecognised ctools entry shape")
+            print(f"  fix: {fix}")
+            ok = False
+            continue
+        command, args_l = pair
         command = os.path.expanduser(command)
         if not os.path.exists(command):
-            print(f"{target.label()}: command not found: {command}")
+            print(f"{label}: command not found: {command}")
             print(f"  fix: {fix}")
             ok = False
             continue
         good = _verify_command(command, args_l)
-        print(f"{target.label()}: {'OK' if good else 'FAILED'}  "
-              f"({command} {' '.join(args_l)})")
+        print(f"{label}: {'OK' if good else 'FAILED'}  ({command} {' '.join(args_l)})")
         if not good:
             print(f"  fix: {fix}")
             ok = False
@@ -740,11 +603,14 @@ def cmd_check(args) -> None:
 
 
 def cmd_uninstall(args) -> None:
-    """Remove the ctools entry from the selected clients' configs."""
+    """Remove the ctools entry from the selected agents' configs."""
     removed = []
-    for target in _select_targets(args):
-        if target.unregister():
-            removed.append(target.label())
+    for label, host in _pick(args):
+        try:
+            if mcp_remove(host, "ctools") or strip_ctools(host):
+                removed.append(label)
+        except McpError as e:
+            print(f"{label}: {e}", file=sys.stderr)
     if removed:
         print("Removed ctools from: " + ", ".join(removed))
     else:
@@ -752,94 +618,60 @@ def cmd_uninstall(args) -> None:
 
 
 def cmd_print_config(args) -> None:
-    """Print the config snippet for a client (default: all four)."""
+    """Print the config snippet for each selected agent."""
     py = _portable(_best_python())
-    clients = ([args.client] if getattr(args, "client", None)
-               else ["pi", "claude", "opencode", "goose"])
-    builders = {"pi": _entry_split, "claude": _entry_split,
-                "opencode": _entry_opencode, "goose": _entry_goose}
-    containers = {"pi": "mcpServers", "claude": "mcpServers",
-                  "opencode": "mcp", "goose": "extensions"}
-    paths = {"pi": "~/.pi/agent/mcp.json", "claude": "~/.claude.json",
-             "opencode": "~/.config/opencode/opencode.json",
-             "goose": "~/.config/goose/config.yaml"}
-    for client in clients:
-        snippet = {containers[client]: {"ctools": builders[client](py)}}
-        print(f"# {client}:  {paths[client]}")
-        print(json.dumps(snippet, indent=2))
-        print("")
+    for label, host in _pick(args):
+        entry = host.entry_payload(py, ("-m", "ctools.ctools_mcp"))
+        node = {}
+        cur = node
+        for k in host.container:
+            cur[k] = {}
+            cur = cur[k]
+        cur["ctools"] = entry
+        print(f"# {label}:  {host.path}  (format: {host.fmt})")
+        if host.fmt in ("json", "jsonc"):
+            print(json.dumps(node, indent=2))
+        elif host.fmt == "toml":
+            from ctools.mcp_host import toml_dump
+            print(toml_dump(node))
+        else:
+            try:
+                import yaml
+                print(yaml.safe_dump(node, sort_keys=False, default_flow_style=False))
+            except ImportError:
+                print(json.dumps(node, indent=2))
+        print()
 
 
-def _add_client_flags(parser, with_project=False):
+def _add_agent_args(parser, with_project=False):
     if with_project:
         parser.add_argument("--project", action="store_true",
-                            help="pi: register in .pi/mcp.json in the current directory")
-    parser.add_argument("--pi", action="store_true", help="target pi")
-    parser.add_argument("--claude", action="store_true",
-                        help="target Claude Code (~/.claude.json)")
-    parser.add_argument("--opencode", action="store_true",
-                        help="target opencode (~/.config/opencode/opencode.json)")
-    parser.add_argument("--goose", action="store_true",
-                        help="target goose (~/.config/goose/config.yaml)")
+                            help="target pi's project-level .pi/mcp.json in the current directory")
+    parser.add_argument("agents", nargs="*",
+                        help="agent name(s) to target (e.g. pi, goose, opencode), or 'all'")
 
 
 def main():
-    import sys
     if len(sys.argv) > 1:
         cmd = sys.argv[1]
         rest = sys.argv[2:]
-        if cmd == "install":
+        if cmd in ("install", "check", "uninstall"):
             import argparse
-            parser = argparse.ArgumentParser(prog="ctools mcp install")
-            _add_client_flags(parser, with_project=True)
-            parser.add_argument("--all", action="store_true",
-                                help="all clients (pi, claude, opencode, goose)")
+            parser = argparse.ArgumentParser(prog=f"ctools mcp {cmd}")
+            _add_agent_args(parser, with_project=True)
             args = parser.parse_args(rest)
-            if getattr(args, "all", False):
-                args.pi = args.claude = args.opencode = args.goose = True
-            elif getattr(args, "project", False) and not any(
-                    getattr(args, f, False) for f in ("pi", "claude", "opencode", "goose")):
-                args.pi = True  # --project means "pi, in this project"
-            cmd_install(args)
-            return
-        if cmd == "check":
-            import argparse
-            parser = argparse.ArgumentParser(prog="ctools mcp check")
-            _add_client_flags(parser, with_project=True)
-            parser.add_argument("--all", action="store_true",
-                                help="all clients (pi, claude, opencode, goose)")
-            args = parser.parse_args(rest)
-            if getattr(args, "all", False):
-                args.pi = args.claude = args.opencode = args.goose = True
-            elif getattr(args, "project", False) and not any(
-                    getattr(args, f, False) for f in ("pi", "claude", "opencode", "goose")):
-                args.pi = True
-            cmd_check(args)
-            return
-        if cmd == "uninstall":
-            import argparse
-            parser = argparse.ArgumentParser(prog="ctools mcp uninstall")
-            _add_client_flags(parser, with_project=True)
-            parser.add_argument("--all", action="store_true",
-                                help="all clients (pi, claude, opencode, goose)")
-            args = parser.parse_args(rest)
-            if getattr(args, "all", False):
-                args.pi = args.claude = args.opencode = args.goose = True
-            cmd_uninstall(args)
+            {"install": cmd_install, "check": cmd_check, "uninstall": cmd_uninstall}[cmd](args)
             return
         if cmd == "print-config":
             import argparse
             parser = argparse.ArgumentParser(prog="ctools mcp print-config")
-            _add_client_flags(parser)
+            _add_agent_args(parser)
             args = parser.parse_args(rest)
-            chosen = [k for k in ("pi", "claude", "opencode", "goose")
-                      if getattr(args, k, False)]
-            args.client = chosen[0] if len(chosen) == 1 else None
             cmd_print_config(args)
             return
         print(f"Unknown subcommand: {cmd}", file=sys.stderr)
         print("Usage: ctools mcp [install | check | uninstall | print-config] "
-              "[--pi --claude --opencode --goose | --all]", file=sys.stderr)
+              "[<agent> ... | all] [--project]", file=sys.stderr)
         sys.exit(1)
     mcp.run(transport="stdio")
 

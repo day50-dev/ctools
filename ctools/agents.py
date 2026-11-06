@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 
 from ctools.paths import config_dir
+from ctools.mcp_host import McpHost
 
 
 # --- Domain model ---
@@ -322,6 +323,15 @@ class Agent:
     storage_format: str = ''      # 'json' | 'jsonl' | 'sqlite' -- descriptive only
     session_pattern: Optional[str] = None
     files_read: Optional[str] = None   # what we actually read, relative to base_path
+    # How to register an MCP host for this agent (ctools_mcp install/check/uninstall).
+    # None if the agent has no MCP client. Declared per-agent below; one place
+    # to look, derived by every mcp command, so adding an agent needs no list update.
+    mcp: Optional[McpHost] = None
+
+    def mcp_project_host(self) -> Optional[McpHost]:
+        """Optional project-scoped MCP host (defaults to None; Pi overrides
+        with ``<cwd>/.pi/mcp.json``)."""
+        return None
 
     def __init__(self, base_path=None):
         self.base_path = Path(base_path) if base_path is not None else self.default_base_path()
@@ -1032,6 +1042,8 @@ class ClaudeDesktopAgent(JsonAgent):
 
     name = 'claude'
     description = 'Claude Desktop'
+    mcp = McpHost(Path.home() / ".config/Claude/claude_desktop_config.json",
+                  "json", ("mcpServers",), "command_args")
     display_name = 'Claude'
     session_pattern = 'local-agent-mode-sessions/**/*.json'
     files_read = 'conversations/'
@@ -1080,6 +1092,7 @@ class ClaudeCodeAgent(JsonlAgent):
 
     name = 'claude-code'
     description = 'Claude Code CLI'
+    mcp = McpHost(Path.home() / ".claude.json", "json", ("mcpServers",), "command_args")
     display_name = 'Claude Code'
     session_pattern = 'projects/**/*.jsonl'
     files_read = 'projects/'
@@ -1325,6 +1338,7 @@ class CodexAgent(JsonlAgent):
 
     name = 'codex'
     description = 'OpenAI Codex CLI'
+    mcp = McpHost(Path.home() / ".codex/config.toml", "toml", ("mcp_servers",), "command_args")
     display_name = 'Codex'
     session_pattern = 'sessions/**/*.jsonl'
     files_read = 'sessions/'
@@ -1454,6 +1468,11 @@ class PiAgent(JsonlAgent):
     name = 'pi'
     description = 'Pi Coding Agent'
     display_name = 'Pi'
+    mcp = McpHost(Path.home() / ".pi/agent/mcp.json", "json", ("mcpServers",), "command_args")
+
+    def mcp_project_host(self) -> Optional[McpHost]:
+        return McpHost(Path.cwd() / ".pi" / "mcp.json",
+                       "json", ("mcpServers",), "command_args")
     session_pattern = 'sessions/**/*.jsonl'
     files_read = 'sessions/'
 
@@ -1747,6 +1766,8 @@ class OpencodeAgent(SqliteAgent):
 
     name = 'opencode'
     description = 'Opencode CLI'
+    mcp = McpHost(Path.home() / ".config/opencode/opencode.json",
+                  "json", ("mcp",), "type_command")
     display_name = 'Opencode'
     db_name = 'opencode.db'
     files_read = 'opencode.db'
@@ -2155,6 +2176,7 @@ class KiloAgent(OpencodeAgent):
 
     name = 'kilo'
     description = 'Kilo CLI'
+    mcp = McpHost(Path.home() / ".config/kilo/kilo.jsonc", "jsonc", ("mcp",), "type_command")
     display_name = 'Kilo'
     db_name = 'kilo.db'
     files_read = 'kilo.db'
@@ -2173,6 +2195,7 @@ class GooseAgent(SqliteAgent):
 
     name = 'goose'
     description = 'Goose AI agent'
+    mcp = McpHost(Path.home() / ".config/goose/config.yaml", "yaml", ("extensions",), "cmd_args")
     display_name = 'Goose'
     db_name = 'sessions/sessions.db'
     session_pattern = 'sessions/*.jsonl'
@@ -2377,6 +2400,7 @@ class HermesAgent(SqliteAgent):
 
     name = 'hermes'
     description = 'Hermes agent'
+    mcp = McpHost(Path.home() / ".hermes/config.yaml", "yaml", ("mcp_servers",), "command_args")
     display_name = 'Hermes'
     db_name = 'state.db'
     files_read = 'state.db'
@@ -2561,6 +2585,7 @@ class OpenclawAgent(SqliteAgent):
 
     name = 'openclaw'
     description = 'OpenClaw'
+    mcp = McpHost(Path.home() / ".openclaw/openclaw.json", "json", ("mcp", "servers"), "command_args")
     display_name = 'OpenClaw'
     storage_format = 'sqlite'
     db_name = 'openclaw-agent.sqlite'
@@ -2795,6 +2820,8 @@ class ClineAgent(Agent):
 
     name = 'cline'
     description = 'Cline'
+    mcp = McpHost(Path.home() / ".cline/data/settings/cline_mcp_settings.json",
+                  "json", ("mcpServers",), "command_args")
     display_name = 'Cline'
     storage_format = 'json'
     files_read = 'data/tasks/'
@@ -3119,6 +3146,7 @@ class FreebuffAgent(Agent):
 
     name = 'freebuff'
     description = 'Freebuff'
+    mcp = McpHost(Path.home() / ".config/freebuff/mcp.json", "json", ("mcpServers",), "command_args")
     display_name = 'Freebuff'
     storage_format = 'json'
     files_read = 'projects/'
