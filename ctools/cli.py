@@ -93,6 +93,13 @@ def find_session_in_agents(session_id: str) -> List[Tuple[str, str]]:
 REMOTE_PATH = 'export PATH="$HOME/.local/bin:$HOME/bin:$PATH" && '
 
 
+# ssh options appended to every remote `ssh` invocation (after `-T`, before
+# the port/target). Empty in normal use; the e2e tests point this at a temp
+# known_hosts + identity file so a throwaway local sshd can be reached without
+# touching the developer's `~/.ssh`.
+REMOTE_SSH_OPTIONS: List[str] = []
+
+
 @dataclass
 class Remote:
     """A remote host addressed as ``ssh://[user@]host[:port]/path``."""
@@ -112,7 +119,7 @@ class Remote:
         ``-T`` disables tty allocation so the remote command's stdout stays
         clean for capture.
         """
-        args = ["ssh", "-T"]
+        args = ["ssh", "-T"] + REMOTE_SSH_OPTIONS
         if self.port is not None:
             args += ["-p", str(self.port)]
         return args + [self.target, command]

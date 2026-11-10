@@ -1,11 +1,130 @@
 import json
+import os
+import re
+import shutil
+import signal
+import socket
 import sqlite3
 import subprocess
+import sys
+import time
 import pytest
 from pathlib import Path
 from ctools.testing import Runner
 from ctools.ccopy import app, import_conversation
 from ctools.lib import AGENTS
+
+
+@pytest.fixture(scope="session")
+def local_sshd(tmp_path_factory):
+    """A throwaway sshd on 127.0.0.1 whose remote $HOME is a seeded fake home.
+
+    Lets the real remote paths (ssh -T + tar pull, the ctools wire mode, the
+    storage fallback) be tested end to end without depending on a particular
+    machine: host key, user key, authorized_keys, and the remote $HOME are all
+    temp files. The remote $HOME carries one pi session plus a small set of
+    ctools entry-point shims (``python -m ctools``) so the wire-mode commands
+    ``ccopy --version``, ``ccat --raw`` and ``cdir -f json`` work there.
+    """
+    if shutil.which("sshd") is None:
+        pytest.skip("sshd binary not available")
+    if os.getuid() == 0:
+        pytest.skip("skip the local-sshd e2e as root (root ssh quirks)")
+
+    root = tmp_path_factory.mktemp("sshd")
+    sshd = "/usr/sbin/sshd" if os.path.exists("/usr/sbin/sshd") else shutil.which("sshd")
+    hostkey = root / "hostkey"
+    userkey = root / "id_ed25519"
+    authorized = root / "authorized_keys"
+    pidfile = root / "sshd.pid"
+
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(hostkey)], check=True)
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(userkey)], check=True)
+    authorized.write_text((userkey.with_suffix(".pub")).read_text())
+    os.chmod(userkey, 0o600)
+
+    # Fake remote $HOME: one pi session + ctools entry-point shims.
+    fakehome = root / "fakehome"
+    sid = "01a1b000-0000-4000-8000-000000000001"
+    sessdir = fakehome / ".pi" / "agent" / "sessions" / "--tmp-remote--"
+    sessdir.mkdir(parents=True)
+    lines = [
+        {"type": "session", "version": 3, "id": sid,
+         "timestamp": "2026-02-01T10:00:00.000Z", "cwd": "/tmp/remote"},
+        {"type": "message", "id": "m1", "parentId": "session",
+         "timestamp": "2026-02-01T10:00:01.000Z",
+         "message": {"role": "user", "content": "hello from the remote"}},
+        {"type": "message", "id": "m2", "parentId": "m1",
+         "timestamp": "2026-02-01T10:00:02.000Z",
+         "message": {"role": "assistant",
+                      "content": [{"type": "text", "text": "hello from the remote reply"}],
+                      "model": "test/model",
+                      "usage": {"input": 5, "output": 6, "totalTokens": 11}}},
+    ]
+    (sessdir / f"2026-02-01T10-00-00-000Z_{sid}.jsonl").write_text(
+        "\n".join(json.dumps(l) for l in lines) + "\n")
+
+    # Shims: the real ctools entry points (dispatch:main) for both the long
+    # verb form (`ctools dir ...`) and the short command name (`cdir ...`).
+    bindir = fakehome / ".local" / "bin"
+    bindir.mkdir(parents=True)
+    python = sys.executable
+    # Short command name -> `python -m ctools <verb>` (empty for `ctools` itself).
+    verb_for = {"ctools": "", "cdir": "dir", "ccat": "cat",
+                "cgrep": "grep", "ccopy": "copy", "cdu": "du"}
+    for name, verb in verb_for.items():
+        shim = bindir / name
+        body = "#!/bin/sh\nexec {python} -m ctools{verb} \"$@\"\n".format(
+            python=python, verb=(" " + verb) if verb else "")
+        shim.write_text(body)
+        os.chmod(shim, 0o755)
+
+    # Free port.
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    proc = subprocess.Popen(
+        [sshd, "-D",
+         "-o", "UsePAM=no",
+         "-o", "PasswordAuthentication=no",
+         "-o", "StrictModes=no",
+         "-o", "PermitRootLogin=no",
+         "-o", "HostKey=" + str(hostkey),
+         "-o", "ListenAddress=127.0.0.1",
+         "-o", "AuthorizedKeysFile=" + str(authorized),
+         "-o", "SetEnv HOME=" + str(fakehome),
+         "-o", "PrintMotd=no",
+         "-o", "Banner=none",
+         "-o", "PidFile=" + str(pidfile),
+         "-p", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True)
+
+    # Wait until the port accepts connections.
+    deadline = time.monotonic() + 10
+    up = False
+    while time.monotonic() < deadline:
+        try:
+            s = socket.create_connection(("127.0.0.1", port), timeout=0.25)
+            s.close()
+            up = True
+            break
+        except OSError:
+            time.sleep(0.1)
+    if not up:
+        proc.terminate()
+        pytest.fail("local sshd did not come up on port %d" % port)
+
+    yield {"host": "127.0.0.1", "port": port, "key": str(userkey),
+           "fakehome": str(fakehome), "sid": sid}
+
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        proc.wait(timeout=5)
+    except Exception:
+        proc.kill()
 
 
 @pytest.fixture(autouse=True)
@@ -938,3 +1057,136 @@ def test_live_ssh_transport():
     proc2 = subprocess.run(remote.ssh_command("exit 3"),
                            capture_output=True, text=True, timeout=15)
     assert proc2.returncode == 3
+
+
+# --- End-to-end remote copy over a local sshd (no external host required) ---
+
+SESSION_ID = "01a1b000-0000-4000-8000-000000000001"
+
+_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def _new_session_id(result) -> str:
+    """The id of the session ccopy just created (last UUID on stdout)."""
+    ids = _UUID_RE.findall(result.stdout or "")
+    assert ids, f"no new session id in stdout: {result.stdout!r}"
+    return ids[-1]
+
+
+@pytest.fixture
+def _remote_isolated_home(local_sshd, tmp_path, monkeypatch):
+    """Isolate everything a real remote path would otherwise touch:
+    every agent's local storage points at temp dirs, and the ssh client is
+    pointed at a temp known_hosts/identity so the developer's real
+    ``~/.ssh`` and storage are never read or written. The remote side is
+    unaffected (its $HOME is the fixture's fake home)."""
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_DATA_HOME", str(home / ".local" / "share"))
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.setenv("SSH_CONFIG_DIR", str(home / ".ssh"))
+    monkeypatch.setattr("ctools.cli.REMOTE_SSH_OPTIONS",
+                        ["-o", "BatchMode=yes", "-F", "/dev/null",
+                         "-o", "StrictHostKeyChecking=no",
+                         "-o", "UserKnownHostsFile=/dev/null",
+                         "-i", local_sshd["key"]])
+    for agent in AGENTS.values():
+        base = tmp_path / "agents" / agent.name
+        base.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(agent, "base_path", base)
+        # A copy backs up the destination's live storage before writing, so
+        # directory agents need their storage dir to exist (it does on a real
+        # machine where the agent is installed). DB agents leave storage_path
+        # alone (a .db path, not a dir).
+        if getattr(agent, "files_read", None):
+            agent.storage_path.mkdir(parents=True, exist_ok=True)
+    yield tmp_path
+
+
+@pytest.mark.live_ssh
+def test_remote_cdir_listing(local_sshd, _remote_isolated_home):
+    """cdir ssh://host:port/pi lists the remote pi session over one ssh."""
+    import ctools.cdir as cdir
+    result = runner.invoke(cdir.app,
+                           ["ssh://127.0.0.1:%d/pi" % local_sshd["port"]])
+    assert result.exit_code == 0, result.stderr
+    assert SESSION_ID in result.stdout
+    assert "hello from the remote" in result.stdout
+    assert "Read a session with:" in result.stdout
+
+
+@pytest.mark.live_ssh
+def test_remote_cdir_host_lists_installed(local_sshd, _remote_isolated_home):
+    """cdir ssh://host:port reports which agents the remote actually has."""
+    import ctools.cdir as cdir
+    result = runner.invoke(cdir.app,
+                           ["ssh://127.0.0.1:%d" % local_sshd["port"]])
+    assert result.exit_code == 0, result.stderr
+    assert "Found:" in result.stdout
+    assert "  pi" in result.stdout
+
+
+@pytest.mark.live_ssh
+def test_remote_ccat_wire(local_sshd, _remote_isolated_home):
+    """ccat's wire mode (remote `ccat --raw` over ssh) returns the full
+    conversation for a remote ref."""
+    import ctools.ccat as ccat
+    from ctools.cli import Remote
+    remote = Remote(host="127.0.0.1", port=local_sshd["port"])
+    doc = ccat._remote_common_doc(remote, AGENTS["pi"], SESSION_ID)
+    text = "\n".join(str(m.get("content") or "") for m in doc["context"])
+    assert "hello from the remote" in text
+    assert "hello from the remote reply" in text
+
+
+@pytest.mark.live_ssh
+def test_ccopy_remote_wire_copy(local_sshd, _remote_isolated_home):
+    """ccopy ssh://host:port/pi/<id> pi where the remote runs ctools: the
+    wire path (remote `ccat --raw` over one ssh) feeds a new local pi
+    session."""
+    import ctools.ccopy as ccopy
+    ref = "ssh://127.0.0.1:%d/pi/%s" % (local_sshd["port"], SESSION_ID)
+    result = runner.invoke(ccopy.app, [ref, "pi"])
+    assert result.exit_code == 0, result.stderr + result.stdout
+    new_id = _new_session_id(result)
+    dest = _remote_isolated_home / "agents" / "pi"
+    files = list(dest.glob("**/*.jsonl"))
+    assert files, "no local session file written"
+    agent = AGENTS["pi"]
+    agent.base_path = dest
+    joined = "\n".join(str(m.content or "") for m in agent.messages(new_id))
+    assert "hello from the remote" in joined
+    assert "hello from the remote reply" in joined
+
+
+@pytest.mark.live_ssh
+def test_ccopy_remote_pull(local_sshd, _remote_isolated_home, monkeypatch):
+    """The real remote pull path: when the remote has no ctools (probe
+    fails), ccopy pulls the agent's raw storage with tar over ssh and reads
+    it locally. The tar + local read run for real."""
+    import ctools.ccopy as ccopy
+    ref = "ssh://127.0.0.1:%d/pi/%s" % (local_sshd["port"], SESSION_ID)
+    # Force the 'remote has no ctools' branch; _pull (tar) + the local read
+    # still run for real.
+    monkeypatch.setattr(ccopy, "_remote_has_ctools", lambda remote: False)
+    pulled = []
+    real_pull = ccopy._pull
+
+    def _spy(remote, agent, dest_base):
+        pulled.append(dest_base)
+        return real_pull(remote, agent, dest_base)
+
+    monkeypatch.setattr(ccopy, "_pull", _spy)
+    result = runner.invoke(ccopy.app, [ref, "pi"])
+    assert pulled, "the tar pull path did not run"
+    assert result.exit_code == 0, result.stderr + result.stdout
+    new_id = _new_session_id(result)
+    dest = _remote_isolated_home / "agents" / "pi"
+    files = list(dest.glob("**/*.jsonl"))
+    assert files, "fallback did not write a local session file"
+    agent = AGENTS["pi"]
+    agent.base_path = dest
+    joined = "\n".join(str(m.content or "") for m in agent.messages(new_id))
+    assert "hello from the remote" in joined
+    assert "hello from the remote reply" in joined
