@@ -19,6 +19,8 @@ Usage:
     cdir opencode ~/day50   # Sessions from ~/day50 or anything under it
     cdir .                  # Cross-agent: every agent, sessions for this dir
     cdir claude/ -a         # Include subagent sessions (hidden by default)
+    cdir ssh://host         # Which agents are installed on a remote host
+    cdir ssh://host/pi      # That agent's sessions on the remote host
 """
 
 import argparse
@@ -358,7 +360,7 @@ def _resume_hint(agent_name: Optional[str]) -> None:
 def _print_sessions(sessions, agent_name, sort, reverse,
                     formatter=None, long_format=False, fields=None,
                     one_line=False, color=False, include_subagents=False,
-                    suppress=False):
+                    suppress=False, remote=None):
     """Print sessions in aligned columns with a header row. agent_name shown if provided.
 
     Subagent sessions (parent_id set) are hidden by default: you can't resume
@@ -433,6 +435,11 @@ def _print_sessions(sessions, agent_name, sort, reverse,
     else:
         print(f"\n  {len(top_level)} session(s)")
     if one_line or formatter:
+        return
+    if remote is not None:
+        # Can't resume a session that lives on another host; say what works.
+        print(f"\n  Read a session with: ccat {remote}/{agent_name}/<id>  "
+              f"(or ccopy {remote}/{agent_name}/<id> {agent_name}/ to pull it)")
         return
     _resume_hint(agent_name)
 
@@ -550,13 +557,17 @@ def _list_remote_agents(remote: Remote, formatter) -> None:
             print(f"  {name:<{w_name}}  {desc:<{w_desc}}  ~/{rel}")
 
 
-def _handle_remote_ref(ref: str, formatter) -> None:
+def _handle_remote_ref(ref: str, formatter, sort="time", reverse=False,
+                       fields=None, long_format=False, one_line=False,
+                       color=False, include_subagents=False,
+                       suppress=False) -> None:
     """Dispatch a `ssh://[user@]host[:port][/agent]` reference.
 
     `ssh://host` lists the agents installed on the host (the "what's there?"
-    check before a `ccopy ... ssh://host/agent`). A bare `ssh://host/agent` is
-    the same listing filtered to that agent. Deeper paths (`.../agent/session`)
-    are session refs -- ccat/ccopy's domain -- so cdir points there.
+    check before a `ccopy ... ssh://host/agent`). `ssh://host/agent` lists
+    that agent's sessions on the host, like the local listing. Deeper paths
+    (`.../agent/session`) are session refs -- ccat/ccopy's domain -- so cdir
+    points there.
     """
     remote, path = parse_remote_ref(ref)
     parts = [p for p in path.split("/") if p]
@@ -570,26 +581,108 @@ def _handle_remote_ref(ref: str, formatter) -> None:
             console.print(f"[red]Unknown agent: {agent_name}[/red]")
             console.print(f"[dim]Available agents: {', '.join(AGENTS)}[/dim]")
             raise SystemExit(1)
-        _list_remote_agent(remote, agent_name, formatter)
+        _list_remote_agent(remote, agent_name, formatter, sort, reverse,
+                           fields, long_format, one_line, color,
+                           include_subagents, suppress)
     else:
         _list_remote_agents(remote, formatter)
 
 
-def _list_remote_agent(remote: Remote, agent_name: str, formatter) -> None:
-    """`cdir ssh://host/agent` — is this one agent's storage present there?"""
-    installed = _remote_agents_installed(remote)
-    present = agent_name in installed
-    if formatter:
-        print(json.dumps({"name": agent_name, "installed": present,
-                          "path": f"~/{AGENTS[agent_name].storage_relative()}"},
-                         indent=2))
+def _iso_or_none(value):
+    """Parse a JSON datetime back out of a remote ctools listing."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _remote_sessions_via_ctools(remote: Remote, agent_name: str):
+    """Session list from a remote that runs ctools: one ssh, JSON on the wire.
+
+    The far side runs `cdir <agent> -f json -a` (subagents included; nesting
+    is decided here); the rows are rebuilt into Session objects so every
+    local display option (sort, fields, -a) applies to the listing. Returns
+    None on any hiccup -- the caller falls back to the storage pull.
+    """
+    import shlex
+    import subprocess
+    if shutil.which("ssh") is None:
+        return None
+    cmd = f"cdir {shlex.quote(agent_name)} -f json -a"
+    try:
+        proc = subprocess.run(remote.ctools_command(cmd),
+                              capture_output=True, text=True)
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        data = json.loads(proc.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, list):
+        return None
+    sessions = []
+    for d in data:
+        try:
+            sessions.append(Session(
+                id=d['id'],
+                name=d.get('name') or d['id'][:8],
+                ctime=_iso_or_none(d.get('ctime')),
+                mtime=_iso_or_none(d.get('mtime')),
+                size=d.get('size') or 0,
+                path=d.get('path'),
+                model=d.get('model'),
+                message_count=d.get('message_count'),
+                parent_id=d.get('parent_id'),
+            ))
+        except (KeyError, TypeError, AttributeError):
+            return None  # not the shape we expect: fall back to the pull
+    return sessions
+
+
+def _remote_sessions_pulled(remote: Remote, agent_name: str) -> List[Session]:
+    """Session list by pulling the agent's storage over ssh and reading it
+    locally -- the fallback when the far side has no usable ctools.
+
+    Same machinery ccopy uses when it must copy storage: the agent's home-
+    relative storage is tar-piped into a temp dir and read through a local
+    agent instance pointed at the mirror.
+    """
+    import tempfile
+    from pathlib import Path
+    from ctools.ccopy import _local_agent, _pull
+    agent = AGENTS[agent_name]
+    with tempfile.TemporaryDirectory() as tmp:
+        _pull(remote, agent, Path(tmp))
+        return _local_agent(agent, Path(tmp)).sessions()
+
+
+def _list_remote_agent(remote: Remote, agent_name: str, formatter,
+                       sort="time", reverse=False, fields=None,
+                       long_format=False, one_line=False, color=False,
+                       include_subagents=False, suppress=False) -> None:
+    """`cdir ssh://host/agent` — list the agent's sessions on the host.
+
+    The listing matches the local one (same columns, sort, subagent
+    nesting); the fast path asks the remote's ctools for JSON over one ssh,
+    and hosts without a usable ctools fall back to pulling the agent's
+    storage and reading it here.
+    """
+    if agent_name not in _remote_agents_installed(remote):
+        rel = AGENTS[agent_name].storage_relative()
+        print(f"{remote.target}: {agent_name} is NOT installed (no ~/{rel})")
         return
-    if present:
-        print(f"{remote.target}: {agent_name} is installed "
-              f"(~/{AGENTS[agent_name].storage_relative()})")
-    else:
-        print(f"{remote.target}: {agent_name} is NOT installed "
-              f"(no ~/{AGENTS[agent_name].storage_relative()})")
+    sessions = _remote_sessions_via_ctools(remote, agent_name)
+    if sessions is None:
+        sessions = _remote_sessions_pulled(remote, agent_name)
+    _print_sessions(sessions, agent_name, sort, reverse, formatter=formatter,
+                    long_format=long_format, fields=fields,
+                    one_line=one_line, color=color,
+                    include_subagents=include_subagents, suppress=suppress,
+                    remote=remote)
 
 
 def _list_all_sessions(sort, reverse, formatter, fields,
@@ -1006,7 +1099,11 @@ def main(argv=None) -> int:
 
     for ref in remotes:
         _sep()
-        _handle_remote_ref(ref, formatter)
+        _handle_remote_ref(ref, formatter, sort=sort, reverse=reverse,
+                           fields=fields, long_format=long_format,
+                           one_line=one_line, color=use_color,
+                           include_subagents=include_subagents,
+                           suppress=suppress)
 
     agent_globs = [p for p in local if _is_agent_glob(p)]
     exact = [p for p in local if not _is_agent_glob(p) and _is_exact(p)]

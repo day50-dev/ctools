@@ -2102,6 +2102,10 @@ class OpencodeAgent(SqliteAgent):
         now_ms = int(time.time() * 1000)
         first_user = next((m.content for m in messages if m.role == 'user'), '')
         cwd = self._resolve_cwd(cwd)
+        if not self.db_path.exists():
+            # sqlite3.connect would happily create an empty db; ctools must
+            # never fabricate an agent's storage.
+            raise AgentError(f"{self.name}: no database at {self.db_path}")
         try:
             conn = sqlite3.connect(str(self.db_path))
         except sqlite3.Error as exc:

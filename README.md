@@ -130,14 +130,15 @@ uv tool install --editable ".[mcp]"
 `ctools` has one verb per job. Each verb is also installed as its own short
 command, named `c` plus the verb, so `ctools grep` and `cgrep` are the same
 program with the same flags. Use whichever you prefer: the long form is easier
-to discover, and the short form is quicker to type.
+to discover, and the short form is quicker to type. A few verbs carry a second
+shorthand too — `ctools ls` is `ctools dir`.
 
 ```text
 $ ctools --help
 usage: ctools <command> [args...]
 
 query:
-  dir       list agents and sessions           (cdir)
+  dir (ls)   list agents and sessions           (cdir)
   grep      search session content             (cgrep)
   cat       print a session                    (ccat)
   du        context usage per session          (cdu)
@@ -168,10 +169,13 @@ throughout.
 
 ```bash
 ctools dir                      # every known agent, and whether it's installed
+ctools ls                       # same thing (ls is an alias for dir)
 ctools dir opencode             # that agent's sessions, and the command that resumes one
 ctools dir -l opencode          # with modified time, size, message count, path
 ctools dir .                    # sessions that ran in this directory, across all agents
 ctools dir opencode/ses_abc     # one session's row
+ctools dir ssh://me@box         # which agents are installed on another machine
+ctools dir ssh://me@box/pi      # that agent's sessions on that machine
 ```
 
 ### Find a session
@@ -193,6 +197,7 @@ ctools grep --hosts "mcp config"            # also the hosts in ctools.toml
 ```bash
 ctools cat opencode/ses_abc           # JSON list of {role, content}
 ctools cat --text opencode/ses_abc    # a markdown transcript (**role**:/content)
+ctools cat 01a1bab5-e63f-707f-...     # bare id: found across installed agents
 ctools cat ssh://me@box/pi/<id>       # a session on another machine
 ```
 

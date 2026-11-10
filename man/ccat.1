@@ -76,6 +76,18 @@ A session to print, as
 .IR opencode/ses_abc123 ).
 Give as many as you like; they print in order, separated by a blank line.
 .TP
+.I session_id
+A bare session id, with or without the
+.IR agent /
+prefix omitted. Ids are UUIDs, so
+.B ccat
+searches every installed agent, announces
+.BI found\ agent/id
+on stderr (stdout stays pipeable), and proceeds. A unique prefix is enough.
+If the id matches more than one agent,
+.B ccat
+lists the candidates and asks you to name one.
+.TP
 .I ssh://[user@]host[:port]/agent/session_id
 A session on a remote host.
 .B ccat

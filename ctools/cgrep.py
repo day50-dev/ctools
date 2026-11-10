@@ -510,6 +510,51 @@ def _search_hosts(argv: List[str], dir_filters: Optional[List[str]] = None) -> N
             console.print(f"[dim]@{base.name}: no matches[/dim]")
 
 
+def _hoist_options(argv: Sequence[str],
+                   parser: argparse.ArgumentParser) -> List[str]:
+    """Move options (and their values) ahead of the free positionals.
+
+    This argparse parses a flag that lands *between* the two positionals --
+    ``cgrep PATTERN --system AGENT/S`` -- as an unrecognized argument, because
+    the ``nargs='?'`` pattern + ``nargs='*'`` paths pair can't be re-opened
+    once an option intervenes. Hoisting every option to the front is a no-op
+    for the canonical order (flags first, positionals last) and only reshuffles
+    the interspersed case, so behavior is unchanged where it already worked.
+    Option arity comes straight from the parser, so ``--role ROLE`` keeps its
+    value glued to it.
+    """
+    arity: dict = {}
+    for action in parser._actions:
+        for opt in action.option_strings:
+            arity[opt] = (0 if action.nargs == 0
+                          else 1 if action.nargs is None
+                          else action.nargs)
+    hoisted: List[str] = []
+    positionals: List[str] = []
+    i, n = 0, len(argv)
+    while i < n:
+        tok = argv[i]
+        if tok == "--":
+            positionals.extend(argv[i + 1:])
+            break
+        if tok in arity:
+            hoisted.append(tok)
+            i += 1
+            for _ in range(arity[tok]):
+                if i < n:
+                    hoisted.append(argv[i])
+                    i += 1
+        elif tok.startswith("--"):
+            # Unknown long option (a pattern named "--weird"): pass it through
+            # as a positional, taking no value.
+            positionals.append(tok)
+            i += 1
+        else:
+            positionals.append(tok)
+            i += 1
+    return hoisted + positionals
+
+
 def main(argv=None) -> int:
     install_clean_sigint()
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -517,7 +562,8 @@ def main(argv=None) -> int:
         from ctools import __version__
         print(f"cgrep (ctxttools) {__version__}")
         return 0
-    ns = build_parser().parse_args(argv)
+    parser = build_parser()
+    ns = parser.parse_args(_hoist_options(argv, parser))
 
     # Gather patterns from the positional, -e, and -f (one per line). This
     # mirrors grep: a pattern can come from the command line, from -e

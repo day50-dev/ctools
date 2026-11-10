@@ -364,12 +364,41 @@ def test_cli_remote_lists_agents(monkeypatch):
 
 
 def test_cli_remote_single_agent_present(monkeypatch):
+    """`cdir ssh://host/agent` lists the agent's sessions on the host."""
     import ctools.cdir as cdir
+    from datetime import datetime
     monkeypatch.setattr(cdir, "_remote_agents_installed",
                         lambda remote: ["opencode"])
+    sessions = [Session(id="ses_remote", name="Remote conversation",
+                        ctime=datetime(2026, 1, 1), mtime=datetime(2026, 1, 2),
+                        size=1234)]
+    monkeypatch.setattr(cdir, "_remote_sessions_via_ctools",
+                        lambda remote, agent: sessions)
     result = runner.invoke(app, ["ssh://_lorenz/opencode"])
     assert result.exit_code == 0
-    assert "opencode is installed" in result.stdout
+    assert "Remote conversation" in result.stdout
+    assert "ses_remote" in result.stdout
+    # A remote listing can't be resumed locally; it points at ccat instead.
+    assert "ccat ssh://_lorenz/opencode/<id>" in result.stdout
+
+
+def test_cli_remote_single_agent_falls_back_to_pull(monkeypatch):
+    """Without a usable ctools on the far side, the storage is pulled and
+    read locally."""
+    import ctools.cdir as cdir
+    from datetime import datetime
+    monkeypatch.setattr(cdir, "_remote_agents_installed",
+                        lambda remote: ["opencode"])
+    monkeypatch.setattr(cdir, "_remote_sessions_via_ctools",
+                        lambda remote, agent: None)  # fast path unavailable
+    pulled = [Session(id="ses_pulled", name="Pulled conversation",
+                      ctime=datetime(2026, 1, 1), mtime=datetime(2026, 1, 2),
+                      size=99)]
+    monkeypatch.setattr(cdir, "_remote_sessions_pulled",
+                        lambda remote, agent: pulled)
+    result = runner.invoke(app, ["ssh://_lorenz/opencode"])
+    assert result.exit_code == 0
+    assert "Pulled conversation" in result.stdout
 
 
 def test_cli_remote_single_agent_absent(monkeypatch):

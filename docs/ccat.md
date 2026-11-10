@@ -9,6 +9,7 @@ The examples use `ccat`; `ctools cat …` works anywhere they do.
 
 ```sh
 ccat opencode/ses_abc123                 # print one conversation as JSON
+ccat 01a1bab5-e63f-707f-b372-c6f10b0a384e  # bare id: found in any agent
 ccat opencode/ses_a opencode/ses_b       # several, each a JSON array
 ccat --text opencode/ses_abc            # a markdown transcript (**role**:/content)
 ccat --raw opencode/ses_abc > session.json   # the lossless envelope
@@ -98,6 +99,15 @@ $ cgrep -l llcat opencode | xargs ccat --text     # or as a markdown transcript
 A reference that can't be read (a bad id, an uninstalled agent) is reported and
 skipped; the rest still print. `ccat` exits non-zero only when **no** session
 could be printed, the same way `cat` does.
+
+## Just an id
+
+Session ids are UUIDs, so they are effectively unique without the `agent/`
+prefix: `ccat 01a1bab5-e63f-707f-b372-c6f10b0a384e` searches every installed
+agent, prints `found pi/01a1bab5-…` on stderr (stdout stays pipeable), and
+proceeds. A unique prefix is enough (`ccat 01a1bab5`). If the id or prefix
+matches more than one agent, `ccat` lists the candidates and asks you to
+name one instead of guessing.
 
 ## Across hosts
 

@@ -29,6 +29,9 @@ VERBS = {
     "mcp":     ("ctools.ctools_mcp:main", "ctools-mcp", "run the MCP server"),
 }
 
+# Shorthand spellings: `ctools ls` is exactly `ctools dir`.
+ALIASES = {"ls": "dir"}
+
 GROUPS = (
     ("query", ("dir", "grep", "cat", "du")),
     ("transform", ("copy", "extract", "connect", "rm", "recover")),
@@ -37,11 +40,13 @@ GROUPS = (
 
 
 def usage() -> str:
+    alias_of = {verb: alias for alias, verb in ALIASES.items()}
     lines = ["usage: ctools <command> [args...]", ""]
     for title, verbs in GROUPS:
         lines.append(f"{title}:")
         for verb in verbs:
-            lines.append(f"  {verb:<9} {VERBS[verb][2]:<34} ({VERBS[verb][1]})")
+            name = verb + (f" ({alias_of[verb]})" if verb in alias_of else "")
+            lines.append(f"  {name:<9} {VERBS[verb][2]:<34} ({VERBS[verb][1]})")
         lines.append("")
     lines.append("Run 'ctools <command> --help' for a command's options.")
     return "\n".join(lines)
@@ -78,14 +83,16 @@ def main() -> None:
     if argv[0] == "--version":
         print(f"ctools (ctxttools) {__version__}")
         sys.exit(0)
-    verb, rest = argv[0], argv[1:]
+    verb_token = argv[0]
+    verb = ALIASES.get(verb_token, verb_token)
+    rest = argv[1:]
     if verb not in VERBS:
-        print(f"ctools: unknown command '{verb}'\n\n{usage()}", file=sys.stderr)
+        print(f"ctools: unknown command '{verb_token}'\n\n{usage()}", file=sys.stderr)
         sys.exit(2)
     entry, legacy, _ = VERBS[verb]
     module_name, attr = entry.split(":")
     fn = getattr(importlib.import_module(module_name), attr)
-    prog = f"ctools {verb}"
+    prog = f"ctools {verb_token}"
     # The verb reads sys.argv exactly as its own console script would.
     sys.argv = [prog] + rest
     with _prog_as(legacy, prog):

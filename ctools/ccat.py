@@ -40,6 +40,7 @@ from rich.text import Text
 from ctools.agents import REGISTRY as AGENTS, SessionNotFound, get_agent
 from ctools.lib import install_clean_sigint
 from ctools.cli import (handle_version, parse_ref, parse_remote_ref, reporting,
+                        find_session_in_agents,
                         version_option)
 from ctools.ccopy import (RemoteWireError, _local_agent, _pull, _remote_common_doc,
                           _remote_has_ctools)
@@ -47,6 +48,7 @@ from ctools.ccopy import (RemoteWireError, _local_agent, _pull, _remote_common_d
 __all__ = ['app']
 
 console = Console()
+_err_console = Console(stderr=True)
 
 # Role -> (label, rich style). A short left margin so the transcript reads
 # top-to-bottom; the label is dimmed and the text is the real content.
@@ -154,6 +156,22 @@ def _fetch(ref: str) -> Tuple[str, List[dict], List[dict], Optional[dict], List[
     """
     remote, local_ref = parse_remote_ref(ref)
     name, session_id = parse_ref(local_ref)
+    if not session_id and remote is None and get_agent(name) is None:
+        # A bare id: `ccat <id>`. Ids are UUIDs, so search every installed
+        # agent instead of demanding the `agent/` prefix.
+        candidates = find_session_in_agents(name)
+        if len(candidates) == 1:
+            name, session_id = candidates[0]
+            _err_console.print(f"[dim]found {name}/{session_id}[/dim]")
+        elif len(candidates) > 1:
+            listed = ", ".join(f"{a}/{i}" for a, i in candidates)
+            return (ref, [], [], None, [],
+                    f'session {name} is in multiple agents: {listed} '
+                    f'(name one with agent/{name})')
+        elif '-' in name and len(name) >= 16:
+            # UUID-shaped token, found nowhere: say so, not "unknown agent".
+            return (ref, [], [], None, [],
+                    f'no session {name} in any installed agent')
     if not session_id:
         return ref, [], [], None, [], f'no session ID in {ref} (expected agent/session_id)'
     agent = get_agent(name)
@@ -243,6 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("refs", nargs="*",
                         help="One or more sessions to print (agent/session_id, "
+                             "a bare session id — found in any installed agent, "
                              "or ssh://[user@]host[:port]/agent/session_id)")
     parser.add_argument("-t", "--text", action="store_true", dest="text_out",
                         help=("Print a markdown transcript (each message as "

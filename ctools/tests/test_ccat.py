@@ -209,6 +209,46 @@ def test_ccat_unknown_agent(tmp_path):
     assert "unknown agent" in result.stdout
 
 
+def test_ccat_bare_id_found_in_one_agent(tmp_path):
+    """A bare session id (no agent/ prefix) is located across agents."""
+    sid = "01a1bab5-e63f-707f-b372-c6f10b0a384e"
+    _make_opencode_conv_db(tmp_path, sid, DEFAULT_CONV)
+    result = _run_ccat(tmp_path, [sid])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert data[0]["content"] == "Write a fibonacci function"
+    # The resolution is announced on stderr so stdout stays pipeable.
+    assert f"found opencode/{sid}" in result.stderr
+
+
+def test_ccat_bare_id_prefix_match(tmp_path):
+    """A unique id prefix is enough: ccat 01a1bab5 finds the session."""
+    sid = "01a1bab5-e63f-707f-b372-c6f10b0a384e"
+    _make_opencode_conv_db(tmp_path, sid, DEFAULT_CONV)
+    result = _run_ccat(tmp_path, ["01a1bab5"])
+    assert result.exit_code == 0
+    assert "fibonacci" in result.stdout
+
+
+def test_ccat_bare_id_ambiguous(tmp_path, monkeypatch):
+    """Found in several agents: list the candidates, don't guess."""
+    import ctools.ccat as ccat
+    monkeypatch.setattr(ccat, "find_session_in_agents",
+                        lambda sid: [("opencode", sid), ("claude-code", sid)])
+    result = _run_ccat(tmp_path, ["01a1bab5-e63f-707f-b372-c6f10b0a384e"])
+    assert result.exit_code == 1
+    assert "multiple agents" in result.stdout
+    assert "opencode/01a1bab5" in result.stdout
+
+
+def test_ccat_bare_id_nowhere(tmp_path):
+    """A UUID-shaped id no agent has: say that, not 'unknown agent'."""
+    result = _run_ccat(tmp_path, ["0f0f0f0f-1111-2222-3333-444444444444"])
+    assert result.exit_code == 1
+    assert ("no session 0f0f0f0f-1111-2222-3333-444444444444 "
+            "in any installed agent") in result.stdout
+
+
 def test_ccat_not_installed(tmp_path):
     """An agent whose storage is absent is reported as not installed."""
     # Point opencode at a path that does not exist.

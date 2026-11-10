@@ -59,6 +59,34 @@ def parse_ref(ref: str) -> Tuple[str, Optional[str]]:
     return parts[0], (parts[1] if len(parts) > 1 else None)
 
 
+def find_session_in_agents(session_id: str) -> List[Tuple[str, str]]:
+    """``(agent, full id)`` pairs for installed agents holding `session_id`.
+
+    Session ids are UUIDs -- long enough that a bare id is effectively unique
+    -- so a verb can accept ``ccat <id>`` and find the session without the
+    ``agent/`` prefix. A token that is a prefix of an id counts as a match
+    (the full id comes back, so the caller can read it); the caller decides
+    what multiple hits mean. Agents that fail to list are skipped rather
+    than failing the search.
+    """
+    from ctools.agents import REGISTRY
+    hits: List[Tuple[str, str]] = []
+    for name, agent in REGISTRY.items():
+        try:
+            if not agent.exists():
+                continue
+            ids = [s.id for s in agent.sessions()]
+        except Exception:
+            continue  # a broken agent shouldn't hide a hit in another one
+        if session_id in ids:
+            hits.append((name, session_id))
+        else:
+            for full in ids:
+                if full.startswith(session_id):
+                    hits.append((name, full))
+    return hits
+
+
 # A non-interactive ssh session has a minimal PATH that leaves out the user
 # bin dirs where ctools is installed (uv tool / pipx / pip --user ->
 # ~/.local/bin). Remote ctools commands are prefixed with this so they're found.

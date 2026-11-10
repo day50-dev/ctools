@@ -118,6 +118,7 @@ class JsonFormatter(OutputFormatter):
                 'path': s.path,
                 'model': s.model,
                 'message_count': s.message_count,
+                'parent_id': s.parent_id,
             })
         return json.dumps(data, indent=2)
     

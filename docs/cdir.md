@@ -318,13 +318,15 @@ Not Found:
 
 ## Remote hosts
 
-A reference can point at another host: `ssh://[user@]host[:port][/agent]`. This
-answers the question *what is on that machine?* before you `ccopy` from or to
-it. Only the host (and optionally one agent) is understood here — `cdir` never
-lists a remote session's *contents* (that is `ccat`'s job over the same
-transport), and it runs nothing ctools-related on the far side: a single ssh
-round trip `test -e`'s each agent's default install location against the
-remote's `$HOME`.
+A reference can point at another host: `ssh://[user@]host[:port][/agent]`.
+`ssh://host` answers *what is on that machine?* (which agents are installed),
+and `ssh://host/agent` lists that agent's sessions on the host — the same
+columns, sorting, and `-a` subagent nesting as the local listing. `cdir`
+never lists a remote session's *contents* (that is `ccat`'s job over the
+same transport). The listing takes the fast path when the far side runs
+ctools — one ssh, `cdir <agent> -f json` on the wire — and otherwise falls
+back to pulling the agent's storage over ssh+tar and reading it locally, so
+a bare host needs only `sshd` and `tar`, not ctools.
 
 ```sh
 $ cdir ssh://_lorenz          # which agents are installed there
@@ -337,8 +339,12 @@ Not Found:
   pi           Pi Coding Agent   ~/.pi/agent/sessions
   ...
 
-$ cdir ssh://_lorenz/pi       # just one agent
-_lorenz: pi is NOT installed (no ~/.pi/agent/sessions)
+$ cdir ssh://_lorenz/pi       # that agent's sessions on the host
+  id        name                    modified           ...
+  01a1b...  Refactor the parser     2026-02-01 10:00   ...
+
+  Read a session with: ccat ssh://_lorenz/pi/<id>
+  (or ccopy ssh://_lorenz/pi/<id> pi/ to pull it)
 
 $ cdir ssh://_lorenz -f json  # machine-readable
 [{"name": "opencode", "installed": true}, ...]
@@ -346,10 +352,12 @@ $ cdir ssh://_lorenz -f json  # machine-readable
 
 - `ssh://host` lists every agent, Found/Not Found, mirroring the local
   `cdir` (no path).
-- `ssh://host/agent` reports whether that one agent's storage is present.
+- `ssh://host/agent` lists that agent's sessions on the host; you can't
+  resume one from here, so the footer points at `ccat`/`ccopy` instead of
+  the local resume hint.
 - `ssh://host/agent/session_id` is a *session* reference — `cdir` says so and
   defers to `ccat`/`ccopy`, which is where remote sessions are read or moved.
 - An unknown agent name (`ssh://host/foobar`) is an error, same as locally.
-- This pairs with `ccopy ... ssh://host/agent`: if the probe reports the agent
-  is NOT installed, `ccopy` tells you the same thing up front instead of
-  failing with a raw tar error.
+- This pairs with `ccopy ... ssh://host/agent`: if the agent is NOT
+  installed, `ccopy` tells you the same thing up front instead of failing
+  with a raw tar error.

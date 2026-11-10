@@ -191,6 +191,9 @@ def _opencode_export_readable(agent, session_id):
 
 
 @pytest.mark.skipif(not _which("opencode"), reason="opencode CLI not installed")
+@pytest.mark.skipif(
+    not os.path.exists(os.path.expanduser("~/.local/share/opencode/opencode.db")),
+    reason="no real opencode db to oracle against (opencode has not run here)")
 def test_opencode_from_common_live_oracle(tmp_path):
     """The written session is re-readable by the real opencode tool (oracle).
 

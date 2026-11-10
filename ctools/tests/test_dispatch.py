@@ -57,6 +57,19 @@ def test_verb_help_names_the_dispatched_form(monkeypatch, capsys):
     assert capsys.readouterr().out.startswith("usage: ctools dir ")
 
 
+def test_ls_alias_routes_to_dir(monkeypatch, capsys):
+    """`ctools ls` is `ctools dir`, and help names what the user typed."""
+    assert dispatch.ALIASES["ls"] == "dir"
+    assert _run(monkeypatch, "ls", "--help") == 0
+    assert capsys.readouterr().out.startswith("usage: ctools ls ")
+
+
+def test_usage_shows_the_alias(monkeypatch, capsys):
+    assert _run(monkeypatch) == 0
+    out = capsys.readouterr().out
+    assert "dir (ls)" in out
+
+
 def test_verb_errors_name_the_dispatched_form(monkeypatch, capsys):
     assert _run(monkeypatch, "grep", "--no-such-flag") == 2
     assert "ctools grep: error:" in capsys.readouterr().err
