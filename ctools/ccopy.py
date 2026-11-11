@@ -17,7 +17,17 @@ Usage:
     ccopy opencode/ses_abc ssh://chris@remote/codex   # local -> new session on a remote host
     ccopy opencode/ses_abc ssh://chris@remote/        # same agent (opencode) on the remote
     ccopy ssh://chris@remote/opencode/ses_abc codex   # pull a remote conversation
+    ccopy -i opencode/ses_abc codex                   # cp-style flags: ask first (see below)
     ccopy --export-json opencode/ses_abc | ccopy --import-json codex   # raw wire format
+
+Like `cp`, ccopy takes the familiar one-letter flags, pointed at sessions
+instead of files:
+    -i  interactive: ask before copying
+    -n  no-clobber: skip when the destination already holds a copy of this session
+    -r  recursive: also copy the session's subagent sessions
+    -t  target directory: seed the copy for DIR (same as --cwd)
+    -u  update: copy only when the source is newer than the destination's copy
+    -v  verbose
 """
 
 import json
@@ -491,6 +501,199 @@ def _remote_destination(remote: Remote, dest: Agent, records: List[dict],
     return new_id
 
 
+# --- cp(1) flags ---
+#
+# "Does the destination already hold a copy of this session?" is what -n
+# (no-clobber) and -u (update) have to answer, and a copy is not marked as
+# one: it is a new session carrying the source's text. So the evidence is the
+# transcript itself -- a copy's messages are the source's, in order, possibly
+# followed by the import notice (cross-agent copies get one, same-agent
+# copies do not) and by whatever the session said since.
+
+def _session_mtime(agent: Agent, session_id: str) -> Optional[float]:
+    """A session's modified time as a sortable float; None when unknown."""
+    try:
+        s = agent.session(session_id)
+    except AgentError:
+        return None
+    if s is None or getattr(s, "mtime", None) is None:
+        return None
+    try:
+        return s.mtime.timestamp()
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _transcript(agent: Agent, session_id: str):
+    """The ``(role, text)`` spine identifying a session's content, or None.
+
+    A trailing import notice is dropped: it marks a copy, so keeping it would
+    make a copy's transcript differ from the source it was copied from.
+    """
+    try:
+        messages = agent.messages(session_id)
+    except Exception:
+        return None
+    spine = [(m.role, str(m.content or "")) for m in messages]
+    while spine and Agent.IMPORT_NOTICE_TAG in spine[-1][1]:
+        spine.pop()
+    return tuple(spine) or None
+
+
+def _find_existing_copy(destination: Agent, source: Agent,
+                        source_id: Optional[str]) -> Optional[str]:
+    """The newest destination session carrying `source_id`'s conversation.
+
+    A copy's transcript *is* the source's, so that is the comparison; the
+    source session itself is excluded when source and destination are the
+    same agent. Only top-level sessions count: copies are created as their
+    own sessions, never inside another's tree. A None source id (a file or
+    stdin source) names no session to match, so it can never be a copy.
+    """
+    if not source_id:
+        return None
+    spine = _transcript(source, source_id)
+    if not spine:
+        return None
+    same_store = destination is source
+    best: Optional[str] = None
+    best_key = -1.0
+    for s in destination.sessions():
+        if getattr(s, "parent_id", None):
+            continue
+        if same_store and s.id == source_id:
+            continue
+        mine = _transcript(destination, s.id)
+        if mine is None or mine[:len(spine)] != spine:
+            continue
+        key = _session_mtime(destination, s.id)
+        if key is not None and key > best_key:
+            best_key, best = key, s.id
+    return best
+
+
+def _clobber_check(destination: Agent, source: Agent, source_id: str,
+                   src_desc: str, dst_ref: str,
+                   dst_remote: Optional[Remote],
+                   no_clobber: bool, update: bool) -> Optional[str]:
+    """The cp(1) -n/-u guard for one source session.
+
+    Returns a skip note (the caller prints it and does not copy) when the
+    destination already holds a copy of this source and the flags say not to
+    add another; None means "copy it". -u refreshes only when the source is
+    newer than the copy, cp(1)-style; with no existing copy it always copies.
+    """
+    if dst_remote is not None or not (no_clobber or update):
+        return None
+    existing = _find_existing_copy(destination, source, source_id)
+    if existing is None:
+        return None
+    where = f"{dst_ref}/{existing}"
+    if no_clobber:
+        return (f"not overwriting: {where} already holds a copy of {src_desc} "
+                f"(-n skips it)")
+    src_mtime = _session_mtime(source, source_id)
+    dst_mtime = _session_mtime(destination, existing)
+    if not (src_mtime is not None and dst_mtime is not None
+            and src_mtime > dst_mtime):
+        return f"skipping: {where} is not older than {src_desc} (-u copies only newer sources)"
+    return None
+
+
+def _child_ids(source: Agent, session_id: str,
+               src_remote: Optional[Remote] = None) -> List[str]:
+    """The session's subagent session ids (cp -r), local or remote."""
+    if src_remote is None:
+        try:
+            sessions = source.sessions()
+        except AgentError:
+            return []
+        return [s.id for s in sessions if s.parent_id == session_id]
+    # Remote: the far side's listing first (one ssh), else the pulled storage.
+    from ctools import cdir  # lazy: cdir imports ctools.resume, which imports here
+    if _remote_has_ctools(src_remote):
+        remote_sessions = cdir._remote_sessions_via_ctools(src_remote, source.name)
+        if remote_sessions is not None:
+            return [s.id for s in remote_sessions if s.parent_id == session_id]
+    with tempfile.TemporaryDirectory() as tmp:
+        _pull(src_remote, source, Path(tmp))
+        probe = _local_agent(source, Path(tmp))
+        return [s.id for s in probe.sessions() if s.parent_id == session_id]
+
+
+def _fetch_common_doc(src_remote: Optional[Remote], src_agent: Agent,
+                      src_id: str) -> Optional[dict]:
+    """The common envelope for one source session, local or remote.
+
+    Remote: first the wire (the far side runs `ccat --raw AGENT/SESSION`),
+    then the storage pull. None when there is no such conversation.
+    """
+    if src_remote is None:
+        try:
+            return export_common(src_agent, src_id)
+        except SessionNotFound:
+            return None
+    doc = None
+    if _remote_has_ctools(src_remote):
+        try:
+            doc = _remote_common_doc(src_remote, src_agent, src_id)
+        except RemoteWireError as e:
+            console.print(f"[red]{e}[/red]")
+            raise SystemExit(1)
+    if doc is None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _pull(src_remote, src_agent, Path(tmp))
+            probe = _local_agent(src_agent, Path(tmp))
+            try:
+                doc = export_common(probe, src_id)
+            except SessionNotFound:
+                doc = None
+    return doc
+
+
+def _confirm(question: str) -> bool:
+    """Ask y/N (cp -i). A non-tty has no human to ask: proceed, and say so."""
+    if not (sys.stdin.isatty() or sys.stdout.isatty()):
+        err_console.print("[dim]no tty to confirm on; proceeding[/dim]")
+        return True
+    try:
+        answer = input(question)
+    except EOFError:
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
+def _write_copy(destination: Agent, dst_remote: Optional[Remote], dst_ref: str,
+                doc: dict, dest_cwd: Optional[str], notice: bool
+                ) -> Tuple[str, Optional[str]]:
+    """Create the destination session from `doc`; return (new id, backup path).
+
+    Locally the write is guarded the same way as always (snapshot -> write ->
+    verify/restore); on a remote the write happens on the other host, so
+    there is no local storage to protect.
+    """
+    if dst_remote is None:
+        if dest_cwd is not None:
+            doc['cwd'] = dest_cwd
+        guard = guard_write(destination, note="ccopy")
+        try:
+            new_id = import_common(destination, doc, notice=notice)
+        except BaseException:
+            guard.rollback()
+            raise
+        try:
+            guard.finish()
+        except BackupError as e:
+            console.print(f"[red]{e}[/red]")
+            console.print(f"[dim]Your {dst_ref} storage was restored from the "
+                          f"backup taken just before this copy.[/dim]")
+            raise SystemExit(1)
+        return new_id, (guard.backup.path if guard.backup else None)
+    new_id = _remote_destination(dst_remote, destination, doc.get('context') or [],
+                                 cwd=dest_cwd)
+    return new_id, None
+
+
 # --- Main copy flow ---
 
 def copy_conversation(source: Agent, source_id: str,
@@ -533,9 +736,24 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Read a conversation JSON from stdin into a NEW "
                              "session in AGENT and print the new id (raw wire "
                              "format; also what runs over ssh)")
-    parser.add_argument("--cwd", metavar="DIR", dest="cwd", default=None,
-                        help="Seed the new session for DIR instead of the "
-                             "source session's working directory")
+    parser.add_argument("-t", "--cwd", "--target", metavar="DIR", dest="cwd",
+                        default=None,
+                        help="Target directory: seed the new session for DIR "
+                             "instead of the source session's working directory")
+    parser.add_argument("-i", "--interactive", dest="interactive",
+                        action="store_true",
+                        help="Ask before copying (cp -i; proceeds when there is "
+                             "no tty to ask)")
+    parser.add_argument("-n", "--no-clobber", dest="no_clobber",
+                        action="store_true",
+                        help="Skip when the destination already holds a copy of "
+                             "this session (cp -n)")
+    parser.add_argument("-r", "--recursive", dest="recursive",
+                        action="store_true",
+                        help="Also copy the session's subagent sessions (cp -r)")
+    parser.add_argument("-u", "--update", dest="update", action="store_true",
+                        help="Copy only when the source is newer than the "
+                             "destination's copy of it (cp -u)")
     parser.add_argument("--here", action="store_true", dest="here",
                         help="Seed the new session for the current directory "
                              "instead of the source session's working "
@@ -622,6 +840,7 @@ def main(argv=None) -> int:
             raise SystemExit(1)
         common_doc = {'context': records, 'source': source}
         src_desc = source
+        src_agent = src_id = None  # a file source names no agent/session
     else:
         # A source that looks like a file path (absolute, or a *.json name)
         # but is not a readable file is a missing-file mistake, not an
@@ -647,37 +866,22 @@ def main(argv=None) -> int:
         # Fetch the conversation as a common envelope. For a remote source:
         # first pass, if it runs ctools, have it export the envelope over one
         # ssh; second pass, pull its storage files and read them locally.
-        if src_remote is None:
-            try:
-                common_doc = export_common(src_agent, src_id)
-                records = common_doc.get('context') or []
-            except SessionNotFound:
-                records = []
-            if not records:
-                console.print(f"[yellow]No conversation in {src_name}/{src_id}[/yellow]")
-                raise SystemExit(1)
-        else:
-            common_doc = None
-            if _remote_has_ctools(src_remote):
-                try:
-                    common_doc = _remote_common_doc(src_remote, src_agent, src_id)
-                except RemoteWireError as e:
-                    console.print(f"[red]{e}[/red]")
-                    raise SystemExit(1)
-            if common_doc is None:
-                with tempfile.TemporaryDirectory() as tmp:
-                    _pull(src_remote, src_agent, Path(tmp))
-                    probe = _local_agent(src_agent, Path(tmp))
-                    try:
-                        common_doc = export_common(probe, src_id)
-                    except SessionNotFound:
-                        common_doc = None
-            records = (common_doc or {}).get('context') or []
-            if not records:
-                console.print(f"[yellow]No conversation in {src_name}/{src_id} on "
-                              f"{src_remote.target}[/yellow]")
-                raise SystemExit(1)
+        common_doc = _fetch_common_doc(src_remote, src_agent, src_id)
+        records = (common_doc or {}).get('context') or []
+        if not records:
+            where = f" on {src_remote.target}" if src_remote else ""
+            console.print(f"[yellow]No conversation in {src_name}/{src_id}{where}[/yellow]")
+            raise SystemExit(1)
         src_desc = f"{src_name}/{src_id}" + (f" on {src_remote.target}" if src_remote else "")
+
+    # cp(1) guard, before anything is written: -n refuses to add a second
+    # copy of a session the destination already holds; -u copies only when
+    # the source moved past that copy.
+    note = _clobber_check(dst_agent, src_agent, src_id, src_desc, dst_ref,
+                          dst_remote, args.no_clobber, args.update)
+    if note:
+        console.print(f"[yellow]{note}[/yellow]")
+        return 0
 
     log.info("conversation_copy_dry_run" if dry_run else "conversation_copy",
              source=src_desc, destination=dst_ref,
@@ -692,47 +896,53 @@ def main(argv=None) -> int:
             console.print(f"[dim]Resume command shape: {resume}[/dim]")
         return 0
 
-    # Import into a brand-new session: locally via the common format, or by
-    # pushing the updated storage back when the destination is remote.
-    #
-    # A local write lands in the agent's *live* storage, so we guard it: take
-    # a snapshot first, verify integrity after, and auto-restore if the write
-    # corrupted the database. (A remote write happens on the other host, so
-    # there is no local storage to protect here.)
+    # cp -i: ask before the write. The answer covers the -r children too.
+    if args.interactive:
+        q = (f"Copy {len(records)} message(s) from {src_desc} to a new {dst_ref} session"
+             + (f" on {dst_remote.target}" if dst_remote else "") + "? [y/N] ")
+        if not _confirm(q):
+            console.print("[yellow]aborted[/yellow]")
+            return 1
+
     # Seed the new session for a working directory. Default: the source
     # session's own cwd (so the copy lands in the destination's matching
     # project dir and resumes from there). --here forces the invocation
-    # directory; --cwd DIR forces an explicit one.
-    src_cwd = (common_doc or {}).get('cwd')
-    if args.here:
-        dest_cwd = os.getcwd()
-    elif args.cwd:
-        dest_cwd = os.path.abspath(os.path.expanduser(args.cwd))
-    else:
-        dest_cwd = src_cwd
-    if dst_remote is None and dest_cwd is not None:
-        common_doc['cwd'] = dest_cwd
+    # directory; -t/--cwd DIR forces an explicit one.
+    def _cwd_for(doc):
+        base = (doc or {}).get('cwd')
+        if args.here:
+            return os.getcwd()
+        if args.cwd:
+            return os.path.abspath(os.path.expanduser(args.cwd))
+        return base
 
-    if dst_remote is None:
-        guard = guard_write(dst_agent, note="ccopy")
-        try:
-            new_id = import_common(dst_agent, common_doc,
-                                   notice=not args.no_import_notice)
-        except BaseException:
-            guard.rollback()
-            raise
-        try:
-            guard.finish()
-        except BackupError as e:
-            console.print(f"[red]{e}[/red]")
-            console.print(f"[dim]Your {dst_ref} storage was restored from the "
-                          f"backup taken just before this copy.[/dim]")
-            raise SystemExit(1)
-        backup_path = guard.backup.path if guard.backup else None
-    else:
-        new_id = _remote_destination(dst_remote, dst_agent, records,
-                                     cwd=dest_cwd)
-        backup_path = None
+    notice = not args.no_import_notice
+    new_id, backup_path = _write_copy(dst_agent, dst_remote, dst_ref,
+                                      common_doc, _cwd_for(common_doc),
+                                      notice=notice)
+
+    # cp -r: the session's subagent sessions follow the parent, each into its
+    # own new destination session.
+    if args.recursive and src_agent is not None:
+        for child_id in _child_ids(src_agent, src_id, src_remote):
+            child_desc = (f"{src_name}/{child_id}"
+                          + (f" on {src_remote.target}" if src_remote else ""))
+            child_note = _clobber_check(dst_agent, src_agent, child_id,
+                                        child_desc, dst_ref, dst_remote,
+                                        args.no_clobber, args.update)
+            if child_note:
+                console.print(f"[yellow]{child_note}[/yellow]")
+                continue
+            child_doc = _fetch_common_doc(src_remote, src_agent, child_id)
+            if not (child_doc or {}).get('context'):
+                console.print(f"[yellow]no conversation in {child_desc}[/yellow]")
+                continue
+            c_new, _ = _write_copy(dst_agent, dst_remote, dst_ref, child_doc,
+                                   _cwd_for(child_doc), notice=notice)
+            where = f" on {dst_remote.target}" if dst_remote else ""
+            console.print(f"[green]Copied {len(child_doc['context'])} message(s) "
+                          f"from {child_desc} to a new {dst_ref} "
+                          f"session{where}: {c_new}[/green]")
 
     where = f" on {dst_remote.target}" if dst_remote else ""
     console.print(f"[green]Copied {len(records)} message(s) from {src_desc} "
@@ -753,7 +963,7 @@ def main(argv=None) -> int:
         console.print(f"  {resume}")
     if noted:
         # Advisory, on stderr: stdout keeps the id/resume lines parseable.
-        err_console.print("[dim]Copied text only — the source's tool calls and "
+        err_console.print("[dim]Copied text only - the source's tool calls and "
                           "their results are not in the new session, so it opens "
                           "with a notice telling the model to re-read files "
                           "rather than trust that narration (--no-import-notice "

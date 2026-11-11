@@ -1190,3 +1190,254 @@ def test_ccopy_remote_pull(local_sshd, _remote_isolated_home, monkeypatch):
     joined = "\n".join(str(m.content or "") for m in agent.messages(new_id))
     assert "hello from the remote" in joined
     assert "hello from the remote reply" in joined
+
+
+# --- resume ssh://... : resolve there, copy here, hand off here ---
+
+def _intercept_exec(monkeypatch):
+    """Replace the hand-off's exec; returns the list its argv is appended to."""
+    import os
+    box = []
+
+    def fake(file, args, env):
+        box.append(list(args))
+        raise SystemExit(0)
+
+    monkeypatch.setattr(os, "execvpe", fake)
+    return box
+
+
+def _resumed_id(argv) -> str:
+    """The session id the intercepted `sh -c 'pi --session <id>'` targets."""
+    assert argv, "the hand-off never reached the exec"
+    parts = argv[-1].split()
+    assert parts[:2] == ["pi", "--session"], argv
+    return parts[-1]
+
+
+@pytest.mark.live_ssh
+def test_resume_remote_session_ref(local_sshd, _remote_isolated_home, monkeypatch):
+    """resume ssh://host:port/pi/<id> copies that remote session into a new
+    local pi session and execs the resume command for the copy."""
+    import ctools.resume as resume
+    box = _intercept_exec(monkeypatch)
+    ref = "ssh://127.0.0.1:%d/pi/%s" % (local_sshd["port"], SESSION_ID)
+    result = runner.invoke(resume.app, [ref])
+    assert result.exit_code == 0, result.stderr + result.stdout
+    new_id = _resumed_id(box[0])
+    assert new_id != SESSION_ID, "resumed the remote id instead of the local copy"
+    agent = AGENTS["pi"]
+    joined = "\n".join(str(m.content or "") for m in agent.messages(new_id))
+    assert "hello from the remote" in joined
+    assert "hello from the remote reply" in joined
+
+
+@pytest.mark.live_ssh
+def test_resume_remote_directory(local_sshd, _remote_isolated_home, monkeypatch):
+    """resume ssh://host:port/<dir> asks the remote which session ran in that
+    directory (its own `resume --resolve`), then copies and resumes it here."""
+    import ctools.resume as resume
+    box = _intercept_exec(monkeypatch)
+    # The fixture's remote session records cwd /tmp/remote.
+    ref = "ssh://127.0.0.1:%d/tmp/remote" % local_sshd["port"]
+    result = runner.invoke(resume.app, [ref])
+    assert result.exit_code == 0, result.stderr + result.stdout
+    assert _resumed_id(box[0]) != SESSION_ID
+    assert SESSION_ID in result.stderr, "the remote resolution is not reported"
+
+
+@pytest.mark.live_ssh
+def test_resume_remote_unknown_directory(local_sshd, _remote_isolated_home):
+    """A directory with no session there is reported, not guessed at."""
+    import ctools.resume as resume
+    ref = "ssh://127.0.0.1:%d/tmp/nothing-here" % local_sshd["port"]
+    result = runner.invoke(resume.app, [ref])
+    assert result.exit_code == 1
+    assert "no session recorded" in (result.stdout + result.stderr)
+
+
+# --- cp(1)-style flags: -t -n -u -i -r ---
+
+def _opencode_at(tmp_path, *session_ids):
+    """Point the opencode agent at a throwaway store seeded with `session_ids`."""
+    for sid in session_ids:
+        _make_opencode_conversation_db(tmp_path, sid)
+    original = AGENTS["opencode"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    return original
+
+
+def _new_copy_id(result) -> str:
+    """The id of the session the copy just created (what `session:` names).
+
+    Agents name sessions differently (opencode `ses_...`, claude-code a uuid),
+    so read the id off the report rather than its shape. The last one is the
+    parent copy: `-r` prints its children first.
+    """
+    ids = re.findall(r"session:\s*(\S+)", result.stdout or "")
+    assert ids, f"no new session id in stdout: {result.stdout!r}"
+    return ids[-1]
+
+
+def test_target_directory_seeds_the_copy(tmp_path):
+    """`-t DIR` is `--cwd DIR`: the copy is seeded for that working directory.
+
+    Without it the copy is seeded for the *source's* directory; naming a
+    target moves where the destination files it, which is where a resume
+    looks for it.
+    """
+    _make_opencode_conversation_db(tmp_path, "ses_src")  # source directory = '/tmp'
+    cc_base = tmp_path / "cc"
+    (cc_base / "projects").mkdir(parents=True, exist_ok=True)
+    target = tmp_path / "chosen"
+    original_oc = AGENTS["opencode"].base_path
+    original_cc = AGENTS["claude-code"].base_path
+    AGENTS["opencode"].base_path = tmp_path
+    AGENTS["claude-code"].base_path = cc_base
+    try:
+        result = runner.invoke(app, ["-t", str(target),
+                                     "opencode/ses_src", "claude-code"])
+        assert result.exit_code == 0, result.stderr + result.stdout
+        new_id = _new_copy_id(result)
+        # claude-code encodes a cwd into its project-dir name that way.
+        encoded = ''.join(c if c.isalnum() else '-' for c in str(target))
+        assert (cc_base / "projects" / encoded / f"{new_id}.jsonl").exists()
+        assert not (cc_base / "projects" / "-tmp").exists()
+    finally:
+        AGENTS["opencode"].base_path = original_oc
+        AGENTS["claude-code"].base_path = original_cc
+
+
+def test_target_and_cwd_are_one_option(tmp_path):
+    """`-t`, `--cwd` and `--target` are one option, so they cannot disagree.
+
+    Three spellings of a single option: the last one wins, exactly as any
+    other aliased flag, so there is no conflict for ccopy to report.
+    """
+    _opencode_at(tmp_path, "ses_src")
+    result = runner.invoke(app, ["-t", "/a", "--cwd", "/b",
+                                 "opencode/ses_src", "opencode"])
+    assert result.exit_code == 0, result.stderr + result.stdout
+    assert "/a" not in result.stdout
+    result = runner.invoke(app, ["--target", "/b", "opencode/ses_src", "opencode"])
+    assert result.exit_code == 0, result.stderr + result.stdout
+
+
+def test_no_clobber_skips_an_existing_copy(tmp_path):
+    """`-n` refuses to add a second copy of a session the store already holds."""
+    _opencode_at(tmp_path, "ses_src")
+    first = runner.invoke(app, ["opencode/ses_src", "opencode"])
+    assert first.exit_code == 0, first.stderr + first.stdout
+    result = runner.invoke(app, ["-n", "opencode/ses_src", "opencode"])
+    assert result.exit_code == 0, result.stderr + result.stdout
+    assert "not overwriting" in result.stdout
+    assert "already holds a copy" in result.stdout
+
+
+def test_without_no_clobber_a_second_copy_is_made(tmp_path):
+    """The default is cp's overwrite: each run adds a copy."""
+    _opencode_at(tmp_path, "ses_src")
+    assert runner.invoke(app, ["opencode/ses_src", "opencode"]).exit_code == 0
+    result = runner.invoke(app, ["opencode/ses_src", "opencode"])
+    assert result.exit_code == 0, result.stderr + result.stdout
+    assert "not overwriting" not in result.stdout
+
+
+def test_update_skips_a_copy_that_is_not_older(tmp_path, monkeypatch):
+    """`-u` copies only when the source moved past the copy; equal is not newer."""
+    import ctools.ccopy as ccopy
+    _opencode_at(tmp_path, "ses_src")
+    assert runner.invoke(app, ["opencode/ses_src", "opencode"]).exit_code == 0
+    monkeypatch.setattr(ccopy, "_session_mtime", lambda agent, sid: 100.0)
+    result = runner.invoke(app, ["-u", "opencode/ses_src", "opencode"])
+    assert result.exit_code == 0, result.stderr + result.stdout
+    assert "skipping" in result.stdout and "not older" in result.stdout
+
+
+def test_update_copies_a_newer_source(tmp_path, monkeypatch):
+    """`-u` does copy when the source is newer than the copy it found."""
+    import ctools.ccopy as ccopy
+    _opencode_at(tmp_path, "ses_src")
+    assert runner.invoke(app, ["opencode/ses_src", "opencode"]).exit_code == 0
+    # The source has moved on since the copy was made.
+    monkeypatch.setattr(ccopy, "_session_mtime",
+                        lambda agent, sid: 200.0 if sid == "ses_src" else 100.0)
+    result = runner.invoke(app, ["-u", "opencode/ses_src", "opencode"])
+    assert result.exit_code == 0, result.stderr + result.stdout
+    assert "not older" not in result.stdout and "skipping" not in result.stdout
+
+
+def test_update_copies_when_no_copy_exists_yet(tmp_path):
+    """With nothing copied yet, -u is just a copy."""
+    _opencode_at(tmp_path, "ses_src")
+    result = runner.invoke(app, ["-u", "opencode/ses_src", "opencode"])
+    assert result.exit_code == 0, result.stderr + result.stdout
+    assert "not older" not in result.stdout
+
+
+def test_interactive_abort_writes_nothing(tmp_path, monkeypatch):
+    """Answering `cp -i` with anything but y leaves the destination alone."""
+    import ctools.ccopy as ccopy
+    _opencode_at(tmp_path, "ses_src")
+    monkeypatch.setattr(ccopy, "_confirm", lambda q: False)
+    result = runner.invoke(app, ["-i", "opencode/ses_src", "opencode"])
+    assert result.exit_code == 1
+    assert "aborted" in result.stdout
+    assert [s.id for s in AGENTS["opencode"].sessions()] == ["ses_src"]
+
+
+def test_interactive_yes_copies(tmp_path, monkeypatch):
+    import ctools.ccopy as ccopy
+    monkeypatch.setattr(ccopy, "_confirm", lambda q: True)
+    _opencode_at(tmp_path, "ses_src")
+    result = runner.invoke(app, ["-i", "opencode/ses_src", "opencode"])
+    assert result.exit_code == 0, result.stderr + result.stdout
+    assert "Copied" in result.stdout
+
+
+def test_confirm_asks_only_when_there_is_a_human(monkeypatch):
+    """`cp -i` on a pipe has nobody to ask: it proceeds and says so."""
+    import ctools.ccopy as ccopy
+
+    class _NoTTY:
+        def isatty(self):
+            return False
+
+    monkeypatch.setattr(ccopy.sys, "stdin", _NoTTY())
+    monkeypatch.setattr(ccopy.sys, "stdout", _NoTTY())
+    assert ccopy._confirm("copy? ") is True
+
+
+def test_confirm_reads_the_answer(monkeypatch):
+    import ctools.ccopy as ccopy
+
+    class _TTY:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(ccopy.sys, "stdin", _TTY())
+    monkeypatch.setattr(ccopy.sys, "stdout", _TTY())
+    answers = iter(["n", "y", "Y"])
+    monkeypatch.setattr("builtins.input", lambda *a: next(answers))
+    assert ccopy._confirm("copy? ") is False
+    assert ccopy._confirm("copy? ") is True
+    assert ccopy._confirm("copy? ") is True
+
+
+def test_recursive_copies_subagent_sessions(tmp_path, monkeypatch):
+    """`cp -r` brings the subagent sessions along, each as its own copy."""
+    import ctools.ccopy as ccopy
+    _opencode_at(tmp_path, "ses_src")
+    monkeypatch.setattr(ccopy, "_child_ids", lambda src, sid, remote=None: ["ses_kid"])
+    monkeypatch.setattr(ccopy, "_fetch_common_doc",
+                        lambda remote, agent, sid: agent.to_common("ses_src"))
+    result = runner.invoke(app, ["-r", "opencode/ses_src", "opencode"])
+    assert result.exit_code == 0, result.stderr + result.stdout
+    assert result.stdout.count("Copied") == 2, result.stdout
+
+
+def test_child_ids_reads_the_parent_link(tmp_path):
+    """`_child_ids` is the storage's own parent link, not a name pattern."""
+    import ctools.ccopy as ccopy
+    _opencode_at(tmp_path, "ses_src")
+    assert ccopy._child_ids(AGENTS["opencode"], "ses_src") == []

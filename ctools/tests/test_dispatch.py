@@ -64,10 +64,18 @@ def test_ls_alias_routes_to_dir(monkeypatch, capsys):
     assert capsys.readouterr().out.startswith("usage: ctools ls ")
 
 
+def test_cp_alias_routes_to_copy(monkeypatch, capsys):
+    """`ctools cp` is `ctools copy` — the cp(1) muscle memory is the verb."""
+    assert dispatch.ALIASES["cp"] == "copy"
+    assert _run(monkeypatch, "cp", "--help") == 0
+    assert capsys.readouterr().out.startswith("usage: ctools cp ")
+
+
 def test_usage_shows_the_alias(monkeypatch, capsys):
     assert _run(monkeypatch) == 0
     out = capsys.readouterr().out
     assert "dir (ls)" in out
+    assert "copy (cp)" in out
 
 
 def test_verb_errors_name_the_dispatched_form(monkeypatch, capsys):

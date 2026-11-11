@@ -24,7 +24,7 @@ Here's an example:
 $ <b>cgrep</b> "snake game" opencode
 opencode/ses_a1d1a5a4df984ee698cab4a7:1:user: make a simple snake game in python
 opencode/ses_a1d1a5a4df984ee698cab4a7:2:assistant: I'll make a terminal-based snake game using `curses` (standard library, no dependencies).
-opencode/ses_a1d1a5a4df984ee698cab4a7:3:assistant: Done — `snake.py` is a terminal snake game using Python's built-in `curses` module (no dependencies).
+opencode/ses_a1d1a5a4df984ee698cab4a7:3:assistant: Done - `snake.py` is a terminal snake game using Python's built-in `curses` module (no dependencies).
 </pre>
 
 > cool let's look at the status of that session using cdir
@@ -131,7 +131,7 @@ uv tool install --editable ".[mcp]"
 command, named `c` plus the verb, so `ctools grep` and `cgrep` are the same
 program with the same flags. Use whichever you prefer: the long form is easier
 to discover, and the short form is quicker to type. A few verbs carry a second
-shorthand too — `ctools ls` is `ctools dir`.
+shorthand too: `ctools ls` is `ctools dir`, and `ctools cp` is `ctools copy`.
 
 ```text
 $ ctools --help
@@ -144,7 +144,7 @@ query:
   du        context usage per session          (cdu)
 
 transform:
-  copy      copy a session to another agent    (ccopy)
+  copy (cp) copy a session to another agent    (ccopy)
   extract   extract concepts from a session    (cextract)
   connect   pipe concepts between sessions     (cconnect)
   rm        cut sections out of a session      (crm)
@@ -204,15 +204,22 @@ ctools cat ssh://me@box/pi/<id>       # a session on another machine
 ### Copy a session to another tool
 
 `copy` creates a **new** session in the destination. The source is never
-touched, and ctools prints the command that resumes the copy.
+touched, and ctools prints the command that resumes the copy. `cp` is a
+shorthand for `copy`, so `ctools cp` and `ctools copy` are the same verb.
 
 ```bash
 ctools copy opencode/ses_abc claude-code          # into another tool
-ctools copy opencode/ses_abc codex --dry-run      # preview first
+ctools cp opencode/ses_abc codex --dry-run        # preview first (cp = copy)
 ctools copy opencode/ses_abc ssh://me@box/codex   # into a tool on another machine
 ctools copy opencode/ses_abc ssh://me@box/        # into opencode on that machine
 ctools copy ssh://me@box/pi/<id> claude-code      # pull one in from another machine
 ```
+
+`copy` takes the `cp(1)` flags: `-n`/`--no-clobber` skip when the destination
+already holds a copy, `-u`/`--update` refresh only when the source is newer,
+`-i`/`--interactive` ask first, and `-r`/`--recursive` bring the subagent
+sessions along. `-t DIR` (or `--cwd`/`--target`) seeds the copy for a specific
+directory.
 
 The remote side doesn't need ctools installed; plain `ssh` and `tar` will do.
 See [docs/ccopy.md](docs/ccopy.md) for how that works and where the new
@@ -231,14 +238,17 @@ ctools resume claude-code a293cac2   # cd + exec `claude --resume a293cac2`
 ctools resume pi <id>                # `pi --session <id>`
 ctools resume .                      # the most recent session in this directory
 ctools dir --resume-command pi/<id>  # just print the command, don't exec it
+ctools resume ssh://me@box/code      # the most recent session in /code on box,
+                                     #   pulled here first, then resumed here
 ```
 
-The session is named the way `cdir` prints it — `agent/session`, the
+The session is named the way `cdir` prints it: `agent/session`, the
 two-word `agent session`, or a bare id resolved across the installed
 agents. A directory (`.`, `..`, `/path`, `~/proj`) instead names the most
 recently recorded session in it; `resume <agent> .` scopes that to one
 agent. `resume` says which session a directory resolved to before it
-leaves.
+leaves. An `ssh://` reference resolves on the remote host, copies the session
+here, and resumes the copy locally.
 
 The resume command comes from the agent backend and is overridable per
 machine in `~/.config/ctools/resume-commands.json`. The `cd` into the
@@ -309,7 +319,7 @@ directory resolved via `platformdirs` (no hand-rolled platform checks):
 
 Set `$CTOOLS_CONFIG` (and `$CTOOLS_DATA`) to relocate. This holds
 `resume-commands.json`, `strategies/`, `filters/`, and the general
-**`ctools.toml`** config — one file, multiple sections.  The first section,
+**`ctools.toml`** config: one file, multiple sections.  The first section,
 `[hosts]`, lists the machines `ctools grep --hosts` searches too:
 
 ```toml
@@ -321,7 +331,7 @@ workie = "ssh://10.0.0.4"
 
 Each value is an `ssh://[user@]host[:port]` reference (the same form `ccat`
 and `ccopy` use for a remote side), so the host may be a `~/.ssh/config`
-alias.  A missing/malformed config never breaks a search — it just means
+alias.  A missing/malformed config never breaks a search; it just means
 "local only".
 
 The dashboard shows the full extraction pipeline (conversation → extraction
@@ -364,7 +374,7 @@ ctools mcp check all
 ### Supported agents
 
 Each agent in the registry declares its own MCP host (path, config format,
-entry shape). No per-agent list to maintain — `ctools mcp check all` shows
+entry shape). No per-agent list to maintain; `ctools mcp check all` shows
 the full list:
 
 | Agent | Config file | Format | Entry shape |

@@ -19,11 +19,13 @@ ccopy conv.json codex                  # seed a new session from a JSON file
 ccat opencode/ses_abc | ccopy - codex  # seed a new session from a pipe
 ccopy opencode/ses_abc ssh://chris@remote/codex     # local -> new session on a remote host
 ccopy ssh://chris@remote/opencode/ses_abc codex     # pull a remote conversation
+ccopy -n opencode/ses_abc codex                     # skip if codex already has a copy
+ccopy -r opencode/ses_abc codex                     # and its subagent sessions too
 ```
 
 ## The conversation text is what gets copied
 
-A copy carries the session's **text spine** — the `{role, content}` records. Tool
+A copy carries the session's **text spine** - the `{role, content}` records. Tool
 calls and their results do **not** cross the copy, so a resumed session does not
 see the commands that were run or the files that were changed. Left unlabeled,
 that transcript reads as an assistant that edits by describing the edit, and a
@@ -39,7 +41,7 @@ truncation that eats a long imported transcript from the front.
 ```
 $ ccopy opencode/ses_abc claude-code
 …
-copied text only — the source's tool calls and their results are not in the
+copied text only - the source's tool calls and their results are not in the
 new session, so it opens with a notice telling the model to re-read files rather
 than trust that narration (--no-import-notice to suppress).
 ```
@@ -66,7 +68,7 @@ Agents that file sessions under a per-working-directory project folder (notably
 Claude Code, under `~/.claude/projects/<encoded-cwd>/`) need the copy seeded for
 the **right directory**, or `claude --resume` can't find it from where you run
 it. By default ccopy seeds the new session for the **source session's own
-cwd** — so a pi session that ran in `/home/u/proj` copies into
+cwd** - so a pi session that ran in `/home/u/proj` copies into
 `~/.claude/projects/-home-u-proj/`, and `cd /home/u/proj && claude --resume <id>`
 works. When the source has no recorded cwd (e.g. a bare JSON file), ccopy falls
 back to the directory you run it from.
@@ -76,17 +78,50 @@ Override the default:
 ```sh
 ccopy pi/ses_abc claude-code --here        # seed for the current directory (old behavior)
 ccopy pi/ses_abc claude-code --cwd /x/y    # seed for an explicit directory
+ccopy -t /x/y pi/ses_abc claude-code       # same thing, cp(1)-style spelling
 ```
+
+`-t`, `--cwd` and `--target` are one option with three spellings; the last one
+you give wins.
 
 See [ccopy-claude-resume-notes.md](ccopy-claude-resume-notes.md) for why this
 matters (the "No conversation found" on resume bug and how it was fixed).
+
+## cp(1) flags
+
+`ccopy` is a copy command, so it takes the flags `cp` has. Each one is a guard
+against a second copy of the same conversation, which is the only way ccopy can
+ever "overwrite" anything: it always creates a new session.
+
+```sh
+ccopy -n opencode/ses_abc codex   # skip if codex already holds a copy of it
+ccopy -u opencode/ses_abc codex   # copy only if the source is newer than that copy
+ccopy -i opencode/ses_abc codex   # ask first
+ccopy -r opencode/ses_abc codex   # bring the subagent sessions along too
+```
+
+**How "already holds a copy" is decided.** A copy carries no marker saying it's
+a copy - it's a new session whose messages are the source's. So ccopy compares
+conversations: a destination session counts as a copy of a source when its
+transcript *starts with* the source's, ignoring the trailing import notice
+(cross-agent copies get one, same-agent copies have nothing to warn about) and
+anything the copy has said since. Top-level sessions only, since a copy is
+always its own session. `-n` then reports the copy it found and writes nothing;
+`-u` writes only when the source's mtime is newer.
+
+`-i` asks on a terminal. On a pipe there is nobody to ask, so it proceeds and
+says so - a flag that blocked a script would be a flag you stop using.
+
+`-r` follows the parent link the agent records, so it copies what the source
+actually spawned. Agents that record no parent link have nothing to recurse
+into, and `-r` is then just `-r`.
 
 ## Across hosts
 
 There are two ways to get a conversation across a machine boundary, and you
 pick based on what the remote has.
 
-**The remote already runs ctools** — pipe it, the Unix way. `ccat` on the remote
+**The remote already runs ctools** - pipe it, the Unix way. `ccat` on the remote
 prints the conversation as JSON; feed that into a local `ccopy`. The remote only
 runs `ccat`, and the source is read, never written:
 
@@ -95,7 +130,7 @@ ccopy <(ssh chris@remote ccat opencode/ses_abc) codex   # process substitution
 ssh chris@remote ccat opencode/ses_abc | ccopy - codex  # or an explicit pipe
 ```
 
-**The remote does not need ctools** — let ccopy do the ssh. Address it as
+**The remote does not need ctools** - let ccopy do the ssh. Address it as
 `ssh://[user@]host[:port]/agent[/session_id]` and ccopy runs over your normal ssh
 setup (keys, `~/.ssh/config`, jump hosts). The remote host only needs `sshd` and
 a POSIX `tar`:
@@ -111,7 +146,7 @@ Leave the agent off a remote destination (`ssh://host/`) and ccopy uses the
 source's agent on the far side. (A conversation-file source has no agent, so
 there you still have to name one.)
 
-The source is read, the destination is written into a brand-new session — so a
+The source is read, the destination is written into a brand-new session - so a
 cross-host copy is still a copy: nothing on either host is modified. After a
 cross-host copy, ccopy tells you the new session id and the resume command to run
 **on the remote host**.
@@ -121,14 +156,14 @@ cross-host copy, ccopy tells you the new session id and the resume command to ru
 ccopy works in **two tiers**. First it asks the remote which ctools it runs
 (`ccopy --version`, with `~/.local/bin` and `~/bin` put on PATH, since a
 non-interactive ssh leaves them out). If it runs **ctools 0.4.0 or newer**, it
-takes the **cheap path** — the far side runs ctools itself and only the
+takes the **cheap path** - the far side runs ctools itself and only the
 conversation JSON crosses the wire, in one ssh round trip per side: the source
 is read with `ccat --raw AGENT/SESSION` (the lossless envelope) and the
 destination is seeded with `ccopy --import-json AGENT`. If something
 goes wrong on that path (no such session there, say), ccopy reports what the far
 side said; it doesn't fall back to copying storage. If the remote has no ctools,
 or one older than 0.4.0 (ccopy says so and suggests upgrading), it takes the
-**expensive path** — it moves the agent's *storage
+**expensive path** - it moves the agent's *storage
 files* instead: it pulls the remote storage (its sessions directory, or its
 database) over ssh with a plain `tar` pipe, unpacks it into a local scratch
 directory, reads or writes the conversation with the normal local agent code, and
@@ -145,7 +180,7 @@ far side in that path, so a bare remote still works.
 
 The storage location is anchored at the remote's `$HOME` (the agent's default
 install root, e.g. `~/.local/share/opencode`, `~/.pi/agent`), so the remote just
-needs whatever agent it already runs — no extra tooling.
+needs whatever agent it already runs - no extra tooling.
 
 `ccat` prints a conversation in exactly this JSON form, so the pipe form is just
 `ccat … | ccopy - …`. ccopy also exposes the raw wire modes directly (they never
@@ -168,7 +203,7 @@ ccat opencode/ses_abc | ccopy - codex
 
 A local `ccopy` writes a new session into the destination agent's **live**
 storage. For the SQLite-backed agents that means inserting rows into the
-database that holds *all* of that agent's sessions — a write that fails or is
+database that holds *all* of that agent's sessions - a write that fails or is
 interrupted part-way could take the whole sessions database down with it.
 
 So `ccopy` guards every local write:
@@ -176,7 +211,7 @@ So `ccopy` guards every local write:
 1. **Before** the write it snapshots the destination agent's storage (for
    SQLite agents via `VACUUM INTO`, so the copy is consistent even mid-write).
 2. **After** the write it verifies the database is still intact *and* that the
-   session count did not decrease — a write that corrupts the DB or wipes it
+   session count did not decrease - a write that corrupts the DB or wipes it
    is caught even when `PRAGMA integrity_check` would pass on the wreckage.
 3. If either check fails, the snapshot is **restored automatically** and
    ccopy reports what happened instead of leaving a broken database behind.
@@ -190,7 +225,7 @@ Restore it with: crecover restore opencode ~/.local/share/ctools/backups/opencod
 ```
 
 Snapshots are retained (20 newest per agent) so you can recover out-of-band
-failures later — see [crecover](crecover.md). A *remote* destination writes on
+failures later - see [crecover](crecover.md). A *remote* destination writes on
 the other host, so there is no local storage to back up in that case.
 
 ## Related

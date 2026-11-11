@@ -6,9 +6,13 @@ ccopy \- copy a conversation from one agent to a new session in another
 .RB [ \-\-dry-run ]
 .RB [ \-v ]
 .RB [ \-\-version ]
-.RB [ \-\-cwd\ \fIDIR\fR ]
+.RB [ \-t\ \fIDIR\fR ]
 .RB [ \-\-here ]
 .RB [ \-\-no-import-notice ]
+.RB [ \-n ]
+.RB [ \-u ]
+.RB [ \-i ]
+.RB [ \-r ]
 .I source
 .I destination
 .br
@@ -71,10 +75,13 @@ names no source session and is not annotated.
 .B \-\-dry-run
 Show what would happen without writing anything.
 .TP
-.BI \-\-cwd " DIR"
+.BI \-t " DIR", " \-\-cwd " DIR ", " \-\-target " DIR
 Seed the new session for
 .IR DIR
-instead of the source session's working directory.
+instead of the source session's working directory. Three spellings of one
+option, named after
+.BR cp (1)'s
+operand: the last one given wins.
 .TP
 .B \-\-here
 Seed the new session for the current directory instead of the source
@@ -83,6 +90,26 @@ session's working directory.
 .B \-\-no-import-notice
 Do not append the closing notice that tells a copied session its tool calls
 and their results were not carried over.
+.TP
+.BR \-n ", " \-\-no-clobber
+Do not create a second copy. If the destination already holds this session,
+say which copy it holds and leave it alone. A copy is recognised by its
+conversation, not by a marker: a copy carries no marker of its own, since its
+messages are the source's.
+.TP
+.BR \-u ", " \-\-update
+Copy only when the source has changed since the destination's copy of it, or
+when the destination holds no copy yet. Same recognition as
+.BR \-n .
+.TP
+.BR \-i ", " \-\-interactive
+Ask before writing. With nobody to ask \- stdin is not a terminal, as in a
+pipe or a script \- the copy proceeds and says so.
+.TP
+.BR \-r ", " \-\-recursive
+Copy the source's subagent sessions too, each as its own new session in the
+destination. Children are found by the parent link the agent records, so an
+agent that records none has nothing to recurse into.
 .TP
 .BR \-v ", " \-\-verbose
 Structured logging to stderr.
@@ -113,7 +140,7 @@ for a session on a remote host. It may instead be a conversation JSON
 /dev/fd/N
 (a process substitution), or
 .B -
-(stdin) — this is what makes
+(stdin) - this is what makes
 .B ccopy <(ssh remote ccat AGENT/SES) AGENT
 work.
 .TP
@@ -219,6 +246,18 @@ $ ccopy opencode/ses_abc123 ssh://chris@remote/codex
 Copied 42 message(s) from opencode/ses_abc123 to a new codex session on chris@remote: 1a2b3c
 Resume it on chris@remote with:
   codex resume 1a2b3c
+.fi
+.RE
+.PP
+Copy a session that is already there, and copy the subagents with it:
+.PP
+.RS
+.nf
+$ ccopy -n opencode/ses_abc123 codex
+not overwriting: codex/1a2b3c already holds a copy of opencode/ses_abc123 (-n skips it)
+$ ccopy -r opencode/ses_abc123 codex
+Copied 7 message(s) from opencode/ses_sub1 to a new codex session: 2c3d4e
+Copied 42 message(s) from opencode/ses_abc123 to a new codex session: 3d4e5f
 .fi
 .RE
 .PP

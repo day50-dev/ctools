@@ -1,4 +1,4 @@
-"""ctools — one front door for the ctools commands.
+"""ctools - one front door for the ctools commands.
 
 ``ctools <verb> [args...]`` runs the same code as the matching standalone
 command (``ctools dir`` is ``cdir``, ``ctools web`` is ``ctools-web``, ...).
@@ -29,8 +29,9 @@ VERBS = {
     "mcp":     ("ctools.ctools_mcp:main", "ctools-mcp", "run the MCP server"),
 }
 
-# Shorthand spellings: `ctools ls` is exactly `ctools dir`.
-ALIASES = {"ls": "dir"}
+# Shorthand spellings: `ctools ls` is exactly `ctools dir`, `ctools cp` is
+# exactly `ctools copy`.
+ALIASES = {"ls": "dir", "cp": "copy"}
 
 GROUPS = (
     ("query", ("dir", "grep", "cat", "du")),
