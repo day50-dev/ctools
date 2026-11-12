@@ -11,6 +11,18 @@ from ctools import dispatch
 from ctools.cli import Remote
 
 
+def test_remote_annotations_resolve():
+    """The remote hand-off's signatures reference `Remote` in their
+    annotations. Those are evaluated eagerly on the Python versions uv
+    tools can install (3.12), so a missing import is a crash at import
+    time; force-resolve every annotation to keep that from shipping."""
+    import typing
+    for name in ("_run_remote", "_resolve_remote",
+                 "_resolve_remote_via_listing", "_pull_remote_session",
+                 "_remote_resume"):
+        typing.get_type_hints(getattr(resume_mod, name))
+
+
 def _run(monkeypatch, *argv):
     monkeypatch.setattr(sys, "argv", ["ctools", *argv])
     with pytest.raises(SystemExit) as exc:

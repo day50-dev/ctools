@@ -40,7 +40,8 @@ from rich.console import Console
 from ctools.agents import (REGISTRY as AGENTS, AgentError, get_agent,
                           get_resume_command)
 from ctools.lib import install_clean_sigint
-from ctools.cli import handle_version, parse_remote_ref, version_option
+from ctools.cli import (Remote, handle_version, parse_remote_ref,
+                        version_option)
 from ctools.pathfilter import session_matches_dir
 
 __all__ = ['app', 'parse_ref_args']
